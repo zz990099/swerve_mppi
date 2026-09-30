@@ -1,88 +1,125 @@
 # Core architecture
 
-This repository builds one C++17 library, `swerve_mppi::core`. The library has
-no ROS dependency. The future Nav2 controller and the vehicle driver belong in
-separate adapter packages; they must not be included by core headers.
+The library builds as swerve_mppi::core using CMake. Its public headers contain
+no ROS, Nav2, Gazebo or pluginlib dependencies. ROS validation nodes and a future
+Nav2 controller plugin belong in separate adapter packages.
 
-## Data flow
+## Components
 
-```text
-measured vehicle + local path + circle obstacles
-    -> Controller::compute
-    -> ModeManager (continue an active real transition, if any)
-    -> Optimizer::make_branches (keep mode or make one later switch)
-    -> Optimizer::optimize (Gaussian samples within each fixed branch)
-    -> DriveModel / TransitionModel rollout + trajectory scoring
-    -> choose the lowest-cost feasible branch
-    -> ModeManager (commit a new switch if improvement exceeds hysteresis)
-    -> one mode-aware action, body velocity and wheel targets
-```
-
-The modes are `DualAckermann`, `Spin`, and `Crab`. A branch fixes its discrete
-mode and optional switch time; MPPI weights continuous control samples **within
-that branch**. Controls from different modes are never averaged together.
-
-## Public components
-
-| Header | Role |
+| Component | Responsibility |
 | --- | --- |
-| `types.hpp` | ROS-independent poses, twists, measured vehicle state, input, actions, output, and mode enums. |
-| `config.hpp` | Robot dimensions, physical limits, transition estimates, MPPI settings and cost weights. |
-| `model.hpp` | `DriveModel`: per-mode feasibility, projection, wheel targets and one-step propagation. `TransitionModel`: predicted braking, steering alignment and confirmation wait. |
-| `optimizer.hpp` | Discrete branches, control sampling, cost evaluation and warm starts. |
-| `controller.hpp` | Stateful `ModeManager` and the public `Controller::compute()` entry point. |
+| Controller | Validate input, continue committed transitions, select a solution and emit one action. |
+| ModeScheduler | Enumerate keep/single-switch branches; enforce dwell and switch hysteresis before selection. |
+| ModeManager | Execute the request/confirmation handshake, measured-stop gate and latched timeout. |
+| Optimizer | Optimize continuous controls inside one branch; advance only an accepted keep-mode warm start. |
+| NoiseGenerator | Seeded Gaussian proposals, effective projected perturbations and control-noise correction. |
+| RolloutEngine | Generate an inspectable pose horizon and mark ticks consumed by transitions. |
+| DriveModel | Mode constraints, braking/steering interlock and rate-limited wheel/body propagation. |
+| Kinematics | Mechanical steering limits, signed wheel directions and encoder forward kinematics. |
+| TransitionModel | Predict braking, mode-entry steering and confirmation delay. |
+| CriticManager | Combine path, circle-obstacle, goal, effort and switch objectives. |
 
-`src/model.cpp` implements the drive and transition models. `src/optimizer.cpp`
-also contains the current path-distance and circle-obstacle costs; these are
-not separately configurable plugins yet. `src/controller.cpp` implements the
-runtime output and feedback gate. `tests/core_tests.cpp` covers the physical
-mode constraints, transition timing, confirmation, timeout and a lateral goal.
+All configuration-bearing components store values instead of references into
+other objects. Models and stateful controllers can therefore be constructed from
+temporary configuration values and safely copied. Individual controller objects
+are not thread-safe and must be serialized by their caller.
 
-## Prediction versus execution
+## Planning and execution
 
-The optimizer predicts a transition with configured brake, steering and
-confirmation times. Prediction is only a way to compare candidate trajectories.
-At execution, `ModeManager` commits a switch, commands braking, and repeatedly
-emits the target mode request while waiting. It resumes motion only when the
-observed mode equals the target, `mode_confirmed` is true, and the measured
-velocity is stopped. A timeout or reported mode fault latches `SafeStop` until
-the application deliberately calls `reset()`.
+1. Check the timestamp, finite state, measured joint limits and path.
+2. If a committed transition is active, update it from actual measured feedback.
+3. Enumerate candidate discrete branches. Each makes at most one transition.
+4. Optimize each branch independently; never average controls across modes.
+5. Reject switch candidates that fail hysteresis before selecting the winner.
+6. Commit an immediate switch, or execute the first control in the current mode.
+7. Advance a warm start only for an emitted keep-mode drive action.
 
-The adapter must treat `RequestMode` as idempotent and perform the actual
-wheel alignment and mode change safely. The controller does not infer a
-successful switch from elapsed time or a sent request. The adapter must
-provide monotonically increasing timestamps and the age of the confirmed
-actual mode. It must not translate `RequestMode` into an ordinary `Twist`.
+A rejected immediate switch uses the keep-mode solution, rather than projecting
+the rejected mode's first control into the current mode. Future transitions
+remain plans and require a fresh decision before execution. Future-switch plans
+do not become cached keep-mode sequences. Faults and invalid inputs stop drive.
 
-## Build and downstream use
+ModeManager observes both body velocity and every wheel speed before requesting
+a mode. Matching actual_mode is insufficient without mode_confirmed. A
+confirmed switch produces a stopped handover cycle before drive resumes.
+Timeout covers the entire committed transition, including braking.
 
-The top-level CMake project builds `swerve_mppi_core` and optionally the
-`swerve_mppi_tests` executable (`SWERVE_MPPI_BUILD_TESTS=ON`, the default).
-`cmake --install` exports the `swerve_mppi::core` target and a versioned
-`swerve_mppiConfig.cmake`; a separate adapter can use:
+## Continuous optimization
 
-```cmake
-find_package(swerve_mppi 0.1 CONFIG REQUIRED)
-target_link_libraries(my_adapter PRIVATE swerve_mppi::core)
-```
+The proposal is the nominal sequence plus Gaussian perturbations, projected into
+the branch's mode and wheel-speed limits. One sample preserves the nominal
+sequence. Updates use the effective perturbation after projection, not discarded
+raw noise. Transition ticks are masked from the control-noise correction and
+weighted update because no sampled drive control is applied during those ticks.
 
-Set `CMAKE_PREFIX_PATH` to the install prefix. No ROS or Nav2 packages are
-needed to build the core or run its tests.
+Weights use a minimum-normalized exponential of trajectory cost plus
+control_correction_weight * nominal * effective_noise / variance. A disabled
+noise dimension contributes no correction. Mode selection compares physical
+critic scores; proposal correction is used only for weighting within a branch.
+The output is the re-evaluated weighted sequence. A feasible nominal or sampled
+sequence is used only when the weighted sequence is infeasible or no finite
+weights exist. This remains a practical hybrid proposal, not a formal derivation
+of an importance sampler over discrete mode changes.
 
-## Next development boundaries
+Critic is a small ROS-independent C++ interface. CriticManager installs the
+default objectives and allows additional const critics through shared ownership.
+A nonfinite critic result rejects a trajectory. Each rollout exposes its initial
+pose and one pose per tick, final vehicle state, applied controls and transition
+mask. The obstacle critic checks swept centre-line segments with a circular
+footprint, including braking and stationary alignment.
 
-1. Replace the prototype dimensions and per-mode limits with calibrated
-   steering geometry, joint limits, actuator rate limits and measured switch
-   timing. Keep the actual feedback gate in `ModeManager`.
-2. Replace static circle obstacles and circular footprint checks with a
-   ROS-independent footprint and obstacle-query interface. A Nav2 adapter can
-   then translate costmap data without leaking ROS types into this library.
-3. Add measurements for solve-time distribution, closed-loop progress, mode
-   switch counts and faults before choosing a target control rate or increasing
-   the number of discrete branches.
-4. Implement a separate `nav2_core::Controller` adapter and define its
-   mode-request/acknowledgement channel with the vehicle controller. A velocity
-   message alone cannot express this contract.
+## Motion prediction
 
-This is a research prototype. The current mode dynamics, costs and transition
-durations are not calibrated or validated for a physical platform.
+Inverse kinematics chooses only mechanically reachable joint angles and adjusts
+wheel speed sign for equivalent directions. Distances are direct joint distances,
+not wrapped shortcuts across hard stops. Every control is uniformly scaled when
+wheel-speed limits would be exceeded, preserving its body twist direction.
+
+Within a stable mode, a significant steering change uses a conservative
+brake/align/drive sequence. Steering remains fixed until body and wheel feedback
+are stopped. Wheel acceleration, body linear acceleration/deceleration and angular
+acceleration/deceleration bound a common wheel-speed interpolation factor.
+Forward kinematics of those wheel speeds and measured steering angles gives the
+predicted body twist, which is integrated using constant-twist SE(2) integration.
+Measured wheel speeds are authoritative for propagation; odometry velocity is
+also checked by the stopped gate. The adapter must supply mutually consistent
+feedback and converts joint angular speeds to linear rolling speeds.
+
+Transitions consume braking, bounded mode-entry alignment and confirmation ticks.
+Even zero configured delays consume at least one tick to guarantee termination.
+Crab entry currently aligns to zero steering, then a drive intent can cause a
+second alignment to its translation direction. A future typed executor contract
+should carry the desired entry direction to avoid that extra phase.
+
+## Boundaries for simulation integration
+
+The geometry and actuator defaults correspond to the simulation configuration.
+The predictive drive interlock remains more conservative than the simulator's
+active double-Ackermann steering behavior. Braking response, body limits, slipping,
+communication delay and transition times require identification before claiming
+model agreement.
+
+The simulator currently infers mode from velocity and clears it on zero commands;
+this core requires an explicit persistent mode request and acknowledgement.
+Integration must resolve that mismatch. Do not translate RequestMode to an
+ordinary zero Twist or report confirmation based on elapsed time alone.
+
+The next adapter should own message/TF conversion, feedback ages, simulation time,
+path lifecycle, explicit mode command/feedback and deliberate recovery. A later
+Nav2 adapter adds lifecycle handling, local path transformation/pruning,
+costmap/footprint queries and goal completion. The core has no autonomous handling
+of arbitrary control periods, global path progress or navigation cancellation yet.
+
+## Validation
+
+CMake/CTest cover mode restrictions, bounded inverse/forward kinematics, wheel
+and body rate limits, braking before steering, measured wheel-stop confirmation,
+zero-delay transition termination, hysteresis rejection, weighted-noise
+projection, critic extension, swept collisions and deterministic straight-path
+closed-loop progress. CTest also installs the library into a clean prefix and
+builds/runs an independent consumer through find_package().
+
+These tests validate core contracts, not Gazebo tracking performance. The next
+stage must compare predicted trajectories against independent Gazebo truth and
+measure solve-time distributions, tracking error, mode-switch counts, stalls and
+faults.
