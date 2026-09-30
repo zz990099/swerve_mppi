@@ -74,7 +74,7 @@ void test_confirmation_and_timeout() {
   ModeManager manager(config);
   VehicleState observed;
   observed.stamp_s = 1.0;
-  manager.begin(DriveMode::Crab, observed.stamp_s);
+  manager.begin(DriveMode::Crab, {}, observed);
   observed.velocity.vx = 0.2;
   check(manager.update(observed).action == Action::Brake, "mode change must brake first");
   observed.velocity = {};
@@ -86,14 +86,17 @@ void test_confirmation_and_timeout() {
         "old actual mode must not be treated as confirmed");
   observed.actual_mode = DriveMode::Crab;
   observed.mode_confirmed = false;
+  observed.stamp_s += .01;
   check(manager.update(observed).action == Action::RequestMode,
         "mode value without an acknowledgement must not permit driving");
   observed.mode_confirmed = true;
+  observed.mode_request_id = 1;
   observed.stamp_s = 1.3;
   check(manager.update(observed).action == Action::Hold && !manager.active(),
         "confirmed switch must leave a zero-command handover cycle");
 
-  manager.begin(DriveMode::Spin, 2.0);
+  observed.stamp_s = 2.0;
+  manager.begin(DriveMode::Spin, {}, observed);
   observed.stamp_s = 2.0 + config.confirmation_timeout_s + 0.01;
   check(manager.update(observed).action == Action::SafeStop && manager.active(),
         "confirmation timeout must latch a safe stop");
@@ -144,14 +147,15 @@ void test_controller_lateral_goal() {
   input.vehicle.actual_mode = DriveMode::Crab;
   input.vehicle.mode_confirmed = true;
   input.vehicle.time_in_mode_s = 0.0;
+  input.vehicle.mode_request_id = first.mode_request->id;
+  input.vehicle.steering_angles = first.mode_request->steering_targets;
   input.vehicle.stamp_s += config.dt_s;
   check(controller.compute(input).action == Action::Hold,
         "acknowledgement must include a zero-command handover");
   input.vehicle.stamp_s += config.dt_s;
-  const Output align = controller.compute(input);
-  check(align.action == Action::Hold && std::abs(align.body_command.vy) < 1e-9 &&
-            std::abs(align.steering_targets[0]) > 0.1,
-        "after confirmation, wheels must align before lateral motion");
+  const Output drive = controller.compute(input);
+  check(drive.action == Action::Drive && drive.body_command.vy > 0,
+        "direction-aware confirmed entry should permit lateral motion directly");
 }
 
 } // namespace

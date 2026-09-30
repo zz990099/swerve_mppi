@@ -26,8 +26,8 @@ Trajectory RolloutEngine::generate(const VehicleState &initial, const Branch &br
   while (step < config_.horizon_steps) {
     if (branch.switches && !switched && step == branch.switch_step) {
       std::vector<Pose2d> trace;
-      if (transition_.rollout(out.final_state, branch.mode, step, config_.horizon_steps, &trace) <
-          0.0)
+      if (transition_.rollout(out.final_state, branch.mode, step, config_.horizon_steps, &trace,
+                              controls[branch.switch_step]) < 0.0)
         return out;
       out.poses.insert(out.poses.end(), trace.begin(), trace.end());
       switched = true;

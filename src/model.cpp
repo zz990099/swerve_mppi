@@ -95,6 +95,14 @@ std::array<double, 4> DriveModel::steering_for_mode(DriveMode mode,
                                  : std::array<double, 4>{};
 }
 
+std::array<double, 4> DriveModel::steering_for_entry(DriveMode mode, const Control &intent,
+                                                     const std::array<double, 4> &current) const {
+  const auto projected = project(intent, mode);
+  if (std::hypot(projected.vx, projected.vy) < kEpsilon && std::abs(projected.wz) < kEpsilon)
+    return steering_for_mode(mode, current);
+  return kinematics_.inverse(projected, current).angles;
+}
+
 StepResult DriveModel::step(const VehicleState &start, const Control &u, double dt) const {
   StepResult out;
   out.state = start;

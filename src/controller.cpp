@@ -2,6 +2,8 @@
 
 #include "validation.hpp"
 #include <cmath>
+#include <limits>
+#include <stdexcept>
 
 namespace swerve_mppi {
 Controller::Controller(const Config &config)
@@ -17,16 +19,8 @@ Output Controller::compute(const ControllerInput &input) {
     return stop;
   stop.steering_targets = input.vehicle.steering_angles;
   last_stamp_s_ = input.vehicle.stamp_s;
-  auto transition_output = [&]() {
-    Output out = mode_manager_.update(input.vehicle);
-    out.steering_targets =
-        out.action == Action::RequestMode
-            ? model_.steering_for_mode(out.requested_mode, input.vehicle.steering_angles)
-            : input.vehicle.steering_angles;
-    return out;
-  };
   if (mode_manager_.active())
-    return transition_output();
+    return mode_manager_.update(input.vehicle);
   if (!input.vehicle.mode_confirmed || input.vehicle.mode_fault)
     return stop;
   const auto branches = scheduler_.make_branches(input.vehicle);
@@ -39,9 +33,15 @@ Output Controller::compute(const ControllerInput &input) {
   if (!std::isfinite(best.cost))
     return stop;
   if (best.branch.switches && best.branch.switch_step == 0) {
-    mode_manager_.begin(best.branch.mode, input.vehicle.stamp_s);
+    if (input.vehicle.mode_request_id == std::numeric_limits<std::uint64_t>::max())
+      return stop;
+    try {
+      mode_manager_.begin(best.branch.mode, best.controls.front(), input.vehicle);
+    } catch (const std::overflow_error &) {
+      return stop;
+    }
     optimizer_.reset();
-    auto out = transition_output();
+    auto out = mode_manager_.update(input.vehicle);
     out.selected_cost = best.cost;
     out.keep_cost = keep.cost;
     out.feasible_rollouts = best.feasible_rollouts;

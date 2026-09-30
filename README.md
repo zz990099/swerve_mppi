@@ -22,14 +22,14 @@ cmake --install build --prefix "$PWD/install-local"
 
 Set SWERVE_MPPI_BUILD_TESTS=OFF for a library-only build.
 BUILD_SHARED_LIBS=ON selects a shared library on supported toolchains.
-CTest runs the original behavior checks, model and optimizer regressions, and
-an independent consumer that finds and links the installed CMake package.
+CTest runs the original behavior checks, model, optimizer and execution
+regressions, and an independent consumer that finds and links the installed CMake package.
 CI builds Debug and Release configurations through CMake.
 
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.2 CONFIG REQUIRED)
+find_package(swerve_mppi 0.3 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -53,14 +53,22 @@ period ratios are not supported yet.
 - Timestamps must be finite, nonnegative and strictly increasing. The adapter
   owns feedback freshness checks, clock-reset handling and coordinate conversion.
 - time_in_mode_s is the age of the actual confirmed mode, not the requested
-  mode. mode_confirmed must come from the execution layer.
-- RequestMode is an idempotent explicit request. The executor brakes, aligns
-  and acknowledges it. A zero velocity message cannot encode this action.
+  mode. mode_confirmed and mode_request_id must come from the execution layer.
+  Startup uses request ID zero; subsequent IDs increase within an execution session.
+- RequestMode carries Output::mode_request with a nonzero ID, explicit target
+  mode and frozen steering targets. Retries preserve the complete payload. The
+  executor brakes, aligns and echoes the ID before confirming. A zero velocity
+  message cannot encode this action.
 - Brake requests controlled stopping while retaining steering.
   Hold keeps drive stopped while applying its steering targets.
   SafeStop disables drive; its numeric targets must not be interpreted as a
   mode change or a recovery request.
-- After a latched mode fault, call reset() only following deliberate recovery.
+- SafeStop cancels execution and latches a fault in ModeExecutor. After deliberate
+  recovery, reset the executor with independently verified stopped state and reset
+  the controller. Request ID high-water marks survive reset.
+
+See [docs/EXECUTION_CONTRACT.md](docs/EXECUTION_CONTRACT.md) for the transport-free
+ModeExecutor API, feedback mapping, cancellation and timing contract.
 
 ## Current status
 
@@ -70,13 +78,16 @@ remain conservative planning settings; they are not calibrated Gazebo dynamics.
 Components own their configuration, so temporaries and copied controllers cannot
 leave dangling configuration references.
 
-Version 0.2 moves branch generation from Optimizer::make_branches() to
-ModeScheduler::make_branches(). TransitionModel now takes only Config.
-The public Controller::compute() interface remains available.
+Version 0.3 adds ModeRequest/ModeFeedback and ModeExecutor. ModeManager::begin() now
+accepts a target mode, entry control intent and measured VehicleState. Adapters
+must echo the request ID and confirm measured steering as well as stopped body
+and wheels. The package minor version changes because the execution protocol
+and ModeManager API are incompatible with the previous confirmation-only API.
 
 This is a core research prototype. It has no ROS node or Nav2 plugin, and has not
 been validated in a combined Gazebo closed loop. Obstacles and the footprint are
 circles, the local goal is the last path pose, and each horizon allows one mode
 change. Path progress/pruning, goal completion, footprint/costmap queries,
-actuator-delay calibration and a typed mode command/feedback interface are later
-integration work.
+actuator-delay calibration and transport adapters remain future work. The typed
+mode contract and standalone execution supervisor are implemented and tested.
+These core tests do not establish agreement with physical or Gazebo dynamics.

@@ -80,6 +80,11 @@ void test_effective_noise_and_disabled_noise() {
     check(model.feasible(candidate[i], DriveMode::DualAckermann) && candidate[i].vy == 0,
           "sampling must preserve each mode's admissible controls");
   }
+  mean.assign(c.horizon_steps, {0, .4, 0});
+  noise.sample(mean, {DriveMode::Crab, 0, true}, DriveMode::DualAckermann, candidate, effective);
+  check(candidate[0].vx == mean[0].vx && candidate[0].vy == mean[0].vy && effective[0].vx == 0 &&
+            effective[0].vy == 0 && effective[0].wz == 0,
+        "proposals must freeze entry intent instead of hiding steering changes in masked noise");
   c.noise_v_mps = 0;
   c.noise_w_radps = 0;
   NoiseGenerator disabled(c);

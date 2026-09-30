@@ -10,7 +10,8 @@ Nav2 controller plugin belong in separate adapter packages.
 | --- | --- |
 | Controller | Validate input, continue committed transitions, select a solution and emit one action. |
 | ModeScheduler | Enumerate keep/single-switch branches; enforce dwell and switch hysteresis before selection. |
-| ModeManager | Execute the request/confirmation handshake, measured-stop gate and latched timeout. |
+| ModeManager | Commit a frozen entry request; gate handover on its matching ID and measured state. |
+| ModeExecutor | Persist actual mode; supervise braking/alignment, acknowledge requests and latch execution faults. |
 | Optimizer | Optimize continuous controls inside one branch; advance only an accepted keep-mode warm start. |
 | NoiseGenerator | Seeded Gaussian proposals, effective projected perturbations and control-noise correction. |
 | RolloutEngine | Generate an inspectable pose horizon and mark ticks consumed by transitions. |
@@ -40,8 +41,10 @@ remain plans and require a fresh decision before execution. Future-switch plans
 do not become cached keep-mode sequences. Faults and invalid inputs stop drive.
 
 ModeManager observes both body velocity and every wheel speed before requesting
-a mode. Matching actual_mode is insufficient without mode_confirmed. A
-confirmed switch produces a stopped handover cycle before drive resumes.
+a mode. Matching actual_mode is insufficient without mode_confirmed, the current
+request ID and measured entry steering. A confirmed switch produces a stopped handover
+cycle before drive resumes. Retries cannot change the committed steering or renew
+the deadline. Request IDs remain monotonic across deliberate recovery.
 Timeout covers the entire committed transition, including braking.
 
 ## Continuous optimization
@@ -51,6 +54,10 @@ the branch's mode and wheel-speed limits. One sample preserves the nominal
 sequence. Updates use the effective perturbation after projection, not discarded
 raw noise. Transition ticks are masked from the control-noise correction and
 weighted update because no sampled drive control is applied during those ticks.
+The control at switch_step defines a frozen entry intent. NoiseGenerator preserves
+that control across all proposals, so masked noise cannot alter entry geometry.
+Entry intent currently comes from the branch seed; optimizing discrete entry
+directions as separate branches remains future work.
 
 Weights use a minimum-normalized exponential of trajectory cost plus
 control_correction_weight * nominal * effective_noise / variance. A disabled
@@ -87,9 +94,19 @@ feedback and converts joint angular speeds to linear rolling speeds.
 
 Transitions consume braking, bounded mode-entry alignment and confirmation ticks.
 Even zero configured delays consume at least one tick to guarantee termination.
-Crab entry currently aligns to zero steering, then a drive intent can cause a
-second alignment to its translation direction. A future typed executor contract
-should carry the desired entry direction to avoid that extra phase.
+Entry steering comes from the branch's intended control using the same bounded
+kinematics in prediction and execution. Crab aligns directly to its translation
+direction; Ackermann can enter its planned curvature. Zero intent uses the
+canonical mode geometry. Predicted transitions exceeding the execution deadline
+are infeasible, even when they fit inside the planning horizon.
+
+ModeExecutor is an optional standalone reference supervisor, not a dynamics
+model. It consumes Output and measured VehicleState, returns joint targets and
+ModeFeedback, and never substitutes predicted state for actual confirmation.
+It blocks drive during transitions, retains steering while braking, persists
+mode on zero drive, rejects changed/replayed requests and latches SafeStop.
+The actuator layer owns rate limiting, encoder sampling and command watchdogs.
+See docs/EXECUTION_CONTRACT.md for the API and reset protocol.
 
 ## Boundaries for simulation integration
 
@@ -105,16 +122,21 @@ Integration must resolve that mismatch. Do not translate RequestMode to an
 ordinary zero Twist or report confirmation based on elapsed time alone.
 
 The next adapter should own message/TF conversion, feedback ages, simulation time,
-path lifecycle, explicit mode command/feedback and deliberate recovery. A later
-Nav2 adapter adds lifecycle handling, local path transformation/pruning,
+path lifecycle, transport for the implemented mode command/feedback protocol,
+and deliberate recovery. A later Nav2 adapter adds lifecycle handling, local
+path transformation/pruning,
 costmap/footprint queries and goal completion. The core has no autonomous handling
-of arbitrary control periods, global path progress or navigation cancellation yet.
+of arbitrary control periods or global path progress yet. SafeStop supports core
+execution cancellation; navigation task lifecycle and goal completion remain
+adapter responsibilities.
 
 ## Validation
 
 CMake/CTest cover mode restrictions, bounded inverse/forward kinematics, wheel
 and body rate limits, braking before steering, measured wheel-stop confirmation,
-zero-delay transition termination, hysteresis rejection, weighted-noise
+zero-delay transition termination, all six directed mode transitions, request
+identity/idempotency, timeout/recovery, persistent mode on zero drive, a typed
+controller/executor lateral closed loop, hysteresis rejection, weighted-noise
 projection, critic extension, swept collisions and deterministic straight-path
 closed-loop progress. CTest also installs the library into a clean prefix and
 builds/runs an independent consumer through find_package().

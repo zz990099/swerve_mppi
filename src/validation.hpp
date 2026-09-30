@@ -3,6 +3,26 @@
 #include "swerve_mppi/types.hpp"
 #include <cmath>
 namespace swerve_mppi::detail {
+inline bool valid_action(Action action) {
+  return action == Action::Drive || action == Action::Brake || action == Action::RequestMode ||
+         action == Action::Hold || action == Action::SafeStop;
+}
+inline bool valid_mode(DriveMode mode) {
+  return mode == DriveMode::DualAckermann || mode == DriveMode::Spin || mode == DriveMode::Crab;
+}
+inline bool valid_steering(const std::array<double, 4> &angles, const Config &config) {
+  for (double angle : angles)
+    if (!std::isfinite(angle) || std::abs(angle) > config.steering_limit_rad)
+      return false;
+  return true;
+}
+inline bool steering_aligned(const std::array<double, 4> &measured,
+                             const std::array<double, 4> &targets, const Config &config) {
+  for (std::size_t i = 0; i < measured.size(); ++i)
+    if (std::abs(measured[i] - targets[i]) > config.steering_tolerance_rad)
+      return false;
+  return true;
+}
 inline bool valid_vehicle(const VehicleState &vehicle, const Config &config) {
   if ((vehicle.actual_mode != DriveMode::DualAckermann && vehicle.actual_mode != DriveMode::Spin &&
        vehicle.actual_mode != DriveMode::Crab) ||

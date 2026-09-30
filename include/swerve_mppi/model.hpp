@@ -43,6 +43,8 @@ public:
   StepResult step(const VehicleState &start, const Control &control, double dt_s) const;
   std::array<double, 4> steering_for_mode(DriveMode mode,
                                           const std::array<double, 4> &current_angles = {}) const;
+  std::array<double, 4> steering_for_entry(DriveMode mode, const Control &intent,
+                                           const std::array<double, 4> &current_angles) const;
 
 private:
   Config config_;
@@ -56,7 +58,8 @@ public:
   explicit TransitionModel(const Config &config);
 
   double rollout(VehicleState &state, DriveMode target_mode, std::size_t &steps_used,
-                 std::size_t max_steps, std::vector<Pose2d> *trace = nullptr) const;
+                 std::size_t max_steps, std::vector<Pose2d> *trace = nullptr,
+                 const Control &entry_intent = {}) const;
 
 private:
   Config config_;

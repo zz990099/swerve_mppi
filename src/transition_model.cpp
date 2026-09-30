@@ -7,10 +7,13 @@
 namespace swerve_mppi {
 TransitionModel::TransitionModel(const Config &config) : config_(config), model_(config) {}
 double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std::size_t &steps,
-                                std::size_t maximum, std::vector<Pose2d> *trace) const {
+                                std::size_t maximum, std::vector<Pose2d> *trace,
+                                const Control &entry_intent) const {
   if (!detail::valid_vehicle(state, config_) || steps >= maximum ||
       (target_mode != DriveMode::DualAckermann && target_mode != DriveMode::Spin &&
-       target_mode != DriveMode::Crab))
+       target_mode != DriveMode::Crab) ||
+      !std::isfinite(entry_intent.vx) || !std::isfinite(entry_intent.vy) ||
+      !std::isfinite(entry_intent.wz))
     return -1.0;
   const std::size_t begin = steps;
   while (!is_stopped(state, config_)) {
@@ -26,7 +29,7 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
   }
   state.velocity = {};
   state.wheel_speeds.fill(0.0);
-  const auto angles = model_.steering_for_mode(target_mode, state.steering_angles);
+  const auto angles = model_.steering_for_entry(target_mode, entry_intent, state.steering_angles);
   if (config_.alignment_min_s > (maximum - steps) * config_.dt_s)
     return -1.0;
   const std::size_t minimum =
@@ -59,6 +62,8 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
   // A zero-delay transition still consumes a tick, guaranteeing rollout progress.
   const std::size_t wait = std::max(confirmation, steps == begin ? std::size_t{1} : std::size_t{0});
   if (wait > maximum - steps)
+    return -1.0;
+  if ((steps + wait - begin) * config_.dt_s > config_.confirmation_timeout_s + 1e-9)
     return -1.0;
   state.stamp_s += wait * config_.dt_s;
   steps += wait;

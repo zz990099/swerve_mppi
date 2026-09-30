@@ -103,8 +103,8 @@ void test_zero_delay_transition_and_confirmation() {
   check(transition.rollout(s, DriveMode::Crab, steps, 10, &trace) > 0 && steps == trace.size(),
         "zero-delay transitions must advance time and terminate");
   ModeManager manager(c);
-  manager.begin(DriveMode::Spin, 1);
   s.stamp_s = 1;
+  manager.begin(DriveMode::Spin, {}, s);
   s.velocity = {};
   s.wheel_speeds.fill(.1);
   check(manager.update(s).action == Action::Brake,
@@ -115,9 +115,9 @@ void test_configuration_ownership() {
   ModeManager manager(Config{});
   check(model.step(VehicleState{}, {.2, 0, 0}, .1).valid,
         "models must own configuration passed as a temporary");
-  manager.begin(DriveMode::Crab, 1);
   VehicleState s;
   s.stamp_s = 1;
+  manager.begin(DriveMode::Crab, {}, s);
   check(manager.update(s).action == Action::RequestMode,
         "manager temporary configuration must stay valid");
   Config invalid;

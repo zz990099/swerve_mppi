@@ -10,6 +10,13 @@ void NoiseGenerator::sample(const std::vector<Control> &mean, const Branch &bran
   candidate.resize(mean.size());
   noise.resize(mean.size());
   for (std::size_t t = 0; t < mean.size(); ++t) {
+    // Entry intent defines the frozen discrete request, not a drive tick.
+    // Keep it identical across proposals so masked noise cannot change alignment.
+    if (branch.switches && t == branch.switch_step) {
+      candidate[t] = mean[t];
+      noise[t] = {};
+      continue;
+    }
     const DriveMode mode = branch.switches && t >= branch.switch_step ? branch.mode : current;
     const Control sampled{mean[t].vx + config_.noise_v_mps * normal_(rng_),
                           mean[t].vy + config_.noise_v_mps * normal_(rng_),
