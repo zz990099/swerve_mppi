@@ -8,8 +8,9 @@
 using namespace swerve_mppi;
 
 namespace {
-void check(bool condition, const std::string & message) {
-  if (!condition) throw std::runtime_error(message);
+void check(bool condition, const std::string &message) {
+  if (!condition)
+    throw std::runtime_error(message);
 }
 
 ControllerInput make_input() {
@@ -27,18 +28,14 @@ void test_mode_kinematics() {
         "Ackermann must forbid lateral velocity");
   check(!model.feasible({0.0, 0.0, 0.2}, DriveMode::DualAckermann),
         "Ackermann must forbid zero-radius turns");
-  check(!model.feasible({0.1, 0.0, 0.2}, DriveMode::Spin),
-        "spin must forbid translation");
-  check(!model.feasible({0.0, 0.1, 0.2}, DriveMode::Crab),
-        "crab must forbid yaw");
-  check(model.feasible({0.0, 0.0, 0.5}, DriveMode::Spin),
-        "spin must permit rotation from rest");
+  check(!model.feasible({0.1, 0.0, 0.2}, DriveMode::Spin), "spin must forbid translation");
+  check(!model.feasible({0.0, 0.1, 0.2}, DriveMode::Crab), "crab must forbid yaw");
+  check(model.feasible({0.0, 0.0, 0.5}, DriveMode::Spin), "spin must permit rotation from rest");
 
   VehicleState crab;
   crab.actual_mode = DriveMode::Crab;
   const auto first = model.step(crab, {0.0, 0.5, 0.0}, config.dt_s);
-  check(first.valid && std::abs(first.state.pose.y) < 1e-9 &&
-        first.state.steering_angles[0] > 0.0,
+  check(first.valid && std::abs(first.state.pose.y) < 1e-9 && first.state.steering_angles[0] > 0.0,
         "lateral drive must first align the wheels while stationary");
   VehicleState rolling = first.state;
   for (int i = 0; i < 10; ++i) {
@@ -51,20 +48,22 @@ void test_mode_kinematics() {
 void test_transition_rollout() {
   Config config;
   DriveModel model(config);
-  TransitionModel transition(config, model);
+  TransitionModel transition(config);
   VehicleState state;
   state.velocity.vx = 0.45;
+  state.wheel_speeds.fill(0.45);
   std::size_t steps = 0;
   std::vector<Pose2d> trace;
-  const double duration = transition.rollout(state, DriveMode::Spin,
-                                             steps, 40, &trace);
+  const double duration = transition.rollout(state, DriveMode::Spin, steps, 40, &trace);
   check(duration > config.alignment_min_s + config.confirmation_prediction_s &&
-        steps == trace.size(), "transition must include braking and alignment");
-  check(state.actual_mode == DriveMode::Spin &&
-        std::abs(state.velocity.vx) < 1e-9 && state.pose.x > 0.0,
+            steps == trace.size(),
+        "transition must include braking and alignment");
+  check(state.actual_mode == DriveMode::Spin && std::abs(state.velocity.vx) < 1e-9 &&
+            state.pose.x > 0.0,
         "transition must finish stopped after physical braking");
   VehicleState truncated;
   truncated.velocity.vx = 0.45;
+  truncated.wheel_speeds.fill(0.45);
   steps = 0;
   check(transition.rollout(truncated, DriveMode::Spin, steps, 2) < 0.0,
         "transition that cannot finish inside horizon is infeasible");
@@ -77,8 +76,7 @@ void test_confirmation_and_timeout() {
   observed.stamp_s = 1.0;
   manager.begin(DriveMode::Crab, observed.stamp_s);
   observed.velocity.vx = 0.2;
-  check(manager.update(observed).action == Action::Brake,
-        "mode change must brake first");
+  check(manager.update(observed).action == Action::Brake, "mode change must brake first");
   observed.velocity = {};
   observed.stamp_s = 1.1;
   check(manager.update(observed).action == Action::RequestMode,
@@ -106,16 +104,15 @@ void test_confirmation_and_timeout() {
 void test_mode_sampling_and_infeasibility() {
   Config config;
   config.minimum_mode_dwell_s = 1.0;
-  Optimizer optimizer(config);
+  ModeScheduler scheduler(config);
   VehicleState fresh;
   fresh.time_in_mode_s = 0.0;
-  for (const Branch & b : optimizer.make_branches(fresh)) {
+  for (const Branch &b : scheduler.make_branches(fresh)) {
     check(!b.switches || b.switch_step * config.dt_s >= 1.0 - 1e-9,
           "dwell time must constrain future switching");
   }
   fresh.mode_confirmed = false;
-  check(optimizer.make_branches(fresh).size() == 1,
-        "unconfirmed mode must prevent mode sampling");
+  check(scheduler.make_branches(fresh).size() == 1, "unconfirmed mode must prevent mode sampling");
 
   auto input = make_input();
   input.obstacles.push_back({0.0, 0.0, 0.1});
@@ -139,8 +136,7 @@ void test_controller_lateral_goal() {
   Controller controller(config);
   auto input = make_input();
   const Output first = controller.compute(input);
-  check(first.action == Action::RequestMode &&
-        first.requested_mode == DriveMode::Crab,
+  check(first.action == Action::RequestMode && first.requested_mode == DriveMode::Crab,
         "lateral goal should select crab and request its confirmation");
   input.vehicle.stamp_s += config.dt_s;
   check(controller.compute(input).action == Action::RequestMode,
@@ -153,13 +149,12 @@ void test_controller_lateral_goal() {
         "acknowledgement must include a zero-command handover");
   input.vehicle.stamp_s += config.dt_s;
   const Output align = controller.compute(input);
-  check(align.action == Action::Hold &&
-        std::abs(align.body_command.vy) < 1e-9 &&
-        std::abs(align.steering_targets[0]) > 0.1,
+  check(align.action == Action::Hold && std::abs(align.body_command.vy) < 1e-9 &&
+            std::abs(align.steering_targets[0]) > 0.1,
         "after confirmation, wheels must align before lateral motion");
 }
 
-}  // namespace
+} // namespace
 
 int main() {
   try {
@@ -170,7 +165,7 @@ int main() {
     test_controller_lateral_goal();
     std::cout << "All swerve MPPI core tests passed\n";
     return 0;
-  } catch (const std::exception & error) {
+  } catch (const std::exception &error) {
     std::cerr << "Test failed: " << error.what() << '\n';
     return 1;
   }

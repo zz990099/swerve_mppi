@@ -6,13 +6,18 @@
 namespace swerve_mppi {
 
 struct Config {
-  double wheelbase_m = 0.7;
-  double track_m = 0.55;
-  double robot_radius_m = 0.42;
+  double wheelbase_m = 0.6;
+  double track_m = 0.5;
+  double wheel_radius_m = 0.1;
+  double robot_radius_m = 0.5;
   double collision_margin_m = 0.05;
 
-  double max_wheel_speed_mps = 1.5;
-  double max_steer_rate_radps = 2.0;
+  // Linear rolling units; adapters convert joint rad/s using wheel_radius_m.
+  double max_wheel_speed_mps = 2.0;
+  double max_wheel_accel_mps2 = 4.0;
+  // Symmetric mechanical stops; supported half-range is pi/2 through pi.
+  double steering_limit_rad = 1.5707963267948966;
+  double max_steer_rate_radps = 2.5;
   double max_vx_mps = 0.8;
   double max_crab_speed_mps = 0.65;
   double max_spin_radps = 0.8;
@@ -21,17 +26,22 @@ struct Config {
   double max_linear_accel_mps2 = 0.9;
   double max_linear_decel_mps2 = 1.0;
   double max_angular_accel_radps2 = 1.3;
-  double steering_tolerance_rad = 0.10;
+  double max_angular_decel_radps2 = 1.3;
+  double steering_tolerance_rad = 0.05;
   double stopped_linear_mps = 0.035;
   double stopped_angular_radps = 0.035;
+  double stopped_wheel_speed_mps = 0.005;
 
+  // Age of the confirmed actual mode, not request stability time.
   double minimum_mode_dwell_s = 1.0;
   double alignment_min_s = 0.25;
   double confirmation_prediction_s = 0.20;
+  // Execution deadline includes braking, alignment and acknowledgement.
   double confirmation_timeout_s = 2.0;
   double switch_cost = 1.0;
   double switch_hysteresis = 0.4;
 
+  // One compute call per model tick; arbitrary period ratios are not implemented.
   double dt_s = 0.1;
   std::size_t horizon_steps = 20;
   std::size_t samples_per_branch = 80;
@@ -39,6 +49,8 @@ struct Config {
   double temperature = 0.35;
   double noise_v_mps = 0.30;
   double noise_w_radps = 0.35;
+  // Used for proposal weighting only; branch ranking uses physical critic costs.
+  double control_correction_weight = 0.015;
   std::uint32_t random_seed = 42;
 
   double path_weight = 0.5;
@@ -48,6 +60,6 @@ struct Config {
   double clearance_weight = 0.08;
 };
 
-void validate(const Config & config);
+void validate(const Config &config);
 
-}  // namespace swerve_mppi
+} // namespace swerve_mppi

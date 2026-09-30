@@ -26,6 +26,7 @@ struct VehicleState {
   Pose2d pose;
   Twist2d velocity;
   std::array<double, 4> steering_angles{};
+  // Linear rolling m/s in FL, FR, RL, RR order; never raw encoder rad/s.
   std::array<double, 4> wheel_speeds{};
   DriveMode actual_mode = DriveMode::DualAckermann;
   bool mode_confirmed = true;
@@ -64,4 +65,4 @@ struct Output {
   std::size_t feasible_rollouts = 0;
 };
 
-}  // namespace swerve_mppi
+} // namespace swerve_mppi
