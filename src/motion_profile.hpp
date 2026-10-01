@@ -106,6 +106,83 @@ inline void integrate_profile(StepResult &out, const Twist2d &before, const Moti
   out.sweep_margin_m =
       (straight_monotonic ? 0 : acceleration * dt * dt / 8) + out.integration_error_m;
 }
+// Integral of an affine rolling speed at an affine steering angle, from 0 to f.
+// Small-angle moments avoid cancellation; yaw is integrated independently of
+// the positional midpoint quadrature so no heading error accumulates downstream.
+inline std::array<double, 2> wheel_integral(double speed, double ds, double angle, double da,
+                                            double f) {
+  const double z = da * f, z2 = z * z;
+  double sinc, cosc, first_cos, first_sin;
+  if (std::abs(z) < .01) {
+    sinc = 1 - z2 / 6 + z2 * z2 / 120 - z2 * z2 * z2 / 5040;
+    cosc = z * (.5 - z2 / 24 + z2 * z2 / 720 - z2 * z2 * z2 / 40320);
+    first_cos = .5 - z2 / 8 + z2 * z2 / 144 - z2 * z2 * z2 / 5760;
+    first_sin = z * (1.0 / 3 - z2 / 30 + z2 * z2 / 840 - z2 * z2 * z2 / 45360);
+  } else {
+    sinc = std::sin(z) / z;
+    cosc = (1 - std::cos(z)) / z;
+    first_cos = sinc - cosc / z;
+    first_sin = (sinc - std::cos(z)) / z;
+  }
+  const double x = speed * f * sinc + ds * f * f * first_cos;
+  const double y = speed * f * cosc + ds * f * f * first_sin;
+  return {std::cos(angle) * x - std::sin(angle) * y, std::sin(angle) * x + std::cos(angle) * y};
+}
+inline void integrate_drive(StepResult &out, const VehicleState &start, const Twist2d &before,
+                            const Config &c, double dt) {
+  const auto &end = out.state;
+  if (start.steering_angles == end.steering_angles) {
+    MotionProfile p;
+    p.durations[2] = p.duration = dt;
+    integrate_profile(out, before, p, dt);
+    return;
+  }
+  const double x[] = {c.wheelbase_m / 2, c.wheelbase_m / 2, -c.wheelbase_m / 2, -c.wheelbase_m / 2};
+  const double y[] = {c.track_m / 2, -c.track_m / 2, c.track_m / 2, -c.track_m / 2};
+  const double radius = std::hypot(x[0], y[0]), moment = 4 * radius * radius;
+  double derivative = 0, speed_bound = 0, angular_deviation = 0;
+  for (std::size_t i = 0; i < 4; ++i) {
+    const double ds = end.wheel_speeds[i] - start.wheel_speeds[i];
+    const double da = end.steering_angles[i] - start.steering_angles[i];
+    const double speed = std::max(std::abs(start.wheel_speeds[i]), std::abs(end.wheel_speeds[i]));
+    derivative += std::hypot(ds, speed * da) / (4 * dt);
+    speed_bound += speed / 4;
+    angular_deviation += (2 * std::abs(ds * da) + speed * da * da) / (32 * radius);
+  }
+  const double acceleration =
+      derivative +
+      speed_bound * (std::max(std::abs(before.wz), std::abs(end.velocity.wz)) + angular_deviation);
+  auto yaw_at = [&](double f) {
+    double yaw = start.pose.yaw;
+    for (std::size_t i = 0; i < 4; ++i) {
+      const auto v = wheel_integral(
+          start.wheel_speeds[i], end.wheel_speeds[i] - start.wheel_speeds[i],
+          start.steering_angles[i], end.steering_angles[i] - start.steering_angles[i], f);
+      yaw += dt * (x[i] * v[1] - y[i] * v[0]) / moment;
+    }
+    return yaw;
+  };
+  constexpr std::size_t subdivisions = 8;
+  const double h = dt / subdivisions;
+  for (std::size_t j = 0; j < subdivisions; ++j) {
+    const double f = (j + .5) / subdivisions;
+    double vx = 0, vy = 0;
+    for (std::size_t i = 0; i < 4; ++i) {
+      const double speed =
+          start.wheel_speeds[i] + f * (end.wheel_speeds[i] - start.wheel_speeds[i]);
+      const double angle =
+          start.steering_angles[i] + f * (end.steering_angles[i] - start.steering_angles[i]);
+      vx += speed * std::cos(angle) / 4;
+      vy += speed * std::sin(angle) / 4;
+    }
+    const double yaw = yaw_at(f);
+    out.state.pose.x += h * (std::cos(yaw) * vx - std::sin(yaw) * vy);
+    out.state.pose.y += h * (std::sin(yaw) * vx + std::cos(yaw) * vy);
+  }
+  out.state.pose.yaw = wrap_angle(yaw_at(1));
+  out.integration_error_m = acceleration * dt * dt / (4 * subdivisions);
+  out.sweep_margin_m = acceleration * dt * dt / 8 + out.integration_error_m;
+}
 inline void append_motion(const StepResult &step, std::vector<Pose2d> *poses,
                           std::vector<double> *margins, double &position_error) {
   if (poses)

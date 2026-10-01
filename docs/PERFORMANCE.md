@@ -1,14 +1,13 @@
-# Core workspaces, diagnostics and measurement (0.8)
+# Core workspaces, diagnostics and measurement (0.11)
 
 Stage 3 covers standalone core performance and observability. No simulator,
 ROS adapter, transport protocol or hardware integration was added. Tracking
 parameters, completion tolerances and execution interlocks retain their 0.5 defaults.
-Version 0.8 adds current-target slowdown, terminal eligibility and unified stopping
-validation. Committed timing measurements below use that historical implementation;
-commands build the current source. The 0.9/0.10 dynamics, safety and protocol changes have
-new regression evidence in SAFETY_CONTRACT_VALIDATION.md and do not inherit 0.8
-solve-time percentiles or completion ticks. Historical stage 3 results
-and tuning conclusions remain identified as 0.6 evidence in VALIDATION.md.
+Version 0.11 adds full-period encoder Drive dynamics, bounded safety-intent
+reductions and local curve speed limits. Current measurement evidence is in
+DRIVE_EXECUTION_VALIDATION.md and benchmarks/*v0.11_release.csv. The 0.8 CSVs
+and stage 3 tuning conclusions remain historical evidence; their timings and
+completion ticks do not describe the current source.
 
 ## Reproduce a measurement
 
@@ -130,14 +129,16 @@ Legacy Output::feasible_rollouts remains the selected branch's finite sampled
 proposal count across iterations. Large aggregate fallback counts can come from
 infeasible losing switch branches; they do not alone imply an executor fault.
 Capture, pending handshakes, completed tasks and invalid-input calls normally have
-zero planning work. Counter identities and stopped-clock/infeasibility diagnostics
+zero planning work. Output::safety_reductions and the CSV safety_reductions column count reduced-intent
+continuation validations; these are excluded from optimization rollout counts.
+Counter identities and stopped-clock/infeasibility diagnostics
 are covered by the optimizer regressions.
 
 ## Measurement evidence and tuning decisions
 
-See CORE_REVIEW_VALIDATION.md and benchmarks/*v0.8_release.csv for the current
-measurement, source commit, environment and acceptance results. VALIDATION.md
-records the historical stage 3 baseline and tuning probes.
+See DRIVE_EXECUTION_VALIDATION.md and benchmarks/*v0.11_release.csv for the current
+measurement, source commit, environment and acceptance results. CORE_REVIEW_VALIDATION.md
+records the historical 0.8 matrix; VALIDATION.md records stage 3 tuning probes.
 Allocation peaks are a repeatable structural comparison. Timing on a shared host
 varies; these samples do not establish a hard real-time or worst-case guarantee.
 

@@ -120,7 +120,7 @@ struct Output {
   Action action = Action::SafeStop;
   DriveMode requested_mode = DriveMode::DualAckermann;
   TransitionPhase phase = TransitionPhase::Stable;
-  // Drive: forward kinematics of the next steering/wheel target pair.
+  // Drive: endpoint forward kinematics; joints interpolate over the full tick.
   Twist2d body_command;
   std::array<double, 4> steering_targets{};
   std::array<double, 4> wheel_speed_targets{};
@@ -131,6 +131,8 @@ struct Output {
   std::size_t feasible_rollouts = 0;
   // All optimized branches, including nominal and weighted evaluations.
   PlanningStats planning_stats;
+  // Number of bounded reduced-intent stopping validations in this compute call.
+  std::size_t safety_reductions = 0;
   ControlPolicy control_policy = ControlPolicy::Fault;
   FailureReason failure_reason = FailureReason::None;
   NavigationStatus navigation_status = NavigationStatus::Fault;

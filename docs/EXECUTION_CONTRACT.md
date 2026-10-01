@@ -1,4 +1,4 @@
-# Standalone execution protocol (0.10)
+# Standalone execution protocol (0.11)
 
 This contract is independent of ROS, Nav2 and Gazebo. ModeExecutor is a reference
 supervisor that can be used behind any transport or directly in core tests.
@@ -173,12 +173,37 @@ including motion below handover thresholds, and returns invalid on exhaustion.
 Zero intent emits Brake/Hold with measured steering and zero drive targets, even
 when measured wheel residuals exceed the Drive allowance.
 
-Trajectories use piecewise linear body-twist ramps with separate braking and
-acceleration phases. They include deceleration displacement, any final-speed hold,
-per-segment curve-to-chord enclosure and accumulated quadrature error. These bounds
-apply to the predictive ramp, not unspecified actuator dynamics or tire slip.
-A caller-supplied trace with empty sweep_margins_m denotes piecewise straight motion;
-provided margins must be finite, nonnegative and match the pose segments.
+Version 0.11 specifies Drive actuator interpolation: from the freshly measured
+wheel speeds and steering angles, reach both supplied endpoint target arrays
+with affine interpolation over the full dt_s. Reaching a deceleration endpoint
+earlier and holding it does not implement this contract. The body_command is
+endpoint forward kinematics, not the average velocity of the tick. Brake keeps
+measured steering and scales measured wheel speeds proportionally to zero at the
+fastest common body/joint braking rate, holding zero for any remaining time.
+The adapter must implement and calibrate these profiles; the bounds do not cover
+unspecified servo dynamics or tire slip.
+
+The executor independently rejects absolute DualAckermann vx/yaw-rate, Crab
+translation-speed and Spin yaw-rate violations. Transient manifold projection
+tolerance cannot enlarge these limits. Drive interpolation must also obey
+pointwise linear/angular and joint rates, including both sides of a reversal.
+Measured overspeed may recover through the checked Brake path.
+
+Every first Drive and its complete stopping continuation still passes the shared
+validator. A rejected candidate retries up to safety_reduction_attempts amplitude
+halvings (default 8, maximum 16; zero disables retries). Each attempt revalidates
+the entire continuation. Reductions preserve translation direction and Ackermann
+curvature, frozen entry geometry and the original alignment deadline. Success
+clears the optimizer warm start; exhaustion uses the separately checked current
+stop. Output::safety_reductions counts reduced validations across all candidates
+in one compute call, separately from optimization rollout statistics.
+
+Drive trajectories integrate full-tick affine encoder targets with analytic yaw
+and bounded midpoint translation quadrature. Brake uses proportional body ramps.
+Both include conservative segment curve-to-chord enclosures and accumulated
+position error. A caller-supplied trace with empty sweep_margins_m denotes
+piecewise straight motion; provided margins must be finite, nonnegative and match
+the pose segments.
 
 All inclusive time boundaries share a 1 ns numerical floor, enlarged to four times double precision epsilon times
 the timestamp magnitude for subtraction of large stamps. Deadline receipt at the

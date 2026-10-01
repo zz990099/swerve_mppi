@@ -692,6 +692,47 @@ void test_drive_steering_command_limits() {
           "executor must reject steering jumps beyond rate or moving-angle limits");
   }
 }
+void test_absolute_speed_and_drive_interpolation_limits() {
+  Config c;
+  for (auto mode : {DriveMode::DualAckermann, DriveMode::Crab, DriveMode::Spin}) {
+    const double maximum = mode == DriveMode::Crab   ? c.max_crab_speed_mps
+                           : mode == DriveMode::Spin ? c.max_spin_radps
+                                                     : c.max_vx_mps;
+    for (double excess : {0.0, .01, .2}) {
+      VehicleState state;
+      state.stamp_s = 1;
+      state.actual_mode = mode;
+      const Control initial =
+          mode == DriveMode::Spin ? Control{0, 0, maximum - .01} : Control{maximum - .01, 0, 0};
+      const auto before = Kinematics(c).inverse(initial, {});
+      state.steering_angles = before.angles;
+      state.wheel_speeds = before.speeds;
+      state.velocity = {initial.vx, initial.vy, initial.wz};
+      const Control intent = mode == DriveMode::Spin ? Control{0, 0, maximum + excess}
+                                                     : Control{maximum + excess, 0, 0};
+      const auto joint = Kinematics(c).inverse(intent, state.steering_angles);
+      Output command;
+      command.action = Action::Drive;
+      command.requested_mode = mode;
+      command.steering_targets = joint.angles;
+      command.wheel_speed_targets = joint.speeds;
+      command.body_command = {intent.vx, intent.vy, intent.wz};
+      check(ModeExecutor(c, mode).update(command, state).feedback.fault == (excess > 0),
+            "absolute body speed limits cannot borrow steering interpolation tolerance");
+    }
+  }
+  c.max_linear_decel_mps2 = .1;
+  VehicleState state;
+  state.stamp_s = 1;
+  state.velocity.vx = .03;
+  state.wheel_speeds.fill(.03);
+  Output command;
+  command.action = Action::Drive;
+  command.body_command.vx = -.04;
+  command.wheel_speed_targets.fill(-.04);
+  check(ModeExecutor(c).update(command, state).feedback.fault,
+        "executor must reject a reversal whose affine ramp violates pointwise deceleration");
+}
 void test_module_velocity_residuals() {
   Config c;
   VehicleState state;
@@ -707,6 +748,8 @@ void test_module_velocity_residuals() {
               result.wheel_speed_targets == std::array<double, 4>{},
           "least-squares body agreement cannot hide incompatible module velocity vectors");
   }
+  state.wheel_speeds.fill(.2);
+  state.velocity.vx = .2;
   for (double residual : {.01, .03}) {
     Output command;
     command.action = Action::Drive;
@@ -843,6 +886,7 @@ int main() {
     test_frozen_controller_alignment();
     test_drive_steering_command_limits();
     test_module_velocity_residuals();
+    test_absolute_speed_and_drive_interpolation_limits();
     test_curved_ackermann_and_spin_drive();
     test_rollout_entry_direction();
     test_capture_alignment_commitment();

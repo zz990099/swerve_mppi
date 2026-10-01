@@ -36,7 +36,7 @@ struct StepResult {
   std::array<double, 4> wheel_speed_targets{};
   bool valid = true;
   bool aligning = false;
-  // Conservative enclosure for the modeled within-tick body-twist ramp.
+  // Conservative enclosure for full-tick affine Drive joints or proportional Brake.
   double sweep_margin_m = 0;
   double integration_error_m = 0;
 };

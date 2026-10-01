@@ -1,5 +1,6 @@
 #include "swerve_mppi/controller.hpp"
 
+#include "drive_interpolation.hpp"
 #include "time_comparison.hpp"
 #include "validation.hpp"
 #include <algorithm>
@@ -16,6 +17,7 @@ Controller::Controller(const Config &config, std::shared_ptr<const TrajectoryVal
 }
 
 Output Controller::compute(const ControllerInput &input) {
+  safety_reductions_ = 0;
   Output stop;
   stop.requested_mode = input.vehicle.actual_mode;
   stop.phase = mode_manager_.phase();
@@ -109,6 +111,7 @@ Output Controller::compute(const ControllerInput &input) {
   out.cross_track_error_m = path.cross_track_error_m;
   out.goal_distance_m = goal.distance_m;
   out.goal_yaw_error_rad = goal.yaw_error_rad;
+  out.safety_reductions = safety_reductions_;
   return out;
 }
 Output Controller::compute_tracking(const ControllerInput &input) {
@@ -132,12 +135,16 @@ Output Controller::compute_tracking(const ControllerInput &input) {
     return out;
   }
   if (best.branch.switches && best.branch.switch_step == 0) {
-    if (!safe_control(input, best.branch, best.controls.front())) {
-      auto out = planning_stop(input);
+    const auto reduced = safe_reduction(input, best.branch, best.controls.front());
+    if (!reduced) {
+      auto out = std::isfinite(keep.cost) ? apply_control(input, keep.controls.front())
+                                          : planning_stop(input);
       out.planning_stats = stats;
+      out.selected_cost = out.keep_cost = keep.cost;
+      out.feasible_rollouts = keep.feasible_rollouts;
       return out;
     }
-    auto out = request_mode(input, best.branch.mode, best.controls.front());
+    auto out = request_mode(input, best.branch.mode, *reduced);
     out.planning_stats = stats;
     out.selected_cost = best.cost;
     out.keep_cost = keep.cost;
@@ -149,7 +156,7 @@ Output Controller::compute_tracking(const ControllerInput &input) {
   out.selected_cost = best.cost;
   out.keep_cost = keep.cost;
   out.feasible_rollouts = best.feasible_rollouts;
-  if (out.action == Action::Drive)
+  if (out.action == Action::Drive && safety_reductions_ == 0)
     optimizer_.accept(best, input.vehicle.actual_mode);
   return out;
 }
@@ -213,10 +220,10 @@ Output Controller::compute_goal(const ControllerInput &input, const GoalState &g
       (!is_stopped(input.vehicle, config_) ||
        !detail::elapsed_at_least(input.vehicle.time_in_mode_s, 0, config_.minimum_mode_dwell_s)))
     return out;
-  if (switching && !safe_control(input, {target_mode, 0, true}, control))
-    return planning_stop(input);
-  if (switching)
-    return request_mode(input, target_mode, control);
+  if (switching) {
+    const auto reduced = safe_reduction(input, {target_mode, 0, true}, control);
+    return reduced ? request_mode(input, target_mode, *reduced) : planning_stop(input);
+  }
   return apply_control(input, control);
 }
 Output Controller::continue_alignment(const ControllerInput &input) {
@@ -230,10 +237,6 @@ Output Controller::continue_alignment(const ControllerInput &input) {
     out.failure_reason = FailureReason::TransitionFault;
     return out;
   }
-  // Check the committed first Drive and its complete stopping continuation,
-  // rather than extrapolating a capture command beyond its target for 2 seconds.
-  if (!safe_control(input, {alignment_mode_, 0, false}, *alignment_control_))
-    return planning_stop(input);
   return apply_control(input, *alignment_control_);
 }
 Output Controller::apply_control(const ControllerInput &input, Control control) {
@@ -248,6 +251,16 @@ Output Controller::apply_control(const ControllerInput &input, Control control) 
     out.action = is_stopped(input.vehicle, config_) ? Action::Hold : Action::Brake;
     return out;
   }
+  const auto measured =
+      Kinematics(config_).forward(input.vehicle.wheel_speeds, input.vehicle.steering_angles);
+  if (!detail::within_body_limits(measured, input.vehicle.actual_mode, config_))
+    return planning_stop(input);
+  const auto reduced = safe_reduction(input, {input.vehicle.actual_mode, 0, false}, control);
+  if (!reduced)
+    return planning_stop(input);
+  control = *reduced;
+  if (alignment_control_)
+    alignment_control_ = control;
   const auto preview = model_.step(input.vehicle, control, config_.dt_s);
   if (!preview.valid) {
     out.failure_reason = FailureReason::ModelFailure;
@@ -267,7 +280,7 @@ Output Controller::apply_control(const ControllerInput &input, Control control) 
   } else {
     // All policies enter Drive through this gate. Warm starts are accepted only
     // after the selected first Drive and its entire stopping tail pass validation.
-    if (!safe_control(input, {input.vehicle.actual_mode, 0, false}, control))
+    if (!detail::within_body_limits(preview.state.velocity, input.vehicle.actual_mode, config_))
       return planning_stop(input);
     out.action = Action::Drive;
     out.body_command = preview.state.velocity;
@@ -275,6 +288,22 @@ Output Controller::apply_control(const ControllerInput &input, Control control) 
     alignment_control_.reset();
   }
   return out;
+}
+std::optional<Control> Controller::safe_reduction(const ControllerInput &input,
+                                                  const Branch &branch, Control control) {
+  if (safe_control(input, branch, control))
+    return control;
+  for (std::size_t attempt = 0; attempt < config_.safety_reduction_attempts; ++attempt) {
+    control = {control.vx * .5, control.vy * .5, control.wz * .5};
+    if (std::hypot(control.vx, control.vy) < 1e-9 && std::abs(control.wz) < 1e-9)
+      break;
+    ++safety_reductions_;
+    if (safe_control(input, branch, control)) {
+      optimizer_.reset();
+      return control;
+    }
+  }
+  return std::nullopt;
 }
 bool Controller::safe_control(const ControllerInput &input, const Branch &branch,
                               const Control &control) {

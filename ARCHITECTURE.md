@@ -186,19 +186,22 @@ feedback are stopped. The local commitment prevents stochastic target chasing.
 Hard-stop crossings still require this stopped realignment. Mode transitions
 retain their separate explicit request and measured confirmation protocol.
 
-Forward kinematics of the next wheel speeds and next steering positions gives
-the endpoint twist. Motion uses a piecewise linear body-twist ramp, split at the
-linear speed minimum and angular zero crossing. Each phase consumes the slowest
-body/joint rate budget; remaining tick time holds the endpoint twist. Straight
-and fixed-curvature ramps integrate exactly in SE(2); noncommuting ramps use eight
-midpoint quadrature intervals with an explicit error bound. Each trajectory segment
-includes a conservative curve-to-chord radius and accumulated position error.
-This describes the predictive body ramp, not calibrated intermediate tire motion.
-Drive outputs carry exactly those joint targets and that endpoint body twist. The
-executor verifies their consistency and moving-steering bounds. Measured wheel
-speeds remain authoritative initial conditions; odometry is also checked by the
-stopped gate. The adapter must supply mutually consistent feedback and convert
-joint angular speeds to linear rolling speeds.
+Forward kinematics of the next wheel speeds and steering positions gives the
+endpoint twist. A Drive interpolates both joint arrays affinely over the entire
+tick, including deceleration and signed reversals. Fixed steering gives an affine
+body twist; commuting twists integrate exactly in SE(2). Moving steering uses
+analytic encoder-vector integrals for yaw and eight midpoint intervals for
+translation, with a world-acceleration bound enclosing quadrature error and
+curve-to-chord deviation. Brake retains measured steering and proportionally
+reduces the measured wheel speeds at the fastest common allowed body/joint rate,
+then holds zero for the remainder of the tick. These are actuator contracts that
+an adapter must implement and calibrate.
+The executor checks endpoint absolute mode speed limits separately from manifold
+projection tolerance, plus pointwise body and joint rates during Drive interpolation.
+Measured overspeed enters the separately validated Brake path. Measured encoders
+remain authoritative initial conditions; odometry is also checked by the stopped
+gate. The adapter must supply mutually consistent feedback and convert joint
+angular speeds to linear rolling speeds.
 
 Transitions consume braking, bounded mode-entry alignment and confirmation ticks.
 Even zero configured delays reserve two post-alignment cycles: executor
@@ -221,7 +224,12 @@ See docs/EXECUTION_CONTRACT.md for the API and reset protocol.
 Every Drive policy uses Controller::apply_control's first-Drive plus complete-stop
 gate before output and warm-start acceptance. RolloutEngine::generate_continuation
 retains committed entry/alignment intent until that first Drive, then brakes fully
-to zero. Exhausting stopping_horizon_steps fails closed. Stop thresholds are used
+to zero. If the preferred continuation is rejected, up to
+safety_reduction_attempts amplitude halvings per candidate revalidate the entire
+continuation, retaining direction/curvature, alignment clock and entry geometry.
+A successful reduction clears optimizer warm state; Output::safety_reductions
+counts all reduced validations in the compute call. Exhausting the retries uses
+the separately validated current stop. Exhausting stopping_horizon_steps fails closed. Stop thresholds are used
 for measured execution handover, not to discard residual predicted displacement.
 Zero intent is explicitly Brake/Hold and retains measured steering and zero drive
 targets; measured module residuals do not incorrectly turn braking into Drive.

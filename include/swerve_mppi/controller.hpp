@@ -21,6 +21,8 @@ private:
   Output planning_stop(const ControllerInput &input);
   Output check_stopping(const ControllerInput &input, Output out);
   bool safe_control(const ControllerInput &input, const Branch &branch, const Control &control);
+  std::optional<Control> safe_reduction(const ControllerInput &input, const Branch &branch,
+                                        Control control);
   std::shared_ptr<const TrajectoryValidator> validator_;
   RolloutEngine safety_rollout_;
   Trajectory safety_trace_;
@@ -35,5 +37,6 @@ private:
   std::optional<Control> alignment_control_;
   DriveMode alignment_mode_ = DriveMode::DualAckermann;
   double alignment_start_s_ = 0.0;
+  std::size_t safety_reductions_ = 0;
 };
 } // namespace swerve_mppi

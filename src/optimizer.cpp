@@ -60,14 +60,30 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch)
   result.branch = branch;
   if (!detail::valid_input(input, config_))
     return result;
+  // Anticipate the yaw-rate budget of the ordered local curve. A horizon with
+  // limited steering cannot track a tight bend at the straight-line speed cap.
+  double curvature = 0;
+  for (std::size_t i = 1; i + 1 < input.reference_path.size(); ++i) {
+    const auto &a = input.reference_path[i - 1], &b = input.reference_path[i],
+               &d = input.reference_path[i + 1];
+    const double ax = b.x - a.x, ay = b.y - a.y, bx = d.x - b.x, by = d.y - b.y;
+    const double first = std::hypot(ax, ay), second = std::hypot(bx, by);
+    if (first > 1e-9 && second > 1e-9)
+      curvature = std::max(curvature, std::abs(std::atan2(ax * by - ay * bx, ax * bx + ay * by)) /
+                                          ((first + second) / 2));
+  }
   const auto constrain = [&](Control u, std::size_t t) {
     const auto mode =
         branch.switches && t >= branch.switch_step ? branch.mode : input.vehicle.actual_mode;
     u = model_.project(u, mode);
-    if (input.tracking && mode != DriveMode::Spin) {
+    if (mode != DriveMode::Spin) {
       const double speed = std::hypot(u.vx, u.vy);
-      const double scale =
-          speed > input.tracking->speed_limit_mps ? input.tracking->speed_limit_mps / speed : 1.0;
+      double limit = input.tracking            ? input.tracking->speed_limit_mps
+                     : mode == DriveMode::Crab ? config_.max_crab_speed_mps
+                                               : config_.max_vx_mps;
+      if (mode == DriveMode::DualAckermann && curvature > 1e-9)
+        limit = std::min(limit, config_.max_yaw_rate_radps / curvature);
+      const double scale = speed > limit ? limit / speed : 1.0;
       u = {u.vx * scale, u.vy * scale, u.wz * scale};
     }
     return model_.project(u, mode);

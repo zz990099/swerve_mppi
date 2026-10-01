@@ -1,5 +1,6 @@
 #include "swerve_mppi/model.hpp"
 
+#include "drive_interpolation.hpp"
 #include "motion_profile.hpp"
 #include "validation.hpp"
 #include <algorithm>
@@ -150,6 +151,7 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
     }
   }
   const std::array<double, 4> target = ready ? wheels.speeds : std::array<double, 4>{};
+  const bool driving = ready && (std::hypot(u.vx, u.vy) >= kEpsilon || std::abs(u.wz) >= kEpsilon);
   const Twist2d initial = kinematics_.forward(start.wheel_speeds, start.steering_angles);
   const Twist2d desired =
       kinematics_.forward(target, ready ? wheels.angles : state.steering_angles);
@@ -186,7 +188,9 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
         kinematics_.max_module_residual(state.wheel_speeds, state.steering_angles,
                                         state.velocity) <=
             config_.drive_kinematic_tolerance_mps + 1e-9;
-    if (module_consistent && profile.duration <= dt + 1e-12 &&
+    if (module_consistent &&
+        (!driving || detail::drive_interpolation_admissible(start, state, config_, dt)) &&
+        profile.duration <= dt + 1e-12 &&
         velocity_change_time(initial.vx, initial.vy, state.velocity.vx, state.velocity.vy,
                              config_.max_linear_accel_mps2,
                              config_.max_linear_decel_mps2) <= dt + 1e-9 &&
@@ -203,7 +207,10 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
   if (ready)
     out.steering_targets = state.steering_angles;
   out.wheel_speed_targets = state.wheel_speeds;
-  detail::integrate_profile(out, initial, profile, dt);
+  if (driving)
+    detail::integrate_drive(out, start, initial, config_, dt);
+  else
+    detail::integrate_profile(out, initial, profile, dt);
   state.stamp_s += dt;
   state.time_in_mode_s += dt;
   return out;

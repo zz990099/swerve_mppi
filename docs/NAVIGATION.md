@@ -1,4 +1,4 @@
-# Navigation lifecycle (0.8)
+# Navigation lifecycle (0.11)
 
 ## Input and task identity
 
@@ -174,3 +174,7 @@ see PERFORMANCE.md for the workspace ownership and diagnostic contracts.
 
 Version 0.8 adds explicit navigation targets and goal eligibility, and validates
 all controlled stops. Rebuild consumers with find_package(swerve_mppi 0.8 CONFIG REQUIRED).
+
+Version 0.11 retains this navigation lifecycle and adds bounded first-Drive intent
+reductions with complete stopping validation. All consumers must now rebuild with
+find_package(swerve_mppi 0.11 CONFIG REQUIRED); see DRIVE_EXECUTION_VALIDATION.md.

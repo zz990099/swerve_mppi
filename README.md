@@ -29,7 +29,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.10 CONFIG REQUIRED)
+find_package(swerve_mppi 0.11 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -96,15 +96,19 @@ The optional allocation regression runs in CI; wall-clock timing is not a CI gat
 
 ## Current status
 
-Version 0.10 adds a bounded common Drive-to-stop safety gate, explicit zero-intent
-braking, and continuous ramp displacement for braking and signed reversals.
-Trajectories carry conservative per-segment swept-motion enclosures and accumulated
-integration error; straight/fixed-curvature ramps use exact SE(2) integration and
-other ramps use bounded quadrature. Time deadlines, alignment/dwell quantization
-and guarded command ages share inclusive numerical comparisons.
-Rebuild downstream consumers against 0.10: Config, StepResult and Trajectory layouts
-and rollout APIs changed. See [docs/STOPPING_REVIEW_VALIDATION.md](docs/STOPPING_REVIEW_VALIDATION.md)
-for the implementation, independent oracles and current verification evidence.
+Version 0.11 makes Drive prediction and execution use affine wheel-speed and
+steering interpolation over the entire control period. The model integrates the
+encoder velocity field with analytic yaw and conservative translation/sweep
+bounds; the executor checks absolute mode speed limits and pointwise body rates
+separately from transient mode-projection tolerance. Measured overspeed recovers
+through the checked Brake path. A rejected first-Drive stopping continuation can
+retry bounded reductions of the same intent, preserving entry geometry and
+clearing the warm start after a successful reduction. Tight local Ackermann
+curves also anticipate the yaw-rate speed budget.
+Rebuild downstream consumers against 0.11: Config and Output layouts changed.
+See [docs/DRIVE_EXECUTION_VALIDATION.md](docs/DRIVE_EXECUTION_VALIDATION.md) for the
+contract, independent oracles and verification evidence. The
+[0.10 stopping review](docs/STOPPING_REVIEW_VALIDATION.md) remains historical evidence.
 
 Version 0.9 closes configurable dynamics and public safety/execution boundaries.
 Signed linear/angular reversals spend braking time before accelerating in the

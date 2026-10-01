@@ -199,7 +199,7 @@ void test_curved_stop_and_reversal_enclosures() {
   check(stop.sweep_margins_m.size() + 1 == stop.poses.size(),
         "every curved motion segment must carry its conservative sweep enclosure");
 
-  c.dt_s = .4;
+  c.dt_s = .8;
   c.robot_radius_m = .001;
   c.collision_margin_m = 0;
   c.max_linear_decel_mps2 = .1;
@@ -208,11 +208,10 @@ void test_curved_stop_and_reversal_enclosures() {
   start.velocity.vx = .03;
   start.wheel_speeds.fill(.03);
   const auto reversal = DriveModel(c).step(start, {-.04, 0, 0}, c.dt_s);
-  const double brake_time = .03 / .1, accel_time = .04 / .9;
-  const double expected =
-      .03 * brake_time / 2 - .04 * accel_time / 2 - .04 * (c.dt_s - brake_time - accel_time);
-  check(reversal.valid && close(reversal.state.pose.x, expected),
-        "reversal displacement must include braking, acceleration, and final-speed hold");
+  const double expected = (.03 + reversal.state.velocity.vx) * c.dt_s / 2;
+  check(reversal.valid && close(reversal.state.pose.x, expected) &&
+            std::abs(reversal.state.velocity.vx - .03) / c.dt_s <= .1 + 1e-9,
+        "a signed Drive ramps across the full tick within pointwise braking limits");
   Trajectory trace;
   trace.valid = true;
   trace.poses = {start.pose, reversal.state.pose};
@@ -248,36 +247,54 @@ void test_independent_ramp_integration_and_fixture() {
     start.velocity = {initial.vx, initial.vy, initial.wz};
     const auto step = DriveModel(c).step(start, {.4, 0, .3}, dt);
     check(step.valid && !step.aligning, "independent ramp oracle must use a moving Drive");
-    const auto &end = step.state.velocity;
-    // This example only increases linear/angular speed: derive its ramp time
-    // directly from the endpoint changes, without using the production profile.
-    check(end.vx >= initial.vx && end.wz >= initial.wz,
-          "oracle assumptions require increasing speed and angular rate");
-    double duration = std::max(std::hypot(end.vx - initial.vx, end.vy) / c.max_linear_accel_mps2,
-                               std::abs(end.wz - initial.wz) / c.max_angular_accel_radps2);
-    for (std::size_t j = 0; j < 4; ++j)
-      duration = std::max(
-          {duration,
-           std::abs(step.state.wheel_speeds[j] - start.wheel_speeds[j]) / c.max_wheel_accel_mps2,
-           std::abs(step.state.steering_angles[j] - start.steering_angles[j]) /
-               c.max_steer_rate_radps});
+    // Independently integrate affine encoder targets, without production
+    // kinematics, motion profiles or yaw integration helpers.
     Pose2d oracle = start.pose;
+    Twist2d previous = start.velocity;
     constexpr int substeps = 20000;
     const double h = dt / substeps;
+    const double x[] = {c.wheelbase_m / 2, c.wheelbase_m / 2, -c.wheelbase_m / 2,
+                        -c.wheelbase_m / 2};
+    const double y[] = {c.track_m / 2, -c.track_m / 2, c.track_m / 2, -c.track_m / 2};
     for (int i = 0; i < substeps; ++i) {
-      const double time = (i + .5) * h;
-      const double f = std::min(1.0, time / duration);
-      const double vx = initial.vx + f * (end.vx - initial.vx), vy = f * end.vy;
-      const double wz = initial.wz + f * (end.wz - initial.wz);
+      const double f = (i + .5) / substeps;
+      double vx = 0, vy = 0, wz = 0, moment = 0;
+      for (std::size_t j = 0; j < 4; ++j) {
+        const double speed =
+            start.wheel_speeds[j] + f * (step.state.wheel_speeds[j] - start.wheel_speeds[j]);
+        const double angle = start.steering_angles[j] +
+                             f * (step.state.steering_angles[j] - start.steering_angles[j]);
+        const double wx = speed * std::cos(angle), wy = speed * std::sin(angle);
+        vx += wx / 4;
+        vy += wy / 4;
+        wz += x[j] * wy - y[j] * wx;
+        moment += x[j] * x[j] + y[j] * y[j];
+      }
+      wz /= moment;
+      if (i > 0)
+        check(std::hypot(vx - previous.vx, vy - previous.vy) / h <=
+                      std::min(c.max_linear_accel_mps2, c.max_linear_decel_mps2) + 1e-8 &&
+                  std::abs(wz - previous.wz) / h <=
+                      std::min(c.max_angular_accel_radps2, c.max_angular_decel_radps2) + 1e-8,
+              "independent encoder differences must obey pointwise body rate limits");
+      previous = {vx, vy, wz};
       const double heading = oracle.yaw + wz * h / 2;
       oracle.x += (std::cos(heading) * vx - std::sin(heading) * vy) * h;
       oracle.y += (std::sin(heading) * vx + std::cos(heading) * vy) * h;
       oracle.yaw += wz * h;
+      const double dx = step.state.pose.x - start.pose.x;
+      const double dy = step.state.pose.y - start.pose.y;
+      const double fraction = std::clamp(
+          ((oracle.x - start.pose.x) * dx + (oracle.y - start.pose.y) * dy) / (dx * dx + dy * dy),
+          0.0, 1.0);
+      check(std::hypot(oracle.x - start.pose.x - fraction * dx,
+                       oracle.y - start.pose.y - fraction * dy) <= step.sweep_margin_m + 1e-8,
+            "independent intermediate encoder poses must remain inside the swept enclosure");
     }
     check(std::hypot(oracle.x - step.state.pose.x, oracle.y - step.state.pose.y) <=
                   step.integration_error_m + 1e-9 &&
               std::abs(oracle.yaw - step.state.pose.yaw) < 1e-8,
-          "the quadrature enclosure must contain an independent fine-step body ramp");
+          "the quadrature enclosure must contain an independent fine-step encoder ramp");
   }
   Config c;
   VehicleState measured;

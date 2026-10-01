@@ -253,6 +253,40 @@ void test_tracking_speed_limit() {
             std::abs(result.controls[0].vy - .08) < 1e-9,
         "tracking proposals must preserve the constrained frozen mode-entry seed");
 }
+class ObserveCurveSpeed final : public Critic {
+public:
+  mutable double maximum = 0;
+  std::string_view name() const override { return "ObserveCurveSpeed"; }
+  double score(const ControllerInput &, const Trajectory &trace) const override {
+    for (const auto &u : trace.controls)
+      maximum = std::max(maximum, std::hypot(u.vx, u.vy));
+    return 0;
+  }
+};
+void test_curve_yaw_budget() {
+  Config c;
+  c.horizon_steps = 16;
+  c.samples_per_branch = 16;
+  auto in = input();
+  // Three equal chords of a radius-0.5 circle require speed <= yaw budget * radius.
+  in.reference_path = {{0, 0, 0},
+                       {.4330127018922193, .25, 1.0471975511965976},
+                       {.4330127018922193, .75, 2.0943951023931953}};
+  for (auto mode : {DriveMode::DualAckermann, DriveMode::Crab}) {
+    in.vehicle.actual_mode = mode;
+    Optimizer optimizer(c);
+    auto observer = std::make_shared<ObserveCurveSpeed>();
+    optimizer.critics().add(observer);
+    const auto result = optimizer.optimize(in, {mode, 0, false});
+    check(std::isfinite(result.cost), "curved proposals must remain feasible");
+    if (mode == DriveMode::DualAckermann)
+      check(observer->maximum <= .5 * c.max_yaw_rate_radps + 1e-9,
+            "all nominal, sampled and weighted curve proposals must anticipate the yaw budget");
+    else
+      check(observer->maximum > .5 * c.max_yaw_rate_radps,
+            "crab translation must retain its speed budget on a curved reference");
+  }
+}
 class RejectAll final : public Critic {
 public:
   std::string_view name() const override { return "RejectAll"; }
@@ -286,6 +320,7 @@ int main() {
     test_optimizer_reset_and_closed_loop();
     test_extension_and_invalid_inputs();
     test_tracking_speed_limit();
+    test_curve_yaw_budget();
     test_reusable_rollouts_and_planning_stats();
     std::cout << "Optimizer regressions passed\n";
     return 0;

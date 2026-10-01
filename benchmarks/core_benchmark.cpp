@@ -60,7 +60,7 @@ void run(const std::string &scenario, unsigned seed, double lookahead, double pa
   double minimum_clearance =
       measured_clearance(input.vehicle.pose, input.vehicle.pose, input.obstacles, c);
   check(minimum_clearance > 0, "benchmark must begin outside inflated obstacles");
-  std::size_t waiting_calls = 0;
+  std::size_t waiting_calls = 0, safety_reductions = 0;
   int switches = 0, completion = -1;
   for (int tick = 0; tick < 400; ++tick) {
     allocations = 0;
@@ -80,6 +80,7 @@ void run(const std::string &scenario, unsigned seed, double lookahead, double pa
     rollouts += output.planning_stats.evaluated_rollouts;
     feasible += output.planning_stats.feasible_rollouts;
     fallbacks += output.planning_stats.fallback_updates;
+    safety_reductions += output.safety_reductions;
     waiting_calls += output.navigation_status == NavigationStatus::Waiting;
     max_error = std::max(max_error, output.cross_track_error_m);
     squared_error += output.cross_track_error_m * output.cross_track_error_m;
@@ -115,8 +116,8 @@ void run(const std::string &scenario, unsigned seed, double lookahead, double pa
             << (planning_times.empty()
                     ? 0
                     : static_cast<double>(planning_allocations) / planning_times.size())
-            << ',' << rollouts << ',' << feasible << ',' << fallbacks << ',' << waiting_calls
-            << ',';
+            << ',' << rollouts << ',' << feasible << ',' << fallbacks << ',' << waiting_calls << ','
+            << safety_reductions << ',';
   if (std::isfinite(minimum_clearance))
     std::cout << minimum_clearance;
   std::cout << '\n';
@@ -133,7 +134,8 @@ int main(int argc, char **argv) {
               << "scenario,seed,calls,completion_s,max_path_error_m,rms_path_error_m,mode_changes,"
                  "p50_ms,p95_ms,p99_ms,max_ms,period_overruns,mean_allocations,peak_allocations,"
                  "planning_calls,planning_p95_ms,planning_mean_allocations,evaluated_rollouts,"
-                 "feasible_rollouts,fallback_updates,waiting_calls,min_measured_clearance_m\n";
+                 "feasible_rollouts,fallback_updates,waiting_calls,safety_reductions,min_measured_"
+                 "clearance_m\n";
     for (const auto &name : {"straight", "lateral", "curve", "spin", "reverse", "final_yaw",
                              "scurve", "cusp", "loop", "short_cusp", "short_loop", "short_corner",
                              "near_obstacles", "dense_curve", "obstacles"}) {

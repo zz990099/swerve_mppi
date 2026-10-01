@@ -1,5 +1,6 @@
 #include "swerve_mppi/executor.hpp"
 
+#include "drive_interpolation.hpp"
 #include "time_comparison.hpp"
 #include "validation.hpp"
 #include <algorithm>
@@ -151,6 +152,13 @@ ExecutionResult ModeExecutor::update(const Output &command, const VehicleState &
         return fault();
     const auto implied =
         Kinematics(config_).forward(command.wheel_speed_targets, command.steering_targets);
+    VehicleState endpoint = measured;
+    endpoint.velocity = implied;
+    endpoint.steering_angles = command.steering_targets;
+    endpoint.wheel_speeds = command.wheel_speed_targets;
+    if (!detail::within_body_limits(implied, actual_mode_, config_) ||
+        !detail::drive_interpolation_admissible(measured, endpoint, config_, config_.dt_s))
+      return fault();
     if (std::abs(implied.vx - command.body_command.vx) > 1e-7 ||
         std::abs(implied.vy - command.body_command.vy) > 1e-7 ||
         std::abs(implied.wz - command.body_command.wz) > 1e-7)

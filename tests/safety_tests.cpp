@@ -181,6 +181,7 @@ void test_safe_terminal_braking_retains_navigation_status() {
 }
 void test_drive_requires_complete_stopping_continuation() {
   auto c = deterministic();
+  c.safety_reduction_attempts = 0;
   c.horizon_steps = 2;
   c.max_linear_decel_mps2 = .1;
   for (double goal : {2.0, .2}) {
@@ -212,6 +213,79 @@ void test_drive_requires_complete_stopping_continuation() {
   check(fault.action == Action::SafeStop &&
             fault.failure_reason == FailureReason::UnsafeStoppingTrajectory,
         "an incomplete current stop must fail closed rather than pretending to be stopped");
+}
+void test_first_drive_deceleration_matches_execution() {
+  Config c;
+  c.collision_margin_m = 0;
+  c.goal_position_tolerance_m = .001;
+  auto in = straight();
+  in.vehicle.velocity.vx = .1;
+  in.vehicle.wheel_speeds.fill(.1);
+  in.reference_path.back().x = .04;
+  in.obstacles = {{.558, 0, .05}};
+  Trajectory unsafe;
+  RolloutEngine(c).generate_continuation(in.vehicle, {}, {.048, 0, 0}, unsafe);
+  // Independent full-period Drive plus analytic full brake: mean speed * dt,
+  // then v^2/(2*a). The old fastest-ramp prediction incorrectly passed 8 mm.
+  const double expected = (.1 + .048) * c.dt_s / 2 + .048 * .048 / (2 * c.max_linear_decel_mps2);
+  check(unsafe.valid && std::abs(unsafe.final_state.pose.x - expected) < 1e-10 &&
+            TrajectoryValidator(c).check(in, unsafe) == TrajectoryStatus::Collision,
+        "decelerating first Drive must include its full-period displacement");
+  Controller controller(c);
+  ModeExecutor executor(c);
+  const auto output = controller.compute(in);
+  check(output.action == Action::Drive && output.safety_reductions > 0 &&
+            output.body_command.vx < .048,
+        "a rejected capture may resume only with a checked reduced intent");
+  auto result = executor.update(output, in.vehicle);
+  check(!result.feedback.fault, "reduced Drive must satisfy the same executor contract");
+  actuate(in.vehicle, result, c);
+  Output brake;
+  brake.action = Action::Brake;
+  brake.requested_mode = in.vehicle.actual_mode;
+  actuate(in.vehicle, executor.update(brake, in.vehicle), c);
+  check(in.vehicle.pose.x < .008 && is_stopped(in.vehicle, c),
+        "independent first Drive and Brake must stay outside the obstacle boundary");
+}
+void test_stopping_budget_reduction_restores_progress() {
+  auto c = deterministic();
+  c.max_linear_decel_mps2 = .001;
+  c.samples_per_branch = c.iterations = 1;
+  auto in = straight();
+  in.reference_path.back().x = 1;
+  Controller controller(c);
+  ModeExecutor executor(c);
+  const auto output = controller.compute(in);
+  check(output.action == Action::Drive && output.safety_reductions > 0 &&
+            output.safety_reductions <= c.safety_reduction_attempts,
+        "bounded reduction must find a safe slow Drive within the stopping budget");
+  auto result = executor.update(output, in.vehicle);
+  check(!result.feedback.fault, "reduced tracking output must execute healthily");
+  actuate(in.vehicle, result, c);
+  check(in.vehicle.pose.x > 0, "a safe reduced intent must make measured progress");
+  c.safety_reduction_attempts = 0;
+  Controller disabled(c);
+  in = straight();
+  check(disabled.compute(in).action == Action::Hold,
+        "zero reduction budget retains checked waiting semantics");
+  c.safety_reduction_attempts = 17;
+  bool rejected = false;
+  try {
+    validate(c);
+  } catch (const std::invalid_argument &) {
+    rejected = true;
+  }
+  check(rejected, "reduction work must have a bounded configurable maximum");
+}
+void test_overspeed_feedback_uses_checked_braking() {
+  auto c = deterministic();
+  auto in = straight();
+  in.vehicle.velocity.vx = 1;
+  in.vehicle.wheel_speeds.fill(1);
+  const auto output = Controller(c).compute(in);
+  check(output.action == Action::Brake &&
+            !ModeExecutor(c).update(output, in.vehicle).feedback.fault,
+        "measured overspeed must recover by checked Brake instead of an overspeed Drive");
 }
 void test_zero_intent_braking_executes_with_measured_residual() {
   auto c = deterministic();
@@ -313,13 +387,14 @@ public:
     if (input.vehicle.stamp_s < 1.05)
       return true;
     for (const auto &pose : trajectory.poses)
-      if (std::hypot(pose.x, pose.y) > .005)
+      if (std::hypot(pose.x, pose.y) > .0005)
         return false;
     return true;
   }
 };
 void test_shared_hard_constraints() {
-  const auto c = deterministic();
+  auto c = deterministic();
+  c.safety_reduction_attempts = 0;
   auto validator = std::make_shared<TrajectoryValidator>(c);
   validator->add(std::make_shared<TranslationLimit>());
   for (int route = 0; route < 3; ++route) {
@@ -356,6 +431,9 @@ void test_shared_hard_constraints() {
 int main() {
   try {
     test_drive_requires_complete_stopping_continuation();
+    test_first_drive_deceleration_matches_execution();
+    test_stopping_budget_reduction_restores_progress();
+    test_overspeed_feedback_uses_checked_braking();
     test_zero_intent_braking_executes_with_measured_residual();
     test_temporary_failure_stops_and_recovers();
     test_unsafe_stopping_latches_fault();

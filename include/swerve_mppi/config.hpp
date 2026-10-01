@@ -54,6 +54,9 @@ struct Config {
   // Independent bounded budget for alignment, first Drive and a complete stop.
   // Exhaustion rejects the continuation; it never implies a stopped state.
   std::size_t stopping_horizon_steps = 200;
+  // Halve a rejected intent at most this many times, preserving entry geometry.
+  // Zero disables reduction. Each attempt uses the complete stopping validator.
+  std::size_t safety_reduction_attempts = 8;
   std::size_t samples_per_branch = 80;
   std::size_t iterations = 2;
   double temperature = 0.35;
