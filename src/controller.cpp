@@ -7,10 +7,11 @@
 #include <stdexcept>
 
 namespace swerve_mppi {
-Controller::Controller(const Config &config)
-    : safety_rollout_(config), safety_critics_(config), safety_controls_(config.horizon_steps),
-      config_(config), model_(config), optimizer_(config), scheduler_(config),
-      mode_manager_(config), path_manager_(config), goal_manager_(config) {}
+Controller::Controller(const Config &config, std::shared_ptr<const TrajectoryValidator> validator)
+    : validator_(validator ? std::move(validator) : std::make_shared<TrajectoryValidator>(config)),
+      safety_rollout_(config), safety_controls_(config.horizon_steps), config_(config),
+      model_(config), optimizer_(config, validator_), scheduler_(config), mode_manager_(config),
+      path_manager_(config), goal_manager_(config) {}
 
 Output Controller::compute(const ControllerInput &input) {
   Output stop;
@@ -94,6 +95,10 @@ Output Controller::compute(const ControllerInput &input) {
   if (out.action == Action::SafeStop)
     out.control_policy = ControlPolicy::Fault;
   out.navigation_status = out.action == Action::SafeStop ? NavigationStatus::Fault : goal.status;
+  if (out.failure_reason == FailureReason::NoFeasiblePlan && out.action != Action::SafeStop) {
+    out.control_policy = ControlPolicy::Blocked;
+    out.navigation_status = NavigationStatus::Waiting;
+  }
   out.goal_reached = goal.complete && out.action != Action::SafeStop;
   out.stalled = goal.stalled;
   out.path_progress_m = path.progress_m;
@@ -104,9 +109,6 @@ Output Controller::compute(const ControllerInput &input) {
   return out;
 }
 Output Controller::compute_tracking(const ControllerInput &input) {
-  Output stop;
-  stop.requested_mode = input.vehicle.actual_mode;
-  stop.steering_targets = input.vehicle.steering_angles;
   const auto branches = scheduler_.make_branches(input.vehicle);
   PlanningStats stats;
   std::vector<Solution> solutions;
@@ -119,12 +121,12 @@ Output Controller::compute_tracking(const ControllerInput &input) {
     stats.feasible_rollouts += work.feasible_rollouts;
     stats.fallback_updates += work.fallback_updates;
   }
-  stop.planning_stats = stats;
   const auto &keep = solutions.front();
   const auto &best = solutions[scheduler_.select(solutions)];
   if (!std::isfinite(best.cost)) {
-    stop.failure_reason = FailureReason::NoFeasiblePlan;
-    return stop;
+    auto out = planning_stop(input);
+    out.planning_stats = stats;
+    return out;
   }
   if (best.branch.switches && best.branch.switch_step == 0) {
     auto out = request_mode(input, best.branch.mode, best.controls.front());
@@ -202,14 +204,8 @@ Output Controller::compute_goal(const ControllerInput &input, const GoalState &g
   if (switching && (!is_stopped(input.vehicle, config_) ||
                     input.vehicle.time_in_mode_s < config_.minimum_mode_dwell_s))
     return out;
-  std::fill(safety_controls_.begin(), safety_controls_.end(), control);
-  safety_rollout_.generate(input.vehicle, {target_mode, 0, switching}, safety_controls_,
-                           safety_trace_);
-  if (!std::isfinite(safety_critics_.score(input, safety_trace_))) {
-    out.action = Action::SafeStop;
-    out.failure_reason = FailureReason::NoFeasiblePlan;
-    return out;
-  }
+  if (!safe_control(input, {target_mode, 0, switching}, control))
+    return planning_stop(input);
   if (switching)
     return request_mode(input, target_mode, control);
   return apply_control(input, control);
@@ -224,15 +220,10 @@ Output Controller::continue_alignment(const ControllerInput &input) {
     out.failure_reason = FailureReason::TransitionFault;
     return out;
   }
-  // Recheck the committed intent against fresh obstacles while the optimizer
-  // is paused. This deliberately conservative continuation may stop early.
-  std::fill(safety_controls_.begin(), safety_controls_.end(), *alignment_control_);
-  safety_rollout_.generate(input.vehicle, {alignment_mode_, 0, false}, safety_controls_,
-                           safety_trace_);
-  if (!std::isfinite(safety_critics_.score(input, safety_trace_))) {
-    out.failure_reason = FailureReason::NoFeasiblePlan;
-    return out;
-  }
+  // Check the committed first Drive and its complete stopping continuation,
+  // rather than extrapolating a capture command beyond its target for 2 seconds.
+  if (!safe_control(input, {alignment_mode_, 0, false}, *alignment_control_))
+    return planning_stop(input);
   return apply_control(input, *alignment_control_);
 }
 Output Controller::apply_control(const ControllerInput &input, Control control) {
@@ -261,6 +252,32 @@ Output Controller::apply_control(const ControllerInput &input, Control control) 
     out.wheel_speed_targets = preview.wheel_speed_targets;
     alignment_control_.reset();
   }
+  return out;
+}
+bool Controller::safe_control(const ControllerInput &input, const Branch &branch,
+                              const Control &control) {
+  std::fill(safety_controls_.begin(), safety_controls_.end(), Control{});
+  safety_controls_.front() = control;
+  safety_rollout_.generate(input.vehicle, branch, safety_controls_, safety_trace_);
+  return validator_->check(input, safety_trace_) == TrajectoryStatus::Valid &&
+         is_stopped(safety_trace_.final_state, config_);
+}
+Output Controller::planning_stop(const ControllerInput &input) {
+  optimizer_.reset();
+  alignment_control_.reset();
+  Output out;
+  out.requested_mode = input.vehicle.actual_mode;
+  out.steering_targets = input.vehicle.steering_angles;
+  std::fill(safety_controls_.begin(), safety_controls_.end(), Control{});
+  safety_rollout_.generate(input.vehicle, {input.vehicle.actual_mode, 0, false}, safety_controls_,
+                           safety_trace_);
+  if (validator_->check(input, safety_trace_) != TrajectoryStatus::Valid ||
+      !is_stopped(safety_trace_.final_state, config_)) {
+    out.failure_reason = FailureReason::UnsafeStoppingTrajectory;
+    return out;
+  }
+  out.action = is_stopped(input.vehicle, config_) ? Action::Hold : Action::Brake;
+  out.failure_reason = FailureReason::NoFeasiblePlan;
   return out;
 }
 void Controller::reset() {

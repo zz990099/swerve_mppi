@@ -14,6 +14,7 @@ Nav2 controller plugin belong in separate adapter packages.
 | ModeScheduler | Enumerate keep/single-switch branches; enforce dwell and switch hysteresis before selection. |
 | ModeManager | Commit a frozen entry request; gate handover on its matching ID and measured state. |
 | ModeExecutor | Persist actual mode; supervise braking/alignment, acknowledge requests and latch execution faults. |
+| TimingGuard / TimedExecutor | Enforce clock/cadence, fresh feedback and ordered command envelopes; latch timing failures and renew sessions on recovery. |
 | Optimizer | Optimize continuous controls inside one branch; advance only an accepted keep-mode warm start. |
 | NoiseGenerator | Seeded Gaussian proposals, effective projected perturbations and control-noise correction. |
 | RolloutEngine | Generate an inspectable pose horizon and mark ticks consumed by transitions. |
@@ -21,6 +22,7 @@ Nav2 controller plugin belong in separate adapter packages.
 | Kinematics | Mechanical steering limits, signed wheel directions and encoder forward kinematics. |
 | TransitionModel | Predict braking, mode-entry steering and confirmation delay. |
 | CriticManager | Combine path distance/heading, circle-obstacle, goal, effort, smoothness and switch objectives. |
+| TrajectoryValidator | Enforce finite trajectories, swept circular collision checks and injected hard constraints across motion policies. |
 
 All configuration-bearing components store values instead of references into
 other objects. Models and stateful controllers can therefore be constructed from
@@ -35,8 +37,8 @@ state while retaining vector capacity.
 1. Check the timestamp, finite state, measured joint limits and path.
 2. Update path progress and local target; reset task state for a new path/ID/policy.
 3. If a committed mode transition is active, update it from actual measured feedback.
-4. At the terminal pose or a nearby sharp corner, use bounded deterministic capture;
-   otherwise finish local alignment or enumerate keep/single-switch branches.
+4. Finish committed local alignment/first Drive before choosing a new terminal,
+   corner or tracking policy; a replan may cancel obsolete local intent.
 5. Optimize each branch independently; never average controls across modes.
 6. Reject switch candidates that fail hysteresis before selecting the winner.
 7. Commit an immediate switch, or execute the first control in the current mode.
@@ -54,16 +56,17 @@ and the first drive tick complete, with the same configured timeout bound. New
 sampled directions cannot interrupt this operation. RolloutEngine predicts the
 same commitment, masks controls ignored during it, and rejects a planned mode
 switch that would preempt it. The initiating control remains active because it
-sets entry geometry. Controller rechecks a constant-intent continuation against
-fresh obstacles while local alignment is active; this check is conservative and
-can stop before a shorter continuation would become unsafe. Reset clears the
+sets entry geometry. After an explicit switch, its first Drive remains masked
+because it executes the frozen entry control, not a proposal at the resume index.
+Controller rechecks alignment, first Drive and a full stopping continuation against
+fresh constraints while local alignment is active. Reset clears the
 commitment. Replanning clears obsolete local alignment, but never mutates an
 active explicit mode request. A confirmed mode switch preserves its agreed entry
 intent through the stopped handover; normal tracking then applies the first drive
 intent. Terminal/corner policies also pass through the shared control application
 and committed alignment path, with the same deadline and obstacle recheck. They
-may choose a fresh intent after the first Drive. Only a new task path/reset clears
-obsolete local intent; an active explicit mode request remains immutable.
+may choose a fresh intent after the first Drive. A new task path/reset or a checked
+planning stop clears obsolete local intent; explicit mode requests remain immutable.
 
 A rejected immediate switch uses the keep-mode solution, rather than projecting
 the rejected mode's first control into the current mode. Future transitions
@@ -112,8 +115,18 @@ Critic is a small ROS-independent C++ interface. CriticManager installs the
 default objectives and allows additional const critics through shared ownership.
 A nonfinite critic result rejects a trajectory. Each rollout exposes its initial
 pose and one pose per tick, final vehicle state, applied controls and transition
-mask. The obstacle critic checks swept centre-line segments with a circular
-footprint, including braking and stationary alignment.
+mask. Controller and Optimizer share one const TrajectoryValidator. Its swept
+centre-line circle checks and injected TrajectoryConstraint objects apply to MPPI,
+capture, alignment and fallback stopping. Build/configure the validator before
+passing it to Controller; do not mutate shared constraints during computation.
+The obstacle critic contributes clearance cost; lowering a weight cannot override
+a hard rejection.
+
+When planning has no feasible result, Controller discards warm/local intent and
+checks zero-control braking through the horizon. Only a valid trace ending with
+stopped body and all wheels can produce recoverable Brake/Hold. Otherwise
+UnsafeStoppingTrajectory produces SafeStop. Waiting/Blocked describes a checked
+planning stop awaiting fresh input, not completed navigation.
 
 ## Workspaces and diagnostics
 
@@ -124,7 +137,7 @@ also exposes a caller-owned output overload; controls must not alias its output
 controls. A new rollout clears validity and vector contents while retaining
 capacity. Transition traces append directly to the preallocated pose buffer.
 
-Controller retains RolloutEngine/CriticManager and constant-intent storage for
+Controller retains RolloutEngine, a shared hard validator and control storage for
 capture/alignment safety checks. It copies only the pruned path into planning
 input. PathManager starts geometry scans with arc-length binary lookup and stops
 at the match/lookahead bounds; full input validation and geometry identity checks
@@ -132,8 +145,8 @@ still scan the supplied task path. PathCritic compares squared distances and
 interpolates body yaw only at the nearest segment.
 
 Output::control_policy identifies Tracking, Alignment, Capture, ModeTransition,
-Stopped or Fault. FailureReason separates invalid data, clock/path/feedback faults,
-no feasible plan, model failure and transition faults. PlanningStats counts all
+Stopped, Blocked or Fault. FailureReason separates invalid data, clock/path/feedback
+faults, no feasible plan, unsafe stopping, model failure and transition faults. PlanningStats counts all
 branches, physical rollout evaluations, finite scores and fallback updates in the
 current compute call. It does not report elapsed time or enforce a solve deadline.
 Legacy Output::feasible_rollouts remains the selected branch's feasible proposal
@@ -195,7 +208,13 @@ this core requires an explicit persistent mode request and acknowledgement.
 Integration must resolve that mismatch. Do not translate RequestMode to an
 ordinary zero Twist or report confirmation based on elapsed time alone.
 
-The next adapter should own message/TF conversion, feedback ages, simulation time,
+TimingGuard and TimedExecutor provide reusable checks for cadence, feedback ages,
+command expiry/replay and session renewal without transport/ROS dependencies.
+They cannot detect process silence without calls; actuators need an independent
+watchdog. Direct ModeExecutor is the synchronous reference entry point, without
+command envelopes. See docs/EXECUTION_CONTRACT.md for the guarded API.
+
+The next adapter should own message/TF conversion, feedback timestamps, simulation time,
 task IDs, transport for the mode command/feedback protocol and deliberate recovery.
 A later Nav2 adapter adds lifecycle/cancellation handling, path frame transforms
 and costmap/footprint queries. Core PathManager now owns ordered path progress and

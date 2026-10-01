@@ -11,7 +11,15 @@ namespace swerve_mppi {
 enum class DriveMode { DualAckermann, Spin, Crab };
 enum class TransitionPhase { Stable, Braking, Aligning, AwaitingConfirmation, Fault };
 enum class Action { Drive, Brake, RequestMode, Hold, SafeStop };
-enum class NavigationStatus { Tracking, ApproachingGoal, AligningGoal, Settling, Complete, Fault };
+enum class NavigationStatus {
+  Tracking,
+  ApproachingGoal,
+  AligningGoal,
+  Settling,
+  Complete,
+  Fault,
+  Waiting
+};
 enum class PathHeadingPolicy { FollowPath, GoalOnly };
 
 struct Pose2d {
@@ -97,9 +105,10 @@ enum class FailureReason {
   FeedbackFault,
   NoFeasiblePlan,
   ModelFailure,
-  TransitionFault
+  TransitionFault,
+  UnsafeStoppingTrajectory
 };
-enum class ControlPolicy { Stopped, Tracking, Alignment, Capture, ModeTransition, Fault };
+enum class ControlPolicy { Stopped, Tracking, Alignment, Capture, ModeTransition, Fault, Blocked };
 struct PlanningStats {
   std::size_t branches = 0;
   std::size_t evaluated_rollouts = 0;

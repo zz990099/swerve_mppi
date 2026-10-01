@@ -7,7 +7,8 @@
 namespace swerve_mppi {
 class Optimizer {
 public:
-  explicit Optimizer(const Config &config);
+  explicit Optimizer(const Config &config,
+                     std::shared_ptr<const TrajectoryValidator> validator = nullptr);
   Solution optimize(const ControllerInput &input, const Branch &branch);
   // Advance a warm start only after the controller actually issues its drive action.
   void accept(const Solution &solution, DriveMode mode);

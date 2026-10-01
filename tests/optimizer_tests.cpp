@@ -226,7 +226,7 @@ void test_reusable_rollouts_and_planning_stats() {
   in.obstacles = {{0, 0, .1}};
   const auto blocked = controller.compute(in);
   check(blocked.action == Action::SafeStop &&
-            blocked.failure_reason == FailureReason::NoFeasiblePlan &&
+            blocked.failure_reason == FailureReason::UnsafeStoppingTrajectory &&
             blocked.planning_stats.evaluated_rollouts > 0 &&
             blocked.planning_stats.feasible_rollouts == 0 &&
             blocked.planning_stats.fallback_updates > 0,

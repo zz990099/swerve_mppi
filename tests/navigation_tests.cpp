@@ -122,6 +122,13 @@ void test_dense_segment_capture() {
   in.vehicle.pose = {.12, .15, 0};
   check(std::abs(manager.update(in).progress_m - .12) < 1e-9,
         "smooth samples must advance in order despite cross-track error");
+  in.reference_path = {{0, 0, 0}, {.02, 0, 0}, {.04, 0, 0}, {.04, .3, 0}};
+  in.vehicle.pose = {};
+  const auto captured = manager.update(in);
+  check(captured.progress_m == .04, "a nearby sharp corner may be captured within tolerance");
+  in.vehicle.pose.y = .1;
+  check(std::abs(manager.update(in).progress_m - .14) < 1e-9,
+        "lookahead corner capture must also advance the matched segment state");
 }
 void test_completion_requires_measured_stop() {
   Config c;
@@ -146,6 +153,12 @@ void test_completion_requires_measured_stop() {
   state.stamp_s = 6;
   check(!manager.update(state, path, false).complete, "confirmation must begin a fresh dwell");
   state.stamp_s = 6.31;
+  check(!manager.update(state, path, false).complete,
+        "missing measured samples cannot count toward continuous stopped dwell");
+  for (int tick = 1; tick <= 3; ++tick) {
+    state.stamp_s = 6.31 + tick * c.dt_s;
+    manager.update(state, path, false);
+  }
   check(manager.update(state, path, false).complete,
         "measured stopped dwell must complete the goal");
   manager.reset();
@@ -194,7 +207,13 @@ void test_task_restart_and_stall() {
   input.reference_path = {{0, 0, 0}};
   check(!controller.compute(input).goal_reached, "new task must settle before completion");
   input.vehicle.stamp_s += .4;
-  check(controller.compute(input).goal_reached, "settled zero-length task must complete");
+  check(!controller.compute(input).goal_reached, "a sparse stopped sample must restart settling");
+  for (int tick = 0; tick < 3; ++tick) {
+    input.vehicle.stamp_s += c.dt_s;
+    controller.compute(input);
+  }
+  input.vehicle.stamp_s += c.dt_s;
+  check(controller.compute(input).goal_reached, "regular measured stopped dwell must complete");
   input.vehicle.stamp_s += .1;
   ++input.path_id;
   check(!controller.compute(input).goal_reached,

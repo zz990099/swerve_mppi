@@ -8,8 +8,9 @@ namespace swerve_mppi {
 namespace {
 double clamp(double value, double low, double high) { return std::clamp(value, low, high); }
 } // namespace
-Optimizer::Optimizer(const Config &config)
-    : config_(config), model_(config), rollout_(config), critics_(config), noise_(config) {
+Optimizer::Optimizer(const Config &config, std::shared_ptr<const TrajectoryValidator> validator)
+    : config_(config), model_(config), rollout_(config), critics_(config, std::move(validator)),
+      noise_(config) {
   samples_.resize(config_.samples_per_branch);
   for (auto &sample : samples_) {
     sample.noise.resize(config_.horizon_steps);

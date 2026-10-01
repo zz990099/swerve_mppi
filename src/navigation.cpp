@@ -126,6 +126,7 @@ PathReference PathManager::update(const ControllerInput &input) {
           std::hypot(pose.x - path_[i].x, pose.y - path_[i].y) <=
               config_.goal_position_tolerance_m) {
         progress_ = lengths_[i];
+        segment_ = next;
         end = std::min(lengths_.back(), progress_ + config_.path_lookahead_m);
         accumulated_turn = 0;
       } else {
@@ -166,6 +167,11 @@ GoalState GoalManager::update(const VehicleState &s, const PathReference &path, 
       !std::isfinite(path.remaining_m) || path.remaining_m < 0 || !std::isfinite(path.progress_m) ||
       path.progress_m < 0)
     throw std::invalid_argument("invalid goal input");
+  // Sparse or repeated observations cannot establish continuous stopped dwell.
+  if (last_observation_s_ >= 0 && (s.stamp_s <= last_observation_s_ ||
+                                   s.stamp_s - last_observation_s_ > 1.5 * config_.dt_s + 1e-9))
+    settle_start_ = -1;
+  last_observation_s_ = s.stamp_s;
   GoalState out;
   out.distance_m = std::hypot(s.pose.x - path.goal.x, s.pose.y - path.goal.y);
   out.yaw_error_rad = angle_distance(path.goal.yaw, s.pose.yaw);
@@ -210,6 +216,7 @@ GoalState GoalManager::update(const VehicleState &s, const PathReference &path, 
 void GoalManager::reset() {
   position_acquired_ = complete_ = false;
   settle_start_ = progress_stamp_ = -1;
+  last_observation_s_ = -1;
   last_progress_ = last_distance_ = last_yaw_error_ = 0;
 }
 } // namespace swerve_mppi

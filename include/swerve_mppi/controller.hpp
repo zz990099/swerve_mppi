@@ -6,7 +6,8 @@
 namespace swerve_mppi {
 class Controller {
 public:
-  explicit Controller(const Config &config);
+  explicit Controller(const Config &config,
+                      std::shared_ptr<const TrajectoryValidator> validator = nullptr);
   Output compute(const ControllerInput &input);
   void reset();
   TransitionPhase transition_phase() const { return mode_manager_.phase(); }
@@ -17,8 +18,10 @@ private:
   Output request_mode(const ControllerInput &input, DriveMode mode, const Control &intent);
   Output apply_control(const ControllerInput &input, Control control);
   Output continue_alignment(const ControllerInput &input);
+  Output planning_stop(const ControllerInput &input);
+  bool safe_control(const ControllerInput &input, const Branch &branch, const Control &control);
+  std::shared_ptr<const TrajectoryValidator> validator_;
   RolloutEngine safety_rollout_;
-  CriticManager safety_critics_;
   std::vector<Control> safety_controls_;
   Trajectory safety_trace_;
   Config config_;

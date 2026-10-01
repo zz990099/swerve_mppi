@@ -59,7 +59,8 @@ Optimizer owns reusable sample noise/masks, candidate/weighted controls and one
 proposal trajectory. RolloutEngine supports both a value-returning API and an
 output-parameter overload that retains vector capacity. Transition poses append
 into that buffer. Results/fallbacks copy only data needed for returned solutions.
-Controller retains capture/alignment safety models, critics, controls and trace.
+Controller retains capture/alignment safety models, controls and trace. In 0.7
+hard validation is shared with Optimizer instead of a separate safety CriticManager.
 
 Returned Solution/Trajectory values own their storage; subsequent solves cannot
 mutate them. Copied controllers/optimizers own independent workspace vectors.
@@ -88,11 +89,13 @@ of Action and NavigationStatus:
 | ModeTransition | Continue a pending measured execution handshake |
 | Stopped | A completed task is held/braked |
 | Fault | SafeStop was emitted |
+| Blocked | A checked planning stop awaits a fresh feasible plan (0.7) |
 
 FailureReason is None for healthy outputs and distinguishes InvalidInput,
 NonmonotonicTime, InvalidPath (path-processing failure), FeedbackFault,
 NoFeasiblePlan, ModelFailure (immediate drive prediction), and TransitionFault
-(deadline, handshake or request-ID failure). NoFeasiblePlan can arise from an
+(deadline, handshake or request-ID failure). Version 0.7 adds UnsafeStoppingTrajectory
+for rejected/incomplete stopping predictions. NoFeasiblePlan can arise from an
 invalid rollout or a rejecting critic; it does not identify a particular obstacle
 or individual critic. These fields explain the action and do not replace the
 executor's own latched fault/recovery contract.
@@ -101,7 +104,7 @@ PlanningStats resets on every compute/optimize call:
 
 - branches counts optimized branches, not only the winning branch.
 - evaluated_rollouts includes the initial nominal, every sampled proposal and
-  each evaluated weighted update; constant-intent safety checks are excluded.
+  each evaluated weighted update; capture/alignment/stopping safety checks are excluded.
 - feasible_rollouts counts finite physical critic scores among those evaluations,
   before proposal-noise correction.
 - fallback_updates counts iterations that return the existing/feasible fallback
@@ -129,6 +132,11 @@ within forty seconds. The mixed 0.6 m / 2.0 probe reduced S-curve peak error to
 defaults, not selecting a new universal parameter set.
 
 Further standalone work should examine branch/entry-direction costs and tracking
-objectives using these diagnostics, including blocked-path recovery and broader
+objectives using these diagnostics, including broader blocked-path and
 curvature/direction cases. Retain all mode-confirmation/stop/collision gates when
 changing proposals; a lower path error in one case is insufficient acceptance.
+
+These measurements are historical 0.6 evidence. Version 0.7 changes path matching
+and capture safety semantics; it does not claim preservation of every 0.6 completion
+tick or reuse its timing values as new measurements. Its allocation smoke gate and
+behavior matrix are rerun; see PRE_SIMULATION_VALIDATION.md.

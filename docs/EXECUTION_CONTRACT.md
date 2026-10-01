@@ -1,4 +1,4 @@
-# Standalone execution protocol (0.4)
+# Standalone execution protocol (0.7)
 
 This contract is independent of ROS, Nav2 and Gazebo. ModeExecutor is a reference
 supervisor that can be used behind any transport or directly in core tests.
@@ -116,12 +116,69 @@ braking, bounded alignment and confirmation_prediction_s; the last parameter is
 a planning allowance for feedback/transport delay, not permission to synthesize
 confirmation. It rejects predicted transitions beyond confirmation_timeout_s.
 Feedback age, clock-reset handling and transport latency remain caller duties.
+The reusable guarded entry point below enforces these checks when the caller
+provides a current clock and periodic watchdog ticks.
 
 Recovery is explicit: stop actuators independently, verify the actual mode and
 stopped body/joints, drain old transport commands, call executor.reset(recovered)
 with confirmed=true/fault=false, then controller.reset(). A moving, malformed or
 unconfirmed recovery state is rejected. Reset does not reuse request IDs. No
 fault is cleared merely because a late acknowledgement or target angle appears.
+
+## Recoverable planning stops
+
+NoFeasiblePlan is not itself an execution fault. Controller checks a complete
+zero-control stopping trace through its hard TrajectoryValidator, including the
+current footprint and every swept segment. If valid and stopped at its end, it
+emits Brake/Hold with Waiting/Blocked, retains measured steering and permits fresh
+replanning. Warm start and local alignment are cleared. If stopping is rejected
+or cannot finish within the horizon, UnsafeStoppingTrajectory emits SafeStop.
+Invalid inputs, model failures and handshake failures also remain SafeStop.
+These predictive checks do not establish braking safety for uncalibrated actuators
+or tire slip.
+
+## Guarded timing and command envelopes
+
+Use TimedExecutor instead of direct ModeExecutor for queued/transported commands.
+Each CommandEnvelope has a nonzero session_id, a strictly increasing nonzero
+sequence, a strictly increasing issued_at_s and the complete Output. RequestMode
+retries retain their mode request ID but get new envelope sequences and issue
+times; transport sequence and mode request ID are independent.
+
+```cpp
+#include <swerve_mppi/controller.hpp>
+#include <swerve_mppi/timing.hpp>
+
+swerve_mppi::Controller controller(config);
+swerve_mppi::TimedExecutor executor(config, session_id, initial_actual_mode);
+// One serialized call per model tick, with fresh measurements and clock_now_s:
+const auto output = controller.compute(input);
+swerve_mppi::CommandEnvelope envelope{session_id, ++sequence, clock_now_s, output};
+const auto guarded = executor.update(envelope, input.vehicle, clock_now_s);
+// Apply guarded.execution targets and map its ModeFeedback as in the cycle above.
+// A watchdog tick without a new command uses update(std::nullopt, measured, now).
+```
+
+TimingLimits defaults are max_feedback_age_s=0.15, max_command_age_s=0.15 and
+period_tolerance_ratio=0.25. Receiving tick intervals and measurement stamp intervals
+must match dt_s within that relative tolerance. Ages at the limit are accepted.
+Future/invalid timestamps, clock regressions, duplicate feedback, missed periods,
+expired/replayed/missing commands and wrong sessions latch a distinct TimingError
+and force SafeStop. The guard never repeats the last Drive. TimingGuard is also
+available to reject feedback before planning; check_feedback then check_command
+use the same current tick time.
+
+Measurement, command and now timestamps must use one clock domain. The adapter
+supplies the clock, ticks even when a command is missing, and maps feedback. A
+paused simulation clock does not replace an independent actuator watchdog. The
+core cannot enforce stopping if its process is not called.
+
+Timing recovery requires independently verified stopped/confirmed feedback,
+draining pending commands, executor.reset(recovered, new_session_id) with a strictly
+larger session ID, and controller.reset(). Clock and transport sequence can restart;
+mode request ID high-water marks remain intact. Old sessions are rejected even
+with fresh timestamps. Across process restarts the caller must persist/coordinate
+session identity and drain transport; this is not an automatic reconnect protocol.
 
 ## Regression boundaries
 

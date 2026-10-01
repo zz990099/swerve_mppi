@@ -183,7 +183,9 @@ private:
   Config config_;
 };
 } // namespace
-CriticManager::CriticManager(const Config &config) {
+CriticManager::CriticManager(const Config &config,
+                             std::shared_ptr<const TrajectoryValidator> validator)
+    : validator_(validator ? std::move(validator) : std::make_shared<TrajectoryValidator>(config)) {
   validate(config);
   add(std::make_shared<PathCritic>(config));
   add(std::make_shared<ObstacleCritic>(config));
@@ -198,7 +200,7 @@ void CriticManager::add(std::shared_ptr<const Critic> critic) {
   critics_.push_back(std::move(critic));
 }
 double CriticManager::score(const ControllerInput &input, const Trajectory &trajectory) const {
-  if (!trajectory.valid || trajectory.poses.empty())
+  if (validator_->check(input, trajectory) != TrajectoryStatus::Valid)
     return kInfinity;
   double total = 0.0;
   for (const auto &critic : critics_) {

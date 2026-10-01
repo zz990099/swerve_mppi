@@ -81,8 +81,9 @@ uses deterministic low-speed capture. It retains straight DualAckermann motion
 when the lateral error is small; otherwise it uses Crab translation. After position
 capture it brakes and requests Spin when final yaw requires correction. Switching
 requires measured stopping and minimum mode dwell. Positive drive and new requests
-are checked through a constant-intent rollout and the circular obstacle critic;
-this conservative check can reject a command earlier than a shorter rollout would.
+are checked through alignment/entry, the next Drive and its full stopping
+continuation by the shared hard validator. Subsequent controls in this check are
+zero, so it does not extrapolate the proportional command past its target.
 Terminal control is a proportional capture policy, not an additional MPPI solve.
 
 NavigationStatus is separate from the execution TransitionPhase:
@@ -95,12 +96,17 @@ NavigationStatus is separate from the execution TransitionPhase:
 | Settling | Position acquired and yaw in tolerance; waiting for strict pose/stop dwell |
 | Complete | Measured completion latched for this task |
 | Fault | Controller emitted SafeStop |
+| Waiting | No feasible motion; checked Brake/Hold awaiting fresh input |
 
 Completion requires remaining arc length and position capture, actual XY/yaw
 within their tolerances, confirmed fault-free mode, stopped body **and every wheel**,
 no active execution/alignment, and a continuous goal_settle_time_s dwell. Being
 near the endpoint of a closed loop at startup cannot complete it. Position capture
 uses hysteresis while correcting yaw; completion always uses strict tolerances.
+Repeated/nonincreasing samples or a gap greater than 1.5 * dt_s restart the
+stopped dwell. TimedExecutor enforces configured cadence and freshness before
+transported commands reach execution. GoalManager alone cannot verify feedback
+age relative to an independent current clock.
 
 Output::goal_reached latches after completion until replan/reset. The controller
 then emits Hold (or Brake if external motion is measured), without stochastic
@@ -113,6 +119,12 @@ advance, goal-distance reduction or terminal yaw improvement. Active handshakes
 and local committed alignment use their own execution timeout. Stable stopping
 and completed tasks do not report a stall; wheels that never stop can. stalled
 is a diagnostic only: recovery policy belongs to the caller.
+
+NoFeasiblePlan returns Waiting/Blocked with Brake/Hold only when a complete
+predicted stop passes hard validation. Fresh inputs are replanned without executor
+reset. UnsafeStoppingTrajectory and execution faults emit latched SafeStop;
+removing an obstacle alone does not recover those faults. A checked planning stop
+discards local alignment/warm start; an active RequestMode remains immutable.
 
 ## New configuration defaults
 
