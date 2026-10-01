@@ -141,8 +141,11 @@ A large steering change in the current mode produces Brake/Hold until it can
 resume bounded Drive. Controller freezes the control intent across those cycles,
 checks the continuation against fresh obstacles, and applies the original
 confirmation_timeout_s bound. This does not issue a ModeRequest or reset mode
-age. Reset cancels the commitment. A changed path is used by the next optimization
-after the committed entry; task cancellation still uses SafeStop/reset.
+age. Reset or a new task path cancels obsolete local alignment. An explicit mode
+request is preserved across replans; task cancellation still uses SafeStop/reset.
+
+Tracking, corner and terminal policies share the same local commitment and timeout.
+Changing policy cannot renew the deadline or discard an unfinished alignment.
 
 Mode-entry intent is also retained for the first Drive after a confirmed switch,
 so stochastic optimization cannot immediately undo the steering handshake.

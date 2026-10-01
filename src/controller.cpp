@@ -66,17 +66,18 @@ Output Controller::compute(const ControllerInput &input) {
   } else if (!input.vehicle.mode_confirmed || input.vehicle.mode_fault) {
     out = stop;
     out.failure_reason = FailureReason::FeedbackFault;
+  } else if (alignment_control_) {
+    out = continue_alignment(prepared);
+    out.control_policy = ControlPolicy::Alignment;
   } else if (goal.complete || goal.position_acquired ||
              (path.remaining_m < config_.goal_docking_distance_m &&
               distance < config_.goal_docking_distance_m)) {
-    alignment_control_.reset();
     optimizer_.reset();
     out = compute_goal(prepared, goal);
     out.control_policy = goal.complete ? ControlPolicy::Stopped : ControlPolicy::Capture;
   } else if (path.corner_target && std::hypot(path.local_path.back().x - input.vehicle.pose.x,
                                               path.local_path.back().y - input.vehicle.pose.y) <
                                        config_.goal_docking_distance_m) {
-    alignment_control_.reset();
     optimizer_.reset();
     auto corner = prepared;
     corner.tracking->goal = path.local_path.back();
@@ -86,9 +87,6 @@ Output Controller::compute(const ControllerInput &input) {
     GoalState approach;
     out = compute_goal(corner, approach);
     out.control_policy = ControlPolicy::Capture;
-  } else if (alignment_control_) {
-    out = continue_alignment(prepared);
-    out.control_policy = ControlPolicy::Alignment;
   } else {
     out = compute_tracking(prepared);
     out.control_policy = ControlPolicy::Tracking;
@@ -136,36 +134,13 @@ Output Controller::compute_tracking(const ControllerInput &input) {
     out.feasible_rollouts = best.feasible_rollouts;
     return out;
   }
-  const auto preview =
-      model_.step(input.vehicle, model_.project(best.controls.front(), input.vehicle.actual_mode),
-                  config_.dt_s);
-  if (!preview.valid) {
-    stop.failure_reason = FailureReason::ModelFailure;
-    return stop;
-  }
-  Output out;
-  out.requested_mode = input.vehicle.actual_mode;
+  auto out = apply_control(input, model_.project(best.controls.front(), input.vehicle.actual_mode));
   out.planning_stats = stats;
   out.selected_cost = best.cost;
   out.keep_cost = keep.cost;
   out.feasible_rollouts = best.feasible_rollouts;
-  out.steering_targets = preview.steering_targets;
-  if (preview.aligning) {
-    alignment_control_ = model_.project(best.controls.front(), input.vehicle.actual_mode);
-    alignment_mode_ = input.vehicle.actual_mode;
-    alignment_start_s_ = input.vehicle.stamp_s;
-    optimizer_.reset();
-    out = continue_alignment(input);
-    out.planning_stats = stats;
-    out.selected_cost = best.cost;
-    out.keep_cost = keep.cost;
-    out.feasible_rollouts = best.feasible_rollouts;
-  } else {
-    out.action = Action::Drive;
-    out.body_command = preview.state.velocity;
-    out.wheel_speed_targets = preview.wheel_speed_targets;
+  if (out.action == Action::Drive)
     optimizer_.accept(best, input.vehicle.actual_mode);
-  }
   return out;
 }
 Output Controller::request_mode(const ControllerInput &input, DriveMode mode,
@@ -237,21 +212,7 @@ Output Controller::compute_goal(const ControllerInput &input, const GoalState &g
   }
   if (switching)
     return request_mode(input, target_mode, control);
-  const auto step = model_.step(input.vehicle, control, config_.dt_s);
-  if (!step.valid) {
-    out.failure_reason = FailureReason::ModelFailure;
-    out.action = Action::SafeStop;
-    return out;
-  }
-  out.steering_targets = step.steering_targets;
-  if (step.aligning)
-    out.phase = out.action == Action::Hold ? TransitionPhase::Aligning : TransitionPhase::Braking;
-  if (!step.aligning) {
-    out.action = Action::Drive;
-    out.body_command = step.state.velocity;
-    out.wheel_speed_targets = step.wheel_speed_targets;
-  }
-  return out;
+  return apply_control(input, control);
 }
 Output Controller::continue_alignment(const ControllerInput &input) {
   Output out;
@@ -272,13 +233,26 @@ Output Controller::continue_alignment(const ControllerInput &input) {
     out.failure_reason = FailureReason::NoFeasiblePlan;
     return out;
   }
-  const auto preview = model_.step(input.vehicle, *alignment_control_, config_.dt_s);
+  return apply_control(input, *alignment_control_);
+}
+Output Controller::apply_control(const ControllerInput &input, Control control) {
+  Output out;
+  out.requested_mode = input.vehicle.actual_mode;
+  out.steering_targets = input.vehicle.steering_angles;
+  const auto preview = model_.step(input.vehicle, control, config_.dt_s);
   if (!preview.valid) {
     out.failure_reason = FailureReason::ModelFailure;
     return out;
   }
   out.steering_targets = preview.steering_targets;
   if (preview.aligning) {
+    if (!alignment_control_) {
+      alignment_control_ = control;
+      alignment_mode_ = input.vehicle.actual_mode;
+      alignment_start_s_ = input.vehicle.stamp_s;
+      optimizer_.reset();
+      return continue_alignment(input);
+    }
     out.action = is_stopped(input.vehicle, config_) ? Action::Hold : Action::Brake;
     out.phase = out.action == Action::Hold ? TransitionPhase::Aligning : TransitionPhase::Braking;
   } else {

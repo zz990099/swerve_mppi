@@ -15,6 +15,7 @@ private:
   Output compute_tracking(const ControllerInput &input);
   Output compute_goal(const ControllerInput &input, const GoalState &goal);
   Output request_mode(const ControllerInput &input, DriveMode mode, const Control &intent);
+  Output apply_control(const ControllerInput &input, Control control);
   Output continue_alignment(const ControllerInput &input);
   RolloutEngine safety_rollout_;
   CriticManager safety_critics_;

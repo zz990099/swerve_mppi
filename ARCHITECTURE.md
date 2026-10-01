@@ -60,8 +60,10 @@ can stop before a shorter continuation would become unsafe. Reset clears the
 commitment. Replanning clears obsolete local alignment, but never mutates an
 active explicit mode request. A confirmed mode switch preserves its agreed entry
 intent through the stopped handover; normal tracking then applies the first drive
-intent. A new path or terminal/corner capture may choose a fresh intent afterward,
-subject to the same stopped realignment interlock.
+intent. Terminal/corner policies also pass through the shared control application
+and committed alignment path, with the same deadline and obstacle recheck. They
+may choose a fresh intent after the first Drive. Only a new task path/reset clears
+obsolete local intent; an active explicit mode request remains immutable.
 
 A rejected immediate switch uses the keep-mode solution, rather than projecting
 the rejected mode's first control into the current mode. Future transitions

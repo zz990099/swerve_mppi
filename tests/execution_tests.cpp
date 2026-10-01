@@ -480,14 +480,70 @@ void test_rollout_entry_direction() {
   c.horizon_steps = 32;
   c.minimum_mode_dwell_s = 0;
   VehicleState s;
-  std::vector<Control> controls(c.horizon_steps, intent(DriveMode::Crab));
-  auto trajectory = RolloutEngine(c).generate(s, {DriveMode::Crab, 0, true}, controls);
-  check(trajectory.valid, "direction-aware switch rollout must be feasible");
-  std::size_t first = 0;
-  while (!trajectory.active_controls[first])
-    ++first;
-  check(trajectory.poses[first + 1].y > trajectory.poses[first].y,
-        "first drive tick after transition must move without duplicate Crab alignment");
+  for (std::size_t switch_step : {0u, 3u}) {
+    std::vector<Control> controls(c.horizon_steps, {.4, 0, 0});
+    controls[switch_step] = intent(DriveMode::Crab);
+    auto trajectory = RolloutEngine(c).generate(s, {DriveMode::Crab, switch_step, true}, controls);
+    check(trajectory.valid, "direction-aware switch rollout must be feasible");
+    auto confirmed = s;
+    for (std::size_t i = 0; i < switch_step; ++i)
+      confirmed = DriveModel(c).step(confirmed, controls[i], c.dt_s).state;
+    auto resume = switch_step;
+    check(TransitionModel(c).rollout(confirmed, DriveMode::Crab, resume, c.horizon_steps, nullptr,
+                                     controls[switch_step]) >= 0,
+          "entry transition must fit the horizon");
+    const auto drive = DriveModel(c).step(confirmed, controls[switch_step], c.dt_s);
+    check(!drive.aligning && !trajectory.active_controls[resume] &&
+              trajectory.controls[resume].vx == 0 && trajectory.controls[resume].vy > 0 &&
+              std::abs(trajectory.poses[resume + 1].x - drive.state.pose.x) < 1e-9 &&
+              std::abs(trajectory.poses[resume + 1].y - drive.state.pose.y) < 1e-9,
+          "first Drive must use frozen entry intent, ignoring a different resume proposal");
+  }
+}
+void test_capture_alignment_commitment() {
+  Config c;
+  for (bool corner : {false, true}) {
+    Controller controller(c);
+    ControllerInput in;
+    in.vehicle.actual_mode = DriveMode::Crab;
+    in.vehicle.time_in_mode_s = 2;
+    in.vehicle.stamp_s = 1;
+    in.reference_path = corner ? std::vector<Pose2d>{{0, 0, 0}, {0, .15, 0}, {.5, .15, 0}}
+                               : std::vector<Pose2d>{{0, 0, 0}, {0, .1, 0}};
+    const auto first = controller.compute(in);
+    check(first.control_policy == ControlPolicy::Capture && first.action == Action::Hold,
+          "terminal/corner capture must begin stopped same-mode alignment");
+    in.vehicle.pose.x = .01;
+    in.vehicle.stamp_s += c.dt_s;
+    const auto retry = controller.compute(in);
+    check(retry.control_policy == ControlPolicy::Alignment && retry.action == Action::Hold &&
+              retry.steering_targets == first.steering_targets,
+          "capture must retain its steering intent despite measured pose jitter");
+    in.vehicle.stamp_s = 1 + c.confirmation_timeout_s + c.dt_s;
+    const auto timeout = controller.compute(in);
+    check(timeout.action == Action::SafeStop &&
+              timeout.failure_reason == FailureReason::TransitionFault,
+          "capture alignment must honor the same execution deadline as tracking");
+  }
+  Controller controller(c);
+  ControllerInput in;
+  in.vehicle.stamp_s = 1;
+  in.vehicle.time_in_mode_s = 2;
+  in.reference_path = {{0, 0, 0}, {0, .1, 0}};
+  const auto request = controller.compute(in);
+  check(request.mode_request && request.requested_mode == DriveMode::Crab,
+        "terminal lateral capture must request Crab entry");
+  in.vehicle.actual_mode = DriveMode::Crab;
+  in.vehicle.mode_request_id = request.mode_request->id;
+  in.vehicle.steering_angles = request.steering_targets;
+  in.vehicle.stamp_s += c.dt_s;
+  check(controller.compute(in).action == Action::Hold, "confirmation must retain stopped handover");
+  in.vehicle.pose.x = .01;
+  in.vehicle.stamp_s += c.dt_s;
+  const auto drive = controller.compute(in);
+  check(drive.action == Action::Drive && drive.body_command.vy > 0 &&
+            std::abs(drive.body_command.vx) < 1e-9,
+        "capture cannot overwrite agreed mode-entry intent before its first Drive");
 }
 } // namespace
 int main() {
@@ -507,6 +563,7 @@ int main() {
     test_drive_steering_command_limits();
     test_curved_ackermann_and_spin_drive();
     test_rollout_entry_direction();
+    test_capture_alignment_commitment();
     std::cout << "Execution regressions passed\n";
     return 0;
   } catch (const std::exception &e) {

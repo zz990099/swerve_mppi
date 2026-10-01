@@ -42,6 +42,10 @@ void RolloutEngine::generate(const VehicleState &initial, const Branch &branch,
                               controls[branch.switch_step]) < 0.0)
         return;
       switched = true;
+      // The switch-entry control remains committed through the first Drive.
+      // The proposal at the resume index is ignored, just as in Controller.
+      alignment = model_.project(controls[branch.switch_step], branch.mode);
+      alignment_begin = step;
       continue;
     }
     const DriveMode mode = switched ? branch.mode : initial.actual_mode;
