@@ -1,4 +1,4 @@
-# Standalone execution protocol (0.7)
+# Standalone execution protocol (0.8)
 
 This contract is independent of ROS, Nav2 and Gazebo. ModeExecutor is a reference
 supervisor that can be used behind any transport or directly in core tests.
@@ -136,6 +136,15 @@ or cannot finish within the horizon, UnsafeStoppingTrajectory emits SafeStop.
 Invalid inputs, model failures and handshake failures also remain SafeStop.
 These predictive checks do not establish braking safety for uncalibrated actuators
 or tire slip.
+
+Version 0.8 also checks every normal Brake/Hold/RequestMode against fresh stopping
+constraints before publication. This includes goal settling, yaw/mode-dwell waits,
+external motion after completion and pending explicit handshakes. Successful normal
+stops keep their navigation state and immutable request; they do not become
+Waiting/Blocked. Rejection clears the request and emits UnsafeStoppingTrajectory,
+so ModeExecutor cancels the transition and latches fault. The stopping rollout
+retains measured steering, actual mode, request ID and unconfirmed feedback;
+checking a stop never grants drive permission or synthesizes an acknowledgement.
 
 ## Guarded timing and command envelopes
 

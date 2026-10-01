@@ -47,13 +47,14 @@ Output Controller::compute(const ControllerInput &input) {
   prepared.heading_policy = input.heading_policy;
   double limit = std::max(config_.max_vx_mps, config_.max_crab_speed_mps);
   const double distance =
-      std::hypot(path.goal.x - input.vehicle.pose.x, path.goal.y - input.vehicle.pose.y);
-  if (path.remaining_m < config_.goal_slowdown_distance_m)
+      std::hypot(path.target.x - input.vehicle.pose.x, path.target.y - input.vehicle.pose.y);
+  if ((path.target_kind == PathTargetKind::Corner || path.goal_eligible) &&
+      path.target_remaining_m < config_.goal_slowdown_distance_m)
     limit = std::min({limit, config_.goal_translation_gain * distance,
                       std::sqrt(2 * config_.max_linear_decel_mps2 *
                                 std::max(0.0, distance - config_.goal_position_tolerance_m / 2))});
-  prepared.tracking =
-      TrackingContext{path.goal, path.remaining_m, limit, path.terminal, input.heading_policy};
+  prepared.tracking = TrackingContext{path.target, path.remaining_m, limit, path.goal_eligible,
+                                      input.heading_policy};
   const auto goal = goal_manager_.update(input.vehicle, path,
                                          mode_manager_.active() || alignment_control_.has_value());
   Output out;
@@ -70,28 +71,28 @@ Output Controller::compute(const ControllerInput &input) {
   } else if (alignment_control_) {
     out = continue_alignment(prepared);
     out.control_policy = ControlPolicy::Alignment;
-  } else if (goal.complete || goal.position_acquired ||
-             (path.remaining_m < config_.goal_docking_distance_m &&
-              distance < config_.goal_docking_distance_m)) {
+  } else if (goal.complete ||
+             (path.goal_eligible &&
+              (goal.position_acquired || (path.remaining_m < config_.goal_docking_distance_m &&
+                                          distance < config_.goal_docking_distance_m)))) {
     optimizer_.reset();
     out = compute_goal(prepared, goal);
     out.control_policy = goal.complete ? ControlPolicy::Stopped : ControlPolicy::Capture;
-  } else if (path.corner_target && std::hypot(path.local_path.back().x - input.vehicle.pose.x,
-                                              path.local_path.back().y - input.vehicle.pose.y) <
-                                       config_.goal_docking_distance_m) {
+  } else if (path.target_kind == PathTargetKind::Corner &&
+             distance < config_.goal_docking_distance_m) {
     optimizer_.reset();
-    auto corner = prepared;
-    corner.tracking->goal = path.local_path.back();
-    const double d = std::hypot(corner.tracking->goal.x - input.vehicle.pose.x,
-                                corner.tracking->goal.y - input.vehicle.pose.y);
-    corner.tracking->speed_limit_mps = std::min(limit, config_.goal_translation_gain * d);
     GoalState approach;
-    out = compute_goal(corner, approach);
+    out = compute_goal(prepared, approach);
     out.control_policy = ControlPolicy::Capture;
   } else {
     out = compute_tracking(prepared);
     out.control_policy = ControlPolicy::Tracking;
   }
+  // Every non-driving healthy action must admit a complete stop under the
+  // current constraints, including terminal early returns and pending requests.
+  if (out.action == Action::Brake || out.action == Action::Hold ||
+      out.action == Action::RequestMode)
+    out = check_stopping(prepared, std::move(out));
   if (out.action == Action::SafeStop)
     out.control_policy = ControlPolicy::Fault;
   out.navigation_status = out.action == Action::SafeStop ? NavigationStatus::Fault : goal.status;
@@ -268,16 +269,24 @@ Output Controller::planning_stop(const ControllerInput &input) {
   Output out;
   out.requested_mode = input.vehicle.actual_mode;
   out.steering_targets = input.vehicle.steering_angles;
-  std::fill(safety_controls_.begin(), safety_controls_.end(), Control{});
-  safety_rollout_.generate(input.vehicle, {input.vehicle.actual_mode, 0, false}, safety_controls_,
-                           safety_trace_);
-  if (validator_->check(input, safety_trace_) != TrajectoryStatus::Valid ||
-      !is_stopped(safety_trace_.final_state, config_)) {
-    out.failure_reason = FailureReason::UnsafeStoppingTrajectory;
-    return out;
-  }
   out.action = is_stopped(input.vehicle, config_) ? Action::Hold : Action::Brake;
   out.failure_reason = FailureReason::NoFeasiblePlan;
+  return out;
+}
+Output Controller::check_stopping(const ControllerInput &input, Output out) {
+  safety_rollout_.generate_stop(input.vehicle, safety_trace_);
+  if (validator_->check(input, safety_trace_) == TrajectoryStatus::Valid &&
+      is_stopped(safety_trace_.final_state, config_))
+    return out;
+  optimizer_.reset();
+  alignment_control_.reset();
+  out.action = Action::SafeStop;
+  out.failure_reason = FailureReason::UnsafeStoppingTrajectory;
+  out.mode_request.reset();
+  out.requested_mode = input.vehicle.actual_mode;
+  out.steering_targets = input.vehicle.steering_angles;
+  out.wheel_speed_targets.fill(0.0);
+  out.body_command = {};
   return out;
 }
 void Controller::reset() {

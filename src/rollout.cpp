@@ -5,6 +5,28 @@
 namespace swerve_mppi {
 RolloutEngine::RolloutEngine(const Config &config)
     : config_(config), model_(config), transition_(config) {}
+void RolloutEngine::generate_stop(const VehicleState &initial, Trajectory &out) const {
+  out.valid = false;
+  out.poses.clear();
+  out.controls.clear();
+  out.active_controls.clear();
+  out.branch = {initial.actual_mode, 0, false};
+  out.final_state = initial;
+  if (!detail::valid_vehicle(initial, config_))
+    return;
+  out.poses.reserve(config_.horizon_steps + 1);
+  out.poses.push_back(initial.pose);
+  out.controls.assign(config_.horizon_steps, Control{});
+  out.active_controls.assign(config_.horizon_steps, false);
+  for (std::size_t step = 0; step < config_.horizon_steps; ++step) {
+    const auto next = model_.step(out.final_state, {}, config_.dt_s);
+    if (!next.valid)
+      return;
+    out.final_state = next.state;
+    out.poses.push_back(next.state.pose);
+  }
+  out.valid = true;
+}
 Trajectory RolloutEngine::generate(const VehicleState &initial, const Branch &branch,
                                    const std::vector<Control> &controls) const {
   Trajectory out;

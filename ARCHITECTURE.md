@@ -9,7 +9,7 @@ Nav2 controller plugin belong in separate adapter packages.
 | Component | Responsibility |
 | --- | --- |
 | Controller | Validate input, coordinate path/goal state, continue committed transitions and emit one action. |
-| PathManager | Monotonic arc progress, bounded matching, local reference and corner capture. |
+| PathManager | Monotonic arc progress, bounded matching, local reference, effective target and terminal eligibility. |
 | GoalManager | Pose acquisition, measured-stop settling, completion latch and progress diagnostics. |
 | ModeScheduler | Enumerate keep/single-switch branches; enforce dwell and switch hysteresis before selection. |
 | ModeManager | Commit a frozen entry request; gate handover on its matching ID and measured state. |
@@ -50,6 +50,12 @@ same DriveModel, RolloutEngine collision checks and measured ModeManager protoco
 It avoids resampling a near-zero MPPI command at the completion boundary. GoalManager
 only judges measured state; it never treats a predicted endpoint as completion.
 See docs/NAVIGATION.md for the task and heading contracts.
+
+PathReference carries target, target_kind, target_remaining_m and goal_eligible.
+An uncaptured corner owns translation and its speed cap; a nearby global endpoint
+cannot take over. Controller and GoalManager both consume the same eligibility.
+Lookahead targets retain normal tracking limits until a corner or eligible goal
+requires slowdown. The global goal remains the navigation diagnostic/completion goal.
 
 Large same-mode steering changes commit a fixed control intent until alignment
 and the first drive tick complete, with the same configured timeout bound. New
@@ -128,6 +134,14 @@ stopped body and all wheels can produce recoverable Brake/Hold. Otherwise
 UnsafeStoppingTrajectory produces SafeStop. Waiting/Blocked describes a checked
 planning stop awaiting fresh input, not completed navigation.
 
+In 0.8 every healthy Brake/Hold/RequestMode passes the same final stopping check,
+including normal capture early returns and committed mode handshakes. A valid normal
+stop retains its original navigation status and request payload. Rejection clears
+the payload and emits UnsafeStoppingTrajectory/SafeStop. RolloutEngine::generate_stop
+predicts zero wheel drive at retained measured steering even while mode confirmation
+is pending, without modifying mode, request ID or confirmation. Ordinary driving
+rollouts still require confirmed feedback. Stopping checks do not optimize motion.
+
 ## Workspaces and diagnostics
 
 Optimizer preallocates proposal noise, active masks, candidate/weighted controls
@@ -197,16 +211,15 @@ See docs/EXECUTION_CONTRACT.md for the API and reset protocol.
 
 ## Boundaries for simulation integration
 
-The geometry and actuator defaults correspond to the simulation configuration.
+The geometry and actuator defaults are standalone configuration assumptions.
 The predictive drive model permits bounded continuous steering but retains
 stopped realignment for larger changes. Braking response, body limits, slipping,
 communication delay and transition times require identification before claiming
 model agreement.
 
-The simulator currently infers mode from velocity and clears it on zero commands;
-this core requires an explicit persistent mode request and acknowledgement.
-Integration must resolve that mismatch. Do not translate RequestMode to an
-ordinary zero Twist or report confirmation based on elapsed time alone.
+An adapter must preserve the explicit persistent mode request and acknowledgement
+contract. Do not infer mode from velocity, clear mode on zero commands, translate
+RequestMode to an ordinary zero Twist or report confirmation from elapsed time alone.
 
 TimingGuard and TimedExecutor provide reusable checks for cadence, feedback ages,
 command expiry/replay and session renewal without transport/ROS dependencies.

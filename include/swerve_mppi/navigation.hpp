@@ -2,6 +2,7 @@
 #include "swerve_mppi/model.hpp"
 
 namespace swerve_mppi {
+enum class PathTargetKind { Lookahead, Corner, Goal };
 struct PathReference {
   std::vector<Pose2d> local_path;
   Pose2d goal;
@@ -11,6 +12,12 @@ struct PathReference {
   bool changed = false;
   bool terminal = false;
   bool corner_target = false;
+  // Effective translation target; an uncaptured corner takes precedence over
+  // the global goal even when that goal is nearby in XY.
+  Pose2d target;
+  PathTargetKind target_kind = PathTargetKind::Lookahead;
+  double target_remaining_m = 0;
+  bool goal_eligible = false;
 };
 
 // Stateful arc-length matching in a bounded forward window. No global nearest

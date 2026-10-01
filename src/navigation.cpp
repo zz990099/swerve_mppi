@@ -150,6 +150,12 @@ PathReference PathManager::update(const ControllerInput &input) {
   out.progress_m = progress_;
   out.remaining_m = lengths_.back() - progress_;
   out.terminal = end >= lengths_.back() - 1e-9;
+  out.goal_eligible = out.terminal && !out.corner_target;
+  out.target = out.local_path.back();
+  out.target_remaining_m = end - progress_;
+  out.target_kind = out.corner_target   ? PathTargetKind::Corner
+                    : out.goal_eligible ? PathTargetKind::Goal
+                                        : PathTargetKind::Lookahead;
   previous_pose_ = pose;
   return out;
 }
@@ -176,10 +182,11 @@ GoalState GoalManager::update(const VehicleState &s, const PathReference &path, 
   out.distance_m = std::hypot(s.pose.x - path.goal.x, s.pose.y - path.goal.y);
   out.yaw_error_rad = angle_distance(path.goal.yaw, s.pose.yaw);
   const double yaw = std::abs(out.yaw_error_rad);
-  if (!position_acquired_ && out.distance_m <= config_.goal_position_tolerance_m &&
+  if (!position_acquired_ && path.goal_eligible &&
+      out.distance_m <= config_.goal_position_tolerance_m &&
       path.remaining_m <= config_.goal_position_tolerance_m)
     position_acquired_ = true;
-  if (out.distance_m > 2 * config_.goal_position_tolerance_m ||
+  if (!path.goal_eligible || out.distance_m > 2 * config_.goal_position_tolerance_m ||
       (out.distance_m > config_.goal_position_tolerance_m &&
        yaw <= config_.goal_yaw_tolerance_rad && is_stopped(s, config_)))
     position_acquired_ = false;
@@ -194,12 +201,13 @@ GoalState GoalManager::update(const VehicleState &s, const PathReference &path, 
   } else
     settle_start_ = -1;
   out.complete = complete_;
-  out.status =
-      complete_            ? NavigationStatus::Complete
-      : position_acquired_ ? (yaw > config_.goal_yaw_tolerance_rad ? NavigationStatus::AligningGoal
-                                                                   : NavigationStatus::Settling)
-      : path.remaining_m < config_.goal_slowdown_distance_m ? NavigationStatus::ApproachingGoal
-                                                            : NavigationStatus::Tracking;
+  out.status = complete_ ? NavigationStatus::Complete
+               : position_acquired_
+                   ? (yaw > config_.goal_yaw_tolerance_rad ? NavigationStatus::AligningGoal
+                                                           : NavigationStatus::Settling)
+               : path.goal_eligible && path.remaining_m < config_.goal_slowdown_distance_m
+                   ? NavigationStatus::ApproachingGoal
+                   : NavigationStatus::Tracking;
   if (progress_stamp_ < 0 || busy || complete_ ||
       (out.status == NavigationStatus::Settling && is_stopped(s, config_)) ||
       path.progress_m - last_progress_ >= config_.progress_distance_m ||

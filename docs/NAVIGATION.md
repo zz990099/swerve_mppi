@@ -1,4 +1,4 @@
-# Navigation lifecycle (0.5)
+# Navigation lifecycle (0.8)
 
 ## Input and task identity
 
@@ -68,15 +68,27 @@ window. Validation and path identity checks still scan the full input, and the
 local reference is copied each tick. Allocation-free operation remains future
 work; docs/PERFORMANCE.md includes dense-path profiling.
 
+PathReference exposes the effective translation target in target, its
+PathTargetKind (Lookahead, Corner or Goal), target_remaining_m (arc gap to that
+target), and goal_eligible. Legacy terminal/corner_target flags describe the local
+reference. PathManager grants goal_eligible only when the local reference reaches
+the global goal without an uncaptured blocking corner. Controller and GoalManager
+both require this qualification for terminal takeover/initial position acquisition.
+Standalone GoalManager callers must explicitly provide goal_eligible for a terminal
+reference; a default PathReference does not authorize completion.
+
 ## Terminal control and completion
 
-Within goal_slowdown_distance_m of the end, sampled, nominal and weighted controls
-obey a translation speed cap based on goal distance, a proportional gain and a
-stopping-distance bound. Tracking costs add path-heading, command-change and
+Within goal_slowdown_distance_m in arc length of the effective corner or eligible
+goal, sampled, nominal and weighted controls obey a translation speed cap based
+on distance to that target, a proportional gain and a stopping-distance bound.
+Uncaptured corners take precedence over a nearby global endpoint, so short loops
+and foldbacks can start even when the global goal coincides with the robot.
+Lookahead targets retain normal limits. Tracking costs add path-heading, command-change and
 terminal-speed penalties. The optimizer reserves a fresh geometric seed alongside
 the nominal and Gaussian proposals to adapt to moving local targets.
 
-Within goal_docking_distance_m of both the path end and goal position, Controller
+With terminal eligibility and within goal_docking_distance_m of both the path end and goal position, Controller
 uses deterministic low-speed capture. It retains straight DualAckermann motion
 when the lateral error is small; otherwise it uses Crab translation. After position
 capture it brakes and requests Spin when final yaw requires correction. Switching
@@ -125,6 +137,9 @@ predicted stop passes hard validation. Fresh inputs are replanned without execut
 reset. UnsafeStoppingTrajectory and execution faults emit latched SafeStop;
 removing an obstacle alone does not recover those faults. A checked planning stop
 discards local alignment/warm start; an active RequestMode remains immutable.
+All normal Brake/Hold/RequestMode outputs also pass a current-constraint stopping
+check. Normal goal stops retain AligningGoal/Settling/Complete; a rejected stop
+reports UnsafeStoppingTrajectory and Fault instead of claiming successful capture.
 
 ## New configuration defaults
 
@@ -156,3 +171,6 @@ The version 0.4 joint-target execution contract remains in effect.
 Version 0.6 retains these navigation defaults and adds computation policy, failure
 reason and planning-work diagnostics. Rebuild consumers against the 0.6 package;
 see PERFORMANCE.md for the workspace ownership and diagnostic contracts.
+
+Version 0.8 adds explicit navigation targets and goal eligibility, and validates
+all controlled stops. Rebuild consumers with find_package(swerve_mppi 0.8 CONFIG REQUIRED).

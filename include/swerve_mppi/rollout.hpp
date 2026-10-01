@@ -26,6 +26,10 @@ public:
   void generate(const VehicleState &initial, const Branch &branch,
                 const std::vector<Control> &controls, Trajectory &out) const;
 
+  // Zero drive with measured steering retained. Braking must remain checkable
+  // during an unconfirmed mode transition; it never synthesizes confirmation.
+  void generate_stop(const VehicleState &initial, Trajectory &out) const;
+
 private:
   Config config_;
   DriveModel model_;

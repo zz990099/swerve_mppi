@@ -19,6 +19,7 @@ private:
   Output apply_control(const ControllerInput &input, Control control);
   Output continue_alignment(const ControllerInput &input);
   Output planning_stop(const ControllerInput &input);
+  Output check_stopping(const ControllerInput &input, Output out);
   bool safe_control(const ControllerInput &input, const Branch &branch, const Control &control);
   std::shared_ptr<const TrajectoryValidator> validator_;
   RolloutEngine safety_rollout_;

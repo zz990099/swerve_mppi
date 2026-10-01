@@ -29,7 +29,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.7 CONFIG REQUIRED)
+find_package(swerve_mppi 0.8 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -71,6 +71,9 @@ period ratios are not supported yet.
   passes the shared hard validator. It reports Waiting/Blocked and retries on fresh
   input. UnsafeStoppingTrajectory, invalid input and execution faults still use
   latched SafeStop.
+- Every healthy Brake, Hold and pending RequestMode also passes the stopping
+  validator against fresh constraints. Normal terminal braking keeps its navigation
+  status; rejection reports UnsafeStoppingTrajectory and cancels the request.
 - Use TimedExecutor for queued commands. CommandEnvelope checks session, sequence,
   issue time, feedback freshness and model-period cadence. Clock resets require
   verified stopped recovery, a strictly newer session and controller.reset().
@@ -87,6 +90,15 @@ The optional allocation regression runs in CI; wall-clock timing is not a CI gat
 
 ## Current status
 
+Version 0.8 gives navigation an explicit effective target and terminal eligibility.
+Uncaptured corners own their slowdown/capture target, even near a closed-loop or
+foldback endpoint. Goal acquisition and terminal capture require that eligibility.
+All controlled stops share one output check, including terminal early returns,
+completed-task external motion and unconfirmed mode requests. Stopping predictions
+preserve measured mode feedback and never synthesize confirmation. New closed loops
+cover short foldbacks, short squares, near-terminal corners and a close obstacle
+corridor. Rebuild consumers against 0.8 after the public navigation/rollout additions.
+
 Version 0.7 fixes segment-order matching on short loops/crossings/foldbacks,
 unifies tracking/corner/terminal alignment and preserves switch-entry intent through
 the first predicted and executed Drive. A shared TrajectoryValidator separates hard
@@ -96,9 +108,10 @@ TimingGuard and TimedExecutor provide transport-free timing checks; sparse feedb
 cannot establish continuous stopped completion. See
 [docs/PRE_SIMULATION_VALIDATION.md](docs/PRE_SIMULATION_VALIDATION.md) for scope and validation.
 
-The default chassis dimensions, wheel radius, steering rate and wheel limits
-match the bundled swerve_gazebo_sim defaults. Body speed/acceleration limits
-remain conservative planning settings; they are not calibrated Gazebo dynamics.
+The default dimensions, joint rates and body limits are standalone configuration
+assumptions. Verify them against the target chassis and independently identify
+braking/steering response before integration. This repository contains the core
+and its encoder fixture; the defaults have no bundled simulator calibration evidence.
 Components own their configuration, so temporaries and copied controllers cannot
 leave dangling configuration references.
 

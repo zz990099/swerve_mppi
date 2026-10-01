@@ -57,6 +57,10 @@ void run(const std::string &scenario, unsigned seed, double lookahead, double pa
   std::size_t planning_allocations = 0, rollouts = 0, feasible = 0, fallbacks = 0;
   std::size_t total_allocations = 0, peak_allocations = 0, overruns = 0;
   double max_error = 0, squared_error = 0;
+  double minimum_clearance =
+      measured_clearance(input.vehicle.pose, input.vehicle.pose, input.obstacles, c);
+  check(minimum_clearance > 0, "benchmark must begin outside inflated obstacles");
+  std::size_t waiting_calls = 0;
   int switches = 0, completion = -1;
   for (int tick = 0; tick < 400; ++tick) {
     allocations = 0;
@@ -76,6 +80,7 @@ void run(const std::string &scenario, unsigned seed, double lookahead, double pa
     rollouts += output.planning_stats.evaluated_rollouts;
     feasible += output.planning_stats.feasible_rollouts;
     fallbacks += output.planning_stats.fallback_updates;
+    waiting_calls += output.navigation_status == NavigationStatus::Waiting;
     max_error = std::max(max_error, output.cross_track_error_m);
     squared_error += output.cross_track_error_m * output.cross_track_error_m;
     check(output.action != Action::SafeStop, "benchmark controller fault");
@@ -86,7 +91,11 @@ void run(const std::string &scenario, unsigned seed, double lookahead, double pa
     auto result = executor.update(output, input.vehicle);
     check(!result.feedback.fault, "benchmark execution fault");
     auto previous = input.vehicle.actual_mode;
+    const auto from = input.vehicle.pose;
     actuate(input.vehicle, result, c);
+    minimum_clearance = std::min(minimum_clearance,
+                                 measured_clearance(from, input.vehicle.pose, input.obstacles, c));
+    check(minimum_clearance > 0, "benchmark measured motion entered an inflated obstacle");
     switches += input.vehicle.actual_mode != previous;
   }
   if (completion < 0)
@@ -94,6 +103,8 @@ void run(const std::string &scenario, unsigned seed, double lookahead, double pa
                              " seed=" + std::to_string(seed));
   if (check_allocations)
     check(peak_allocations <= 200, "fixed default workload exceeded allocation regression bound");
+  if (scenario == "near_obstacles")
+    check(minimum_clearance < .2, "near obstacles must exercise the clearance region");
   std::cout << scenario << ',' << seed << ',' << times.size() << ',' << completion * c.dt_s << ','
             << max_error << ',' << std::sqrt(squared_error / times.size()) << ',' << switches << ','
             << percentile(times, .5) << ',' << percentile(times, .95) << ','
@@ -104,7 +115,11 @@ void run(const std::string &scenario, unsigned seed, double lookahead, double pa
             << (planning_times.empty()
                     ? 0
                     : static_cast<double>(planning_allocations) / planning_times.size())
-            << ',' << rollouts << ',' << feasible << ',' << fallbacks << '\n';
+            << ',' << rollouts << ',' << feasible << ',' << fallbacks << ',' << waiting_calls
+            << ',';
+  if (std::isfinite(minimum_clearance))
+    std::cout << minimum_clearance;
+  std::cout << '\n';
 }
 } // namespace
 int main(int argc, char **argv) {
@@ -118,9 +133,10 @@ int main(int argc, char **argv) {
               << "scenario,seed,calls,completion_s,max_path_error_m,rms_path_error_m,mode_changes,"
                  "p50_ms,p95_ms,p99_ms,max_ms,period_overruns,mean_allocations,peak_allocations,"
                  "planning_calls,planning_p95_ms,planning_mean_allocations,evaluated_rollouts,"
-                 "feasible_rollouts,fallback_updates\n";
+                 "feasible_rollouts,fallback_updates,waiting_calls,min_measured_clearance_m\n";
     for (const auto &name : {"straight", "lateral", "curve", "spin", "reverse", "final_yaw",
-                             "scurve", "cusp", "loop", "dense_curve", "obstacles"}) {
+                             "scurve", "cusp", "loop", "short_cusp", "short_loop", "short_corner",
+                             "near_obstacles", "dense_curve", "obstacles"}) {
       if (scenario == "all" &&
           (std::string(name) == "dense_curve" || std::string(name) == "obstacles"))
         continue;
@@ -135,7 +151,9 @@ int main(int argc, char **argv) {
     check(scenario == "all" || scenario == "straight" || scenario == "lateral" ||
               scenario == "curve" || scenario == "spin" || scenario == "reverse" ||
               scenario == "final_yaw" || scenario == "scurve" || scenario == "cusp" ||
-              scenario == "loop" || scenario == "dense_curve" || scenario == "obstacles",
+              scenario == "loop" || scenario == "short_cusp" || scenario == "short_loop" ||
+              scenario == "short_corner" || scenario == "near_obstacles" ||
+              scenario == "dense_curve" || scenario == "obstacles",
           "unknown scenario");
   } catch (const std::exception &e) {
     counting = false;

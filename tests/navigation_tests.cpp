@@ -134,6 +134,7 @@ void test_completion_requires_measured_stop() {
   Config c;
   GoalManager manager(c);
   PathReference path;
+  path.goal_eligible = true;
   VehicleState state;
   state.stamp_s = 1;
   state.wheel_speeds.fill(.1);
@@ -165,6 +166,36 @@ void test_completion_requires_measured_stop() {
   state.pose.x = .08;
   check(!manager.update(state, path, false).position_acquired,
         "outside tolerance must require translation");
+}
+void test_effective_target_and_goal_eligibility() {
+  Config c;
+  PathManager manager(c);
+  GoalManager goal(c);
+  ControllerInput in;
+  in.vehicle.stamp_s = 1;
+  in.vehicle.time_in_mode_s = 2;
+  in.reference_path = {{0, 0, 0}, {.2, 0, 0}, {.2, .08, 0}, {.12, .08, 0}};
+  in.vehicle.pose = {.12, 0, 0};
+  auto path = manager.update(in);
+  check(path.target_kind == PathTargetKind::Corner && !path.goal_eligible && path.target.x == .2 &&
+            path.target.y == 0 && std::abs(path.target_remaining_m - .08) < 1e-9,
+        "an uncaptured corner owns the translation target even near the global goal");
+  // A standalone caller must grant eligibility, not just supply small errors.
+  PathReference blocked;
+  blocked.goal = in.vehicle.pose;
+  check(!goal.update(in.vehicle, blocked, false).position_acquired,
+        "small goal errors and remaining length cannot override missing terminal eligibility");
+  in.vehicle.pose = {.2, 0, 0};
+  in.vehicle.stamp_s += c.dt_s;
+  path = manager.update(in);
+  check(path.target_kind == PathTargetKind::Corner && !path.goal_eligible && path.target.y == .08,
+        "capturing one corner cannot grant eligibility through the next corner");
+  in.vehicle.pose = {.2, .08, 0};
+  in.vehicle.stamp_s += c.dt_s;
+  path = manager.update(in);
+  check(path.target_kind == PathTargetKind::Goal && path.goal_eligible &&
+            path.target.x == path.goal.x && path.target.y == path.goal.y,
+        "the global goal becomes eligible after all blocking corners are captured");
 }
 void test_replan_execution_boundaries() {
   Config c;
@@ -240,6 +271,7 @@ int main() {
     test_path_progress_and_replan();
     test_loops_duplicates_and_yaw();
     test_completion_requires_measured_stop();
+    test_effective_target_and_goal_eligibility();
     test_task_restart_and_stall();
     test_cusp_target();
     test_short_paths_preserve_segment_order();

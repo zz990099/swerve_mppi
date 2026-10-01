@@ -19,12 +19,25 @@ void run(const std::string &scenario, unsigned seed) {
   int hold = 0, stalled = 0, max_stalled = 0, switches = 0;
   int completed_tick = -1;
   double max_tracking_error = 0;
+  double minimum_clearance =
+      measured_clearance(input.vehicle.pose, input.vehicle.pose, input.obstacles, c);
+  check(minimum_clearance > 0, "scenario must begin outside the inflated obstacle footprint");
+  const bool short_path =
+      scenario == "short_cusp" || scenario == "short_loop" || scenario == "short_corner";
+  std::size_t next_corner = 1;
   for (int tick = 0; tick < 400; ++tick) {
     auto previous_mode = input.vehicle.actual_mode;
     const auto command = controller.compute(input);
+    if (tick == 0 && short_path)
+      check(command.action == Action::Drive && command.body_command.vx > 0 &&
+                std::abs(command.body_command.vy) < 1e-9,
+            "short paths must first drive toward the uncaptured forward corner");
     hold += command.action == Action::Hold;
     max_tracking_error = std::max(max_tracking_error, command.cross_track_error_m);
     if (command.goal_reached && completed_tick < 0) {
+      if (short_path)
+        check(next_corner + 1 >= input.reference_path.size(),
+              "short paths cannot complete before measured ordered corner capture");
       completed_tick = tick;
       check(is_stopped(input.vehicle, c), "completion requires measured stopped joints and body");
       check(command.goal_distance_m <= c.goal_position_tolerance_m &&
@@ -52,7 +65,28 @@ void run(const std::string &scenario, unsigned seed) {
     check(!result.feedback.fault, "execution fault in default noisy closed loop");
     if (command.action == Action::Drive)
       check(input.vehicle.mode_confirmed, "drive preceded actual mode confirmation");
+    const auto from = input.vehicle.pose;
     actuate(input.vehicle, result, c);
+    minimum_clearance = std::min(minimum_clearance,
+                                 measured_clearance(from, input.vehicle.pose, input.obstacles, c));
+    check(minimum_clearance > 0, "measured motion must remain outside inflated obstacles");
+    if (short_path) {
+      const auto &to = input.vehicle.pose;
+      const double dx = to.x - from.x, dy = to.y - from.y;
+      const double length2 = dx * dx + dy * dy;
+      while (next_corner + 1 < input.reference_path.size()) {
+        const auto &corner = input.reference_path[next_corner];
+        const double t =
+            length2 > 1e-12
+                ? std::clamp(((corner.x - from.x) * dx + (corner.y - from.y) * dy) / length2, 0.0,
+                             1.0)
+                : 0.0;
+        if (std::hypot(corner.x - from.x - t * dx, corner.y - from.y - t * dy) >
+            c.goal_position_tolerance_m + 1e-9)
+          break;
+        ++next_corner;
+      }
+    }
     switches += input.vehicle.actual_mode != previous_mode;
     const double distance =
         std::hypot(goal.x - input.vehicle.pose.x, goal.y - input.vehicle.pose.y);
@@ -72,13 +106,15 @@ void run(const std::string &scenario, unsigned seed) {
   std::cout << scenario << " seed=" << seed << " distance=" << distance << " yaw=" << yaw_error
             << " hold=" << hold << " stall_ticks=" << max_stalled << " switches=" << switches
             << " complete_tick=" << completed_tick << " cross_track=" << max_tracking_error
-            << std::endl;
+            << " min_clearance=" << minimum_clearance << std::endl;
   check(completed_tick >= 0, "controller failed to complete and settle within 40 seconds");
   check(distance <= c.goal_position_tolerance_m && yaw_error <= c.goal_yaw_tolerance_rad,
         "settled pose must remain inside goal tolerances");
   check(max_stalled < 30, "unfinished task stalled for three seconds");
   check(max_tracking_error < .3, "path tracking exceeded the regression corridor");
   check(switches <= 4, "excessive mode changes including terminal pose alignment");
+  if (scenario == "near_obstacles")
+    check(minimum_clearance < .2, "near-obstacle scenario must exercise the clearance region");
 }
 } // namespace
 int main(int argc, char **argv) {

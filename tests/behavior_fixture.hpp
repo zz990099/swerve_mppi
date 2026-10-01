@@ -2,12 +2,30 @@
 #include "swerve_mppi/executor.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 namespace swerve_mppi::test {
 inline void check(bool ok, const char *message) {
   if (!ok)
     throw std::runtime_error(message);
+}
+inline double measured_clearance(const Pose2d &from, const Pose2d &to,
+                                 const std::vector<CircleObstacle> &obstacles, const Config &c) {
+  double minimum = std::numeric_limits<double>::infinity();
+  const double dx = to.x - from.x, dy = to.y - from.y;
+  const double length2 = dx * dx + dy * dy;
+  for (const auto &obstacle : obstacles) {
+    const double t =
+        length2 > 1e-12
+            ? std::clamp(((obstacle.x - from.x) * dx + (obstacle.y - from.y) * dy) / length2, 0.0,
+                         1.0)
+            : 0.0;
+    minimum =
+        std::min(minimum, std::hypot(from.x + t * dx - obstacle.x, from.y + t * dy - obstacle.y) -
+                              obstacle.radius - c.robot_radius_m - c.collision_margin_m);
+  }
+  return minimum;
 }
 // Independent encoder fixture. It does not call DriveModel, TransitionModel,
 // Kinematics::forward or a controller prediction to advance its state.
@@ -66,7 +84,14 @@ inline ControllerInput scenario_input(const std::string &scenario) {
     input.reference_path = {{0, 0, 0}, {1, 0, 0}, {0, 0, 0}};
   else if (scenario == "loop")
     input.reference_path = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 0}};
-  else if (scenario == "reverse")
+  else if (scenario == "short_cusp")
+    input.reference_path = {{0, 0, 0}, {.2, 0, 0}, {0, 0, 0}};
+  else if (scenario == "short_loop")
+    input.reference_path = {{0, 0, 0}, {.1, 0, 0}, {.1, .1, 0}, {0, .1, 0}, {0, 0, 0}};
+  else if (scenario == "short_corner") {
+    input.reference_path = {{0, 0, 0}, {.2, 0, 0}, {.2, .08, 0}, {.12, .08, 0}};
+    input.vehicle.pose = {.12, 0, 0};
+  } else if (scenario == "reverse")
     input.reference_path = {{0, 0, 0}, {-1, 0, 0}};
   else if (scenario == "final_yaw") {
     input.reference_path = {{0, 0, 0}, {1, 0, 1.2}};
@@ -78,11 +103,18 @@ inline ControllerInput scenario_input(const std::string &scenario) {
           {x, .35 * std::sin(2 * std::acos(-1.0) * x / 3),
            std::atan(.35 * 2 * std::acos(-1.0) / 3 * std::cos(2 * std::acos(-1.0) * x / 3))});
     }
-  } else if (scenario == "curve") {
+  } else if (scenario == "curve" || scenario == "near_obstacles") {
     for (int i = 0; i <= 40; ++i) {
       double a = .7 * i / 40;
       input.reference_path.push_back({2 * std::sin(a), 2 * (1 - std::cos(a)), a});
     }
+    if (scenario == "near_obstacles")
+      for (int i = 0; i < 20; ++i) {
+        const double a = .7 * i / 19;
+        for (double offset : {-.75, .75})
+          input.obstacles.push_back(
+              {(2 + offset) * std::sin(a), 2 - (2 + offset) * std::cos(a), .05});
+      }
   } else
     throw std::runtime_error("unknown scenario");
   return input;
