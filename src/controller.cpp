@@ -9,9 +9,8 @@
 namespace swerve_mppi {
 Controller::Controller(const Config &config, std::shared_ptr<const TrajectoryValidator> validator)
     : validator_(validator ? std::move(validator) : std::make_shared<TrajectoryValidator>(config)),
-      safety_rollout_(config), safety_controls_(config.horizon_steps), config_(config),
-      model_(config), optimizer_(config, validator_), scheduler_(config), mode_manager_(config),
-      path_manager_(config), goal_manager_(config) {
+      safety_rollout_(config), config_(config), model_(config), optimizer_(config, validator_),
+      scheduler_(config), mode_manager_(config), path_manager_(config), goal_manager_(config) {
   validator_->require_compatible(config_);
 }
 
@@ -207,7 +206,7 @@ Output Controller::compute_goal(const ControllerInput &input, const GoalState &g
   if (switching && (!is_stopped(input.vehicle, config_) ||
                     input.vehicle.time_in_mode_s < config_.minimum_mode_dwell_s))
     return out;
-  if (!safe_control(input, {target_mode, 0, switching}, control))
+  if (switching && !safe_control(input, {target_mode, 0, true}, control))
     return planning_stop(input);
   if (switching)
     return request_mode(input, target_mode, control);
@@ -233,6 +232,14 @@ Output Controller::apply_control(const ControllerInput &input, Control control) 
   Output out;
   out.requested_mode = input.vehicle.actual_mode;
   out.steering_targets = input.vehicle.steering_angles;
+  // A zero intent is braking even when measured joints still imply motion.
+  // Preserve the executor's braking semantics instead of declaring a Drive.
+  if (std::hypot(control.vx, control.vy) < 1e-9 && std::abs(control.wz) < 1e-9) {
+    alignment_control_.reset();
+    optimizer_.reset();
+    out.action = is_stopped(input.vehicle, config_) ? Action::Hold : Action::Brake;
+    return out;
+  }
   const auto preview = model_.step(input.vehicle, control, config_.dt_s);
   if (!preview.valid) {
     out.failure_reason = FailureReason::ModelFailure;
@@ -250,6 +257,10 @@ Output Controller::apply_control(const ControllerInput &input, Control control) 
     out.action = is_stopped(input.vehicle, config_) ? Action::Hold : Action::Brake;
     out.phase = out.action == Action::Hold ? TransitionPhase::Aligning : TransitionPhase::Braking;
   } else {
+    // All policies enter Drive through this gate. Warm starts are accepted only
+    // after the selected first Drive and its entire stopping tail pass validation.
+    if (!safe_control(input, {input.vehicle.actual_mode, 0, false}, control))
+      return planning_stop(input);
     out.action = Action::Drive;
     out.body_command = preview.state.velocity;
     out.wheel_speed_targets = preview.wheel_speed_targets;
@@ -259,9 +270,7 @@ Output Controller::apply_control(const ControllerInput &input, Control control) 
 }
 bool Controller::safe_control(const ControllerInput &input, const Branch &branch,
                               const Control &control) {
-  std::fill(safety_controls_.begin(), safety_controls_.end(), Control{});
-  safety_controls_.front() = control;
-  safety_rollout_.generate(input.vehicle, branch, safety_controls_, safety_trace_);
+  safety_rollout_.generate_continuation(input.vehicle, branch, control, safety_trace_);
   return validator_->check(input, safety_trace_) == TrajectoryStatus::Valid &&
          is_stopped(safety_trace_.final_state, config_);
 }

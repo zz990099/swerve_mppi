@@ -1,29 +1,68 @@
 #include "swerve_mppi/rollout.hpp"
 #include "validation.hpp"
+#include <algorithm>
 #include <cmath>
 
 namespace swerve_mppi {
 RolloutEngine::RolloutEngine(const Config &config)
     : config_(config), model_(config), transition_(config) {}
 void RolloutEngine::generate_stop(const VehicleState &initial, Trajectory &out) const {
+  stopping_rollout(initial, {initial.actual_mode, 0, false}, nullptr, out);
+}
+void RolloutEngine::generate_continuation(const VehicleState &initial, const Branch &branch,
+                                          const Control &first_control, Trajectory &out) const {
+  stopping_rollout(initial, branch, &first_control, out);
+}
+void RolloutEngine::stopping_rollout(const VehicleState &initial, const Branch &branch,
+                                     const Control *first_control, Trajectory &out) const {
   out.valid = false;
   out.poses.clear();
   out.controls.clear();
   out.active_controls.clear();
-  out.branch = {initial.actual_mode, 0, false};
+  out.branch = branch;
   out.final_state = initial;
-  if (!detail::valid_vehicle(initial, config_))
+  if (!detail::valid_vehicle(initial, config_) ||
+      (first_control &&
+       (!initial.mode_confirmed || initial.mode_fault || !std::isfinite(first_control->vx) ||
+        !std::isfinite(first_control->vy) || !std::isfinite(first_control->wz))) ||
+      (branch.switches &&
+       (!first_control || branch.switch_step != 0 || branch.mode == initial.actual_mode ||
+        initial.time_in_mode_s < config_.minimum_mode_dwell_s - 1e-9)))
     return;
-  out.poses.reserve(config_.horizon_steps + 1);
   out.poses.push_back(initial.pose);
-  out.controls.assign(config_.horizon_steps, Control{});
-  out.active_controls.assign(config_.horizon_steps, false);
-  for (std::size_t step = 0; step < config_.horizon_steps; ++step) {
-    const auto next = model_.step(out.final_state, {}, config_.dt_s);
+  std::size_t steps = 0;
+  if (branch.switches &&
+      transition_.rollout(out.final_state, branch.mode, steps, config_.stopping_horizon_steps,
+                          &out.poses, *first_control) < 0)
+    return;
+  out.controls.resize(steps);
+  out.active_controls.resize(steps, false);
+  const std::size_t alignment_begin = steps;
+  bool pending = first_control != nullptr;
+  // Include residual movement below the executor's stopped thresholds. Those
+  // thresholds permit handover, but do not certify zero remaining displacement.
+  auto at_rest = [&]() {
+    return out.final_state.velocity.vx == 0 && out.final_state.velocity.vy == 0 &&
+           out.final_state.velocity.wz == 0 &&
+           std::all_of(out.final_state.wheel_speeds.begin(), out.final_state.wheel_speeds.end(),
+                       [](double speed) { return speed == 0; });
+  };
+  while (pending || !at_rest()) {
+    if (steps >= config_.stopping_horizon_steps ||
+        (pending && (steps - alignment_begin) * config_.dt_s > config_.confirmation_timeout_s))
+      return;
+    const Control control =
+        pending ? model_.project(*first_control, out.final_state.actual_mode) : Control{};
+    const auto next = model_.step(out.final_state, control, config_.dt_s);
     if (!next.valid)
       return;
     out.final_state = next.state;
     out.poses.push_back(next.state.pose);
+    out.controls.push_back(control);
+    out.active_controls.push_back(pending);
+    if (!next.aligning)
+      pending = false;
+    ++steps;
   }
   out.valid = true;
 }

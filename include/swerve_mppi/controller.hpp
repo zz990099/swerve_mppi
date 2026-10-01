@@ -23,7 +23,6 @@ private:
   bool safe_control(const ControllerInput &input, const Branch &branch, const Control &control);
   std::shared_ptr<const TrajectoryValidator> validator_;
   RolloutEngine safety_rollout_;
-  std::vector<Control> safety_controls_;
   Trajectory safety_trace_;
   Config config_;
   DriveModel model_;

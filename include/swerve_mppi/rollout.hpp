@@ -30,7 +30,14 @@ public:
   // during an unconfirmed mode transition; it never synthesizes confirmation.
   void generate_stop(const VehicleState &initial, Trajectory &out) const;
 
+  // Commit entry/alignment through the first Drive, then brake to zero. Uses
+  // stopping_horizon_steps rather than the optimization horizon; fails closed.
+  void generate_continuation(const VehicleState &initial, const Branch &branch,
+                             const Control &first_control, Trajectory &out) const;
+
 private:
+  void stopping_rollout(const VehicleState &initial, const Branch &branch,
+                        const Control *first_control, Trajectory &out) const;
   Config config_;
   DriveModel model_;
   TransitionModel transition_;

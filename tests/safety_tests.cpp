@@ -179,6 +179,58 @@ void test_safe_terminal_braking_retains_navigation_status() {
             !executor.update(command, in.vehicle).feedback.fault,
         "a safe normal terminal brake must not become a blocked planning stop");
 }
+void test_drive_requires_complete_stopping_continuation() {
+  auto c = deterministic();
+  c.horizon_steps = 2;
+  c.max_linear_decel_mps2 = .1;
+  for (double goal : {2.0, .2}) {
+    Controller controller(c);
+    ModeExecutor executor(c);
+    auto in = straight();
+    in.reference_path.back().x = goal;
+    in.obstacles = {{.64, 0, .05}};
+    const auto blocked = controller.compute(in);
+    check(blocked.action == Action::Hold &&
+              blocked.failure_reason == FailureReason::NoFeasiblePlan &&
+              !executor.update(blocked, in.vehicle).feedback.fault,
+          "tracking and capture must reject a first Drive whose full stop hits an obstacle");
+    in.obstacles.clear();
+    in.vehicle.stamp_s += c.dt_s;
+    const auto safe = controller.compute(in);
+    check(safe.action == Action::Drive && !executor.update(safe, in.vehicle).feedback.fault,
+          "a short MPPI horizon must allow a safe stop longer than its prediction horizon");
+  }
+  c.stopping_horizon_steps = 2;
+  Controller limited(c);
+  auto in = straight();
+  check(limited.compute(in).action == Action::Hold,
+        "an exhausted stopping budget must reject Drive, even with no obstacles");
+  in.vehicle.velocity.vx = .2;
+  in.vehicle.wheel_speeds.fill(.2);
+  in.vehicle.stamp_s += c.dt_s;
+  const auto fault = limited.compute(in);
+  check(fault.action == Action::SafeStop &&
+            fault.failure_reason == FailureReason::UnsafeStoppingTrajectory,
+        "an incomplete current stop must fail closed rather than pretending to be stopped");
+}
+void test_zero_intent_braking_executes_with_measured_residual() {
+  auto c = deterministic();
+  c.path_lookahead_m = .1;
+  c.max_wheel_accel_mps2 = .1;
+  c.samples_per_branch = c.iterations = 1;
+  Controller controller(c);
+  ModeExecutor executor(c);
+  auto in = straight();
+  in.vehicle.wheel_speeds = {.3, .24, .24, .3};
+  in.vehicle.velocity = Kinematics(c).forward(in.vehicle.wheel_speeds, in.vehicle.steering_angles);
+  in.reference_path = {{0, 0, 0}, {0, 1.4, 0}};
+  const auto command = controller.compute(in);
+  check(command.action == Action::Brake && command.failure_reason == FailureReason::None &&
+            command.steering_targets == in.vehicle.steering_angles &&
+            command.wheel_speed_targets == std::array<double, 4>{} &&
+            command.body_command.vx == 0 && !executor.update(command, in.vehicle).feedback.fault,
+        "zero intent with a measured rolling residual must remain a healthy braking action");
+}
 class RejectAll final : public TrajectoryConstraint {
 public:
   bool allows(const ControllerInput &, const Trajectory &) const override { return false; }
@@ -242,8 +294,9 @@ void test_stop_rollout_preserves_unconfirmed_feedback() {
   RolloutEngine engine(c);
   Trajectory stop;
   engine.generate_stop(in.vehicle, stop);
-  check(stop.valid && stop.poses.size() == c.horizon_steps + 1 && is_stopped(stop.final_state, c) &&
-            !stop.final_state.mode_confirmed && stop.final_state.mode_request_id == 17 &&
+  check(stop.valid && stop.poses.size() > 1 && stop.poses.size() <= c.stopping_horizon_steps + 1 &&
+            is_stopped(stop.final_state, c) && !stop.final_state.mode_confirmed &&
+            stop.final_state.mode_request_id == 17 &&
             stop.final_state.actual_mode == in.vehicle.actual_mode &&
             stop.final_state.steering_angles == in.vehicle.steering_angles,
         "stopping prediction must preserve measured mode, request and confirmation state");
@@ -302,6 +355,8 @@ void test_shared_hard_constraints() {
 } // namespace
 int main() {
   try {
+    test_drive_requires_complete_stopping_continuation();
+    test_zero_intent_braking_executes_with_measured_residual();
     test_temporary_failure_stops_and_recovers();
     test_unsafe_stopping_latches_fault();
     test_capture_checks_one_command_then_stop();

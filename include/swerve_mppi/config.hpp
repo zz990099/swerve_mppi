@@ -51,6 +51,9 @@ struct Config {
   // One compute call per model tick; arbitrary period ratios are not implemented.
   double dt_s = 0.1;
   std::size_t horizon_steps = 20;
+  // Independent bounded budget for alignment, first Drive and a complete stop.
+  // Exhaustion rejects the continuation; it never implies a stopped state.
+  std::size_t stopping_horizon_steps = 200;
   std::size_t samples_per_branch = 80;
   std::size_t iterations = 2;
   double temperature = 0.35;

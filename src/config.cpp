@@ -78,7 +78,7 @@ void validate(const Config &c) {
       c.steering_tolerance_rad >= c.steering_limit_rad ||
       c.drive_steering_limit_rad < c.steering_tolerance_rad ||
       c.drive_steering_limit_rad > c.steering_limit_rad || c.horizon_steps < 2 ||
-      c.samples_per_branch < 1 || c.iterations < 1) {
+      c.stopping_horizon_steps < 2 || c.samples_per_branch < 1 || c.iterations < 1) {
     throw std::invalid_argument("MPPI horizon, sample count, and iterations invalid");
   }
 }
