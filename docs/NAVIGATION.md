@@ -38,12 +38,18 @@ will replace them.
 
 ## Path progress
 
-PathManager stores cumulative arc length and projects measured XY onto a bounded
-forward interval. Progress never decreases within one task. The first interval
-has path_search_window_m length; subsequent intervals are limited to the smaller
-of that window and measured displacement plus path_progress_slack_m. Equal-distance
-matches keep the earlier arc branch. This avoids a global nearest-point jump at
-self-intersections; it is not global relocalization or unrestricted loop matching.
+PathManager stores cumulative arc length and the current segment. Initial matching
+is anchored to the first nonzero segment, bounded by path_search_window_m. Later
+segments become eligible in waypoint order after measured motion captures their
+shared endpoint, or crosses its endpoint plane for a smooth sampling point.
+Sharp corners/reversals require XY capture within position tolerance by measured
+XY or the segment between successive measurements. Smooth samples are not mandatory
+precision waypoints. This permits multiple dense waypoints per tick without
+selecting a nearby return leg at a crossing, foldback or short loop.
+
+Progress never decreases within one task. Subsequent forward intervals are limited
+to the smaller of path_search_window_m and measured displacement plus
+path_progress_slack_m. This is not global relocalization or unrestricted loop matching.
 Start near the beginning of the task path. For a major localization jump, submit
 a new task path beginning near the corrected pose.
 

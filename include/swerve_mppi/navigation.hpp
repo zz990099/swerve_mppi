@@ -30,6 +30,8 @@ private:
   PathHeadingPolicy heading_policy_ = PathHeadingPolicy::FollowPath;
   Pose2d previous_pose_;
   double progress_ = 0;
+  // Endpoint of the current segment. Arc projection alone cannot advance it.
+  std::size_t segment_ = 1;
 };
 
 struct GoalState {

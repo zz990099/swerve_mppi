@@ -15,6 +15,15 @@ bool same_path(const std::vector<Pose2d> &a, const std::vector<Pose2d> &b) {
       return false;
   return true;
 }
+double distance_to_motion(const Pose2d &point, const Pose2d &from, const Pose2d &to) {
+  const double dx = to.x - from.x, dy = to.y - from.y;
+  const double length2 = dx * dx + dy * dy;
+  const double t =
+      length2 > 1e-12
+          ? std::clamp(((point.x - from.x) * dx + (point.y - from.y) * dy) / length2, 0.0, 1.0)
+          : 0.0;
+  return std::hypot(point.x - from.x - t * dx, point.y - from.y - t * dy);
+}
 } // namespace
 PathManager::PathManager(const Config &config) : config_(config) { validate(config); }
 Pose2d PathManager::interpolate(double distance) const {
@@ -49,6 +58,9 @@ PathReference PathManager::update(const ControllerInput &input) {
     path_id_ = input.path_id;
     heading_policy_ = input.heading_policy;
     progress_ = 0;
+    segment_ = 1;
+    while (segment_ < path_.size() && lengths_[segment_] < 1e-12)
+      ++segment_;
     previous_pose_ = input.vehicle.pose;
   }
   const auto &pose = input.vehicle.pose;
@@ -57,35 +69,47 @@ PathReference PathManager::update(const ControllerInput &input) {
                                     : std::min(config_.path_search_window_m,
                                                displacement + config_.path_progress_slack_m);
   const double upper = std::min(lengths_.back(), progress_ + window);
-  double best_distance = std::numeric_limits<double>::infinity();
-  double best_progress = progress_;
-  // Search in arc order; equal-distance candidates preserve the earlier branch.
-  const auto first = std::max<std::size_t>(
-      1, std::upper_bound(lengths_.begin(), lengths_.end(), progress_) - lengths_.begin());
-  for (std::size_t i = first; i < path_.size() && lengths_[i - 1] <= upper; ++i) {
+  // Match the current segment first. A later segment becomes eligible only
+  // after measured motion captures/passes their shared endpoint, in waypoint order.
+  // Initial matching stays on the first nonzero segment even for short loops.
+  for (std::size_t i = segment_; i < path_.size() && lengths_[i - 1] <= upper; ++i) {
     const double length = lengths_[i] - lengths_[i - 1];
-    if (length < 1e-12 || lengths_[i] < progress_ || lengths_[i - 1] > upper)
+    if (length < 1e-12) {
+      segment_ = i + 1;
       continue;
+    }
     const double low = std::max(0.0, (progress_ - lengths_[i - 1]) / length);
     const double high = std::min(1.0, (upper - lengths_[i - 1]) / length);
     const double dx = path_[i].x - path_[i - 1].x, dy = path_[i].y - path_[i - 1].y;
-    const double t = std::clamp(((pose.x - path_[i - 1].x) * dx + (pose.y - path_[i - 1].y) * dy) /
-                                    (length * length),
-                                low, high);
-    const double distance =
-        std::hypot(pose.x - path_[i - 1].x - t * dx, pose.y - path_[i - 1].y - t * dy);
-    if (distance < best_distance - 1e-9) {
-      best_distance = distance;
-      best_progress = lengths_[i - 1] + t * length;
-    }
+    const double projection =
+        ((pose.x - path_[i - 1].x) * dx + (pose.y - path_[i - 1].y) * dy) / (length * length);
+    const double t = std::clamp(projection, low, high);
+    progress_ = std::max(progress_, lengths_[i - 1] + t * length);
+    std::size_t next = i + 1;
+    while (next < path_.size() && lengths_[next] - lengths_[i] < 1e-12)
+      ++next;
+    const double bx = next < path_.size() ? path_[next].x - path_[i].x : dx;
+    const double by = next < path_.size() ? path_[next].y - path_[i].y : dy;
+    const bool sharp = std::abs(std::atan2(dx * by - dy * bx, dx * bx + dy * by)) >
+                       config_.path_lookahead_turn_rad;
+    // Smooth sampling points are passed by crossing their endpoint plane; they
+    // are not mandatory precision waypoints. Sharp corners still need XY capture.
+    const bool passed = !sharp && projection >= 1.0;
+    const bool captured = !out.changed && lengths_[i] <= upper + 1e-9 &&
+                          lengths_[i] - progress_ <= config_.goal_position_tolerance_m &&
+                          (passed || distance_to_motion(path_[i], previous_pose_, pose) <=
+                                         config_.goal_position_tolerance_m);
+    if (!captured)
+      break;
+    progress_ = lengths_[i];
+    segment_ = i + 1;
   }
-  progress_ = std::clamp(best_progress, progress_, lengths_.back());
   double end = std::min(lengths_.back(), progress_ + config_.path_lookahead_m);
   // Do not look through a reversal or sharp corner: its distant endpoint can
   // point backwards before the corner has actually been reached.
   double accumulated_turn = 0;
-  for (std::size_t i = first; i + 1 < path_.size() && lengths_[i] < end; ++i) {
-    if (lengths_[i] <= progress_ + 1e-9 || lengths_[i] >= end)
+  for (std::size_t i = segment_; i + 1 < path_.size() && lengths_[i] < end; ++i) {
+    if (lengths_[i] < progress_ - 1e-9 || lengths_[i] >= end)
       continue;
     const double ax = path_[i].x - path_[i - 1].x, ay = path_[i].y - path_[i - 1].y;
     std::size_t next = i + 1;
@@ -132,6 +156,7 @@ void PathManager::reset() {
   path_.clear();
   lengths_.clear();
   progress_ = 0;
+  segment_ = 1;
 }
 
 GoalManager::GoalManager(const Config &config) : config_(config) { validate(config); }

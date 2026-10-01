@@ -68,6 +68,61 @@ void test_cusp_target() {
   check(p.progress_m >= 1 && p.local_path.back().x < .97,
         "captured cusp must advance to the reverse path segment");
 }
+void test_short_paths_preserve_segment_order() {
+  Config c;
+  const std::vector<std::vector<Pose2d>> paths = {
+      {{0, 0, 0}, {.2, 0, 0}, {.2, .2, 0}, {0, .2, 0}, {0, 0, 0}},
+      {{0, 0, 0}, {.25, .25, 0}, {0, .25, 0}, {.25, 0, 0}, {0, 0, 0}},
+      {{0, 0, 0}, {.4, 0, 0}, {.4, .04, 0}, {0, .04, 0}}};
+  for (const auto &path : paths) {
+    PathManager manager(c);
+    Controller controller(c);
+    ControllerInput in;
+    in.reference_path = path;
+    in.vehicle.pose = {.01, .03, 0};
+    in.vehicle.time_in_mode_s = 2;
+    for (int tick = 0; tick < 8; ++tick) {
+      in.vehicle.stamp_s = 1 + tick * c.dt_s;
+      const auto reference = manager.update(in);
+      check(reference.progress_m < .05 && reference.remaining_m > .5,
+            "short loops/crossings/foldbacks cannot match a nearby later segment");
+      check(!controller.compute(in).goal_reached,
+            "a stationary robot near a short path endpoint cannot complete the task");
+    }
+  }
+  PathManager manager(c);
+  ControllerInput in;
+  in.reference_path = paths.front();
+  in.vehicle.pose = {0, .02, 0};
+  manager.update(in);
+  for (std::size_t i = 1; i < in.reference_path.size(); ++i) {
+    in.vehicle.pose = in.reference_path[i];
+    const auto reference = manager.update(in);
+    check(std::abs(reference.progress_m - .2 * i) < 1e-9,
+          "captured short-loop vertices must advance in order");
+  }
+  check(manager.update(in).remaining_m == 0,
+        "an actually traversed short loop must reach the terminal segment");
+  in.reference_path = {{0, 0, 0}, {.3, 0, 0}, {.3, .3, 0}};
+  in.vehicle.pose = {};
+  manager.update(in);
+  in.vehicle.pose = {.25, .15, 0};
+  const auto reference = manager.update(in);
+  check(reference.progress_m <= .25 + 1e-9 && reference.corner_target &&
+            reference.local_path.back().y == 0,
+        "projection cannot pass an uncaptured corner even when its next leg is nearer");
+}
+void test_dense_segment_capture() {
+  Config c;
+  PathManager manager(c);
+  ControllerInput in;
+  in.reference_path = {{0, 0, 0},   {0, 0, 0},   {.02, 0, 0}, {.04, 0, 0},
+                       {.06, 0, 0}, {.08, 0, 0}, {.1, 0, 0},  {1, 0, 0}};
+  manager.update(in);
+  in.vehicle.pose = {.12, .15, 0};
+  check(std::abs(manager.update(in).progress_m - .12) < 1e-9,
+        "smooth samples must advance in order despite cross-track error");
+}
 void test_completion_requires_measured_stop() {
   Config c;
   GoalManager manager(c);
@@ -168,6 +223,8 @@ int main() {
     test_completion_requires_measured_stop();
     test_task_restart_and_stall();
     test_cusp_target();
+    test_short_paths_preserve_segment_order();
+    test_dense_segment_capture();
     test_replan_execution_boundaries();
     std::cout << "Navigation regressions passed\n";
     return 0;
