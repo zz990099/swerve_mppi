@@ -371,6 +371,30 @@ void test_measured_steering_tolerance() {
   check(incompatible.update(command, s).feedback.fault,
         "tracking tolerance cannot admit a body twist from the wrong mode");
 }
+void test_nonfinite_drive_commands() {
+  Config c;
+  VehicleState s;
+  s.stamp_s = 1;
+  for (double bad : {std::numeric_limits<double>::quiet_NaN(),
+                     std::numeric_limits<double>::infinity(),
+                     -std::numeric_limits<double>::infinity()}) {
+    for (int axis = 0; axis < 3; ++axis) {
+      ModeExecutor executor(c);
+      Output command;
+      command.action = Action::Drive;
+      command.wheel_speed_targets.fill(.1);
+      command.body_command = {.1, 0, 0};
+      if (axis == 0) command.body_command.vx = bad;
+      if (axis == 1) command.body_command.vy = bad;
+      if (axis == 2) command.body_command.wz = bad;
+      const auto result = executor.update(command, s);
+      check(result.feedback.fault && result.action == Action::SafeStop,
+            "every nonfinite body command component must latch a fault");
+      for (double speed : result.wheel_speed_targets)
+        check(speed == 0, "invalid drive must never reach wheel targets");
+    }
+  }
+}
 void test_curved_ackermann_and_spin_drive() {
   Config c;
   c.minimum_mode_dwell_s = 100;
@@ -426,6 +450,7 @@ int main() {
     test_transition_prediction_deadline();
     test_controller_executor_lateral_loop();
     test_measured_steering_tolerance();
+    test_nonfinite_drive_commands();
     test_curved_ackermann_and_spin_drive();
     test_rollout_entry_direction();
     std::cout << "Execution regressions passed\n";

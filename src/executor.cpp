@@ -136,6 +136,8 @@ ExecutionResult ModeExecutor::update(const Output &command, const VehicleState &
   switch (command.action) {
   case Action::Drive: {
     if (command.requested_mode != actual_mode_ ||
+        !std::isfinite(command.body_command.vx) || !std::isfinite(command.body_command.vy) ||
+        !std::isfinite(command.body_command.wz) ||
         !detail::valid_steering(command.steering_targets, config_) ||
         !detail::steering_aligned(measured.steering_angles, command.steering_targets, config_))
       return fault();
