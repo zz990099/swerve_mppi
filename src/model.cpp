@@ -7,6 +7,28 @@
 namespace swerve_mppi {
 namespace {
 constexpr double kEpsilon = 1e-9;
+// Split the velocity segment at its minimum speed. Traversing the braking
+// part consumes deceleration time before any remaining acceleration time.
+double braking_fraction(double ix, double iy, double fx, double fy) {
+  const double dx = fx - ix, dy = fy - iy;
+  const double squared = dx * dx + dy * dy;
+  return squared > 0.0 ? std::clamp(-(ix * dx + iy * dy) / squared, 0.0, 1.0) : 0.0;
+}
+double velocity_fraction(double ix, double iy, double fx, double fy, double accel, double decel,
+                         double dt) {
+  const double length = std::hypot(fx - ix, fy - iy);
+  if (length < kEpsilon)
+    return 1.0;
+  const double braking = length * braking_fraction(ix, iy, fx, fy);
+  const double brake_time = braking / decel;
+  const double distance = dt <= brake_time ? dt * decel : braking + (dt - brake_time) * accel;
+  return std::min(1.0, distance / length);
+}
+double velocity_change_time(double ix, double iy, double fx, double fy, double accel,
+                            double decel) {
+  const double fraction = braking_fraction(ix, iy, fx, fy);
+  return std::hypot(fx - ix, fy - iy) * (fraction / decel + (1.0 - fraction) / accel);
+}
 void integrate(Pose2d &pose, const Twist2d &v, double dt) {
   const double a = v.wz * dt;
   double dx = v.vx * dt, dy = v.vy * dt;
@@ -142,19 +164,11 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
   const Twist2d initial = kinematics_.forward(start.wheel_speeds, start.steering_angles);
   const Twist2d desired =
       kinematics_.forward(target, ready ? wheels.angles : state.steering_angles);
-  const bool slowing = std::hypot(desired.vx, desired.vy) < std::hypot(initial.vx, initial.vy);
-  const double linear_rate =
-      slowing ? config_.max_linear_decel_mps2 : config_.max_linear_accel_mps2;
-  const double angular_rate = std::abs(desired.wz) < std::abs(initial.wz)
-                                  ? config_.max_angular_decel_radps2
-                                  : config_.max_angular_accel_radps2;
-  const double delta_linear = std::hypot(desired.vx - initial.vx, desired.vy - initial.vy);
-  const double delta_angular = std::abs(desired.wz - initial.wz);
-  double fraction = 1.0;
-  if (delta_linear > kEpsilon)
-    fraction = std::min(fraction, linear_rate * dt / delta_linear);
-  if (delta_angular > kEpsilon)
-    fraction = std::min(fraction, angular_rate * dt / delta_angular);
+  double fraction =
+      std::min(velocity_fraction(initial.vx, initial.vy, desired.vx, desired.vy,
+                                 config_.max_linear_accel_mps2, config_.max_linear_decel_mps2, dt),
+               velocity_fraction(initial.wz, 0.0, desired.wz, 0.0, config_.max_angular_accel_radps2,
+                                 config_.max_angular_decel_radps2, dt));
   for (std::size_t i = 0; i < 4; ++i) {
     const double delta = std::abs(target[i] - start.wheel_speeds[i]);
     if (delta > kEpsilon)
@@ -176,16 +190,12 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
             start.steering_angles[i] + fraction * (wheels.angles[i] - start.steering_angles[i]);
     }
     state.velocity = kinematics_.forward(state.wheel_speeds, state.steering_angles);
-    const double actual_linear_rate =
-        std::hypot(state.velocity.vx, state.velocity.vy) < std::hypot(initial.vx, initial.vy)
-            ? config_.max_linear_decel_mps2
-            : config_.max_linear_accel_mps2;
-    const double actual_angular_rate = std::abs(state.velocity.wz) < std::abs(initial.wz)
-                                           ? config_.max_angular_decel_radps2
-                                           : config_.max_angular_accel_radps2;
-    if (std::hypot(state.velocity.vx - initial.vx, state.velocity.vy - initial.vy) <=
-            actual_linear_rate * dt + 1e-9 &&
-        std::abs(state.velocity.wz - initial.wz) <= actual_angular_rate * dt + 1e-9)
+    if (velocity_change_time(initial.vx, initial.vy, state.velocity.vx, state.velocity.vy,
+                             config_.max_linear_accel_mps2,
+                             config_.max_linear_decel_mps2) <= dt + 1e-9 &&
+        velocity_change_time(initial.wz, 0.0, state.velocity.wz, 0.0,
+                             config_.max_angular_accel_radps2,
+                             config_.max_angular_decel_radps2) <= dt + 1e-9)
       break;
     if (attempt == 60) {
       out.valid = false;

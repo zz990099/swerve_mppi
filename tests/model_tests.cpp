@@ -61,6 +61,67 @@ void test_braking_and_wheel_consistency() {
   check(std::hypot(measured.vx, measured.vy) <= c.max_linear_accel_mps2 * .1 + 1e-9,
         "body linear acceleration must remain bounded");
 }
+// Independent signed-speed time budget: crossing zero requires braking first.
+double minimum_speed_change_time(double before, double after, double accel, double decel) {
+  if (before * after < 0)
+    return std::abs(before) / decel + std::abs(after) / accel;
+  return std::abs(after - before) / (std::abs(after) < std::abs(before) ? decel : accel);
+}
+void test_reversal_time_budget() {
+  for (double decel : {.1, .9}) {
+    Config c;
+    c.max_linear_decel_mps2 = c.max_angular_decel_radps2 = decel;
+    c.max_linear_accel_mps2 = c.max_angular_accel_radps2 = decel == .1 ? .9 : .1;
+    DriveModel model(c);
+    Kinematics k(c);
+    for (auto mode : {DriveMode::DualAckermann, DriveMode::Crab, DriveMode::Spin}) {
+      for (double direction : {-1.0, 1.0}) {
+        for (double speed : {.03, .3}) {
+          for (double target : {.04, .4}) {
+            for (double dt : {.05, .1, .2}) {
+              VehicleState state;
+              state.actual_mode = mode;
+              Control initial, intent;
+              if (mode == DriveMode::Spin) {
+                initial.wz = direction * speed;
+                intent.wz = -direction * target;
+              } else if (mode == DriveMode::Crab) {
+                initial.vy = direction * speed;
+                intent.vy = -direction * target;
+              } else {
+                initial.vx = direction * speed;
+                intent.vx = -direction * target;
+              }
+              const auto wheels = k.inverse(initial, {});
+              state.wheel_speeds = wheels.speeds;
+              state.steering_angles = wheels.angles;
+              state.velocity = {initial.vx, initial.vy, initial.wz};
+              const auto next = model.step(state, intent, dt);
+              check(next.valid && !next.aligning, "signed reversal must remain a drive step");
+              const double after = mode == DriveMode::Spin   ? next.state.velocity.wz
+                                   : mode == DriveMode::Crab ? next.state.velocity.vy
+                                                             : next.state.velocity.vx;
+              check(minimum_speed_change_time(direction * speed, after, c.max_linear_accel_mps2,
+                                              decel) <= dt + 1e-8,
+                    "reversal cannot spend less than the independent braking/acceleration budget");
+            }
+          }
+        }
+      }
+    }
+  }
+  Config c;
+  c.max_linear_decel_mps2 = .1;
+  ControllerInput in;
+  in.vehicle.stamp_s = 1;
+  in.vehicle.time_in_mode_s = 2;
+  in.vehicle.velocity.vx = .03;
+  in.vehicle.wheel_speeds.fill(.03);
+  in.reference_path = {{0, 0, 0}, {-.2, 0, 0}};
+  const auto out = Controller(c).compute(in);
+  check(out.action == Action::Drive && out.body_command.vx >= .02 - 1e-8,
+        "reverse capture must brake within the configured time budget before reversing");
+}
 void test_braking_before_steering() {
   Config c;
   DriveModel model(c);
@@ -184,6 +245,7 @@ int main() {
   try {
     test_bounded_kinematics();
     test_braking_and_wheel_consistency();
+    test_reversal_time_budget();
     test_braking_before_steering();
     test_continuous_steering_limits();
     test_rate_limits_and_projection();
