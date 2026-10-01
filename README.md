@@ -98,6 +98,8 @@ completed-task external motion and unconfirmed mode requests. Stopping predictio
 preserve measured mode feedback and never synthesize confirmation. New closed loops
 cover short foldbacks, short squares, near-terminal corners and a close obstacle
 corridor. Rebuild consumers against 0.8 after the public navigation/rollout additions.
+See [docs/CORE_REVIEW_VALIDATION.md](docs/CORE_REVIEW_VALIDATION.md) for the current
+regression results and committed Release measurement matrix.
 
 Version 0.7 fixes segment-order matching on short loops/crossings/foldbacks,
 unifies tracking/corner/terminal alignment and preserves switch-entry intent through

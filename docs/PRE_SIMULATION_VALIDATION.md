@@ -53,7 +53,7 @@ begin with accepted positive Drive before loss/replay checks, exercise a complet
 guarded lateral handshake/capture loop, and verify old mode IDs remain rejected
 after transport-session renewal.
 
-Historical 0.6 timing CSVs remain unchanged. Version 0.7 does not claim identical
+Historical 0.6 measurement summaries in VALIDATION.md remain unchanged. Version 0.7 does not claim identical
 completion ticks or a new worst-case solve-time bound; its behavior acceptance
 criteria and allocation gate were rerun.
 
@@ -71,3 +71,6 @@ physical watchdog independent of process liveness. Braking/steering dynamics,
 slip and feedback latency still need calibration against an independent plant.
 Circular footprints, one-switch horizons, seeded entry directions and lack of a
 solver deadline remain documented model limits, not completed simulation work.
+
+For the subsequent 0.8 target-eligibility and stopping corrections, current
+validation and committed timing CSVs, see CORE_REVIEW_VALIDATION.md.

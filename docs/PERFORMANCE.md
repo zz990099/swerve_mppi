@@ -1,8 +1,11 @@
-# Core workspaces, diagnostics and measurement (0.6)
+# Core workspaces, diagnostics and measurement (0.8)
 
 Stage 3 covers standalone core performance and observability. No simulator,
 ROS adapter, transport protocol or hardware integration was added. Tracking
 parameters, completion tolerances and execution interlocks retain their 0.5 defaults.
+Version 0.8 adds current-target slowdown, terminal eligibility and unified stopping
+validation. Measurements below use that implementation. Historical stage 3 results
+and tuning conclusions remain identified as 0.6 evidence in VALIDATION.md.
 
 ## Reproduce a measurement
 
@@ -15,13 +18,19 @@ cmake --build build-release --parallel 2
 ./build-release/swerve_mppi_benchmark all > core.csv
 ./build-release/swerve_mppi_benchmark dense_curve 42 > dense.csv
 ./build-release/swerve_mppi_benchmark obstacles 42 > obstacles.csv
+./build-release/swerve_mppi_benchmark near_obstacles 42 > near.csv
 ```
 
-`all` runs the nine behavior scenarios with seeds 1, 7, 42, 73 and 101. A named
+`all` runs thirteen behavior scenarios with seeds 1, 7, 42, 73 and 101: the original
+nine, three short ordered paths and near_obstacles. A named
 scenario may use one seed or all five. The dense_curve case increases the same
-2 m radius arc from 41 to 401 points; obstacles adds forty distant circular
-obstacles to the regular arc. These stress computational scaling, not avoidance
-quality. They are separate from `all` and the normal completion regression matrix.
+2 m radius arc from 41 to 401 points; the legacy obstacles name adds forty distant
+circles to the regular arc. These stress computational scaling and remain separate
+from `all`. near_obstacles places forty circles in two rows 0.75 m either side of
+the regular arc, leaving 0.15 m nominal clearance after radius and margin inflation.
+It exercises collision rejection and clearance costs close to measured motion.
+Its five-seed completion and positive measured segment clearance run in CTest.
+This corridor does not establish global detour planning around a blocked path.
 
 For a controlled parameter experiment, the final positional arguments override
 lookahead and path weight, for example:
@@ -43,6 +52,10 @@ C++ allocation mean/peak, and planning-only P95/allocation mean. Planning-only
 means compute calls that actually optimized at least one branch, including calls
 that subsequently enter alignment or request a switch. Keeping that subset
 separate avoids hiding MPPI cost behind cheap Hold/capture/transition calls.
+Two additional columns report Waiting calls and minimum inflated-circle clearance
+along measured per-tick motion segments. Clearance is blank when there are no
+obstacles. It checks the independent fixture observations, not a predicted rollout;
+continuous-time dynamics and noncircular footprints require independent validation.
 
 The allocation instrument replaces ordinary new/new[] in the benchmark executable
 only. It counts attempts that allocate successfully while compute executes; it
@@ -119,7 +132,9 @@ are covered by the optimizer regressions.
 
 ## Measurement evidence and tuning decisions
 
-See VALIDATION.md and benchmarks/*.csv for the measured run, baseline and limits.
+See CORE_REVIEW_VALIDATION.md and benchmarks/*v0.8_release.csv for the current
+measurement, source commit, environment and acceptance results. VALIDATION.md
+records the historical stage 3 baseline and tuning probes.
 Allocation peaks are a repeatable structural comparison. Timing on a shared host
 varies; these samples do not establish a hard real-time or worst-case guarantee.
 
@@ -136,7 +151,8 @@ objectives using these diagnostics, including broader blocked-path and
 curvature/direction cases. Retain all mode-confirmation/stop/collision gates when
 changing proposals; a lower path error in one case is insufficient acceptance.
 
-These measurements are historical 0.6 evidence. Version 0.7 changes path matching
+The tuning measurements above are historical 0.6 evidence. Version 0.7 changes path matching
 and capture safety semantics; it does not claim preservation of every 0.6 completion
 tick or reuse its timing values as new measurements. Its allocation smoke gate and
 behavior matrix are rerun; see PRE_SIMULATION_VALIDATION.md.
+Version 0.8 has a fresh committed measurement matrix; see CORE_REVIEW_VALIDATION.md.
