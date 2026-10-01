@@ -1,5 +1,6 @@
 #include "swerve_mppi/model.hpp"
 
+#include "motion_profile.hpp"
 #include "validation.hpp"
 #include <algorithm>
 #include <cmath>
@@ -28,18 +29,6 @@ double velocity_change_time(double ix, double iy, double fx, double fy, double a
                             double decel) {
   const double fraction = braking_fraction(ix, iy, fx, fy);
   return std::hypot(fx - ix, fy - iy) * (fraction / decel + (1.0 - fraction) / accel);
-}
-void integrate(Pose2d &pose, const Twist2d &v, double dt) {
-  const double a = v.wz * dt;
-  double dx = v.vx * dt, dy = v.vy * dt;
-  if (std::abs(v.wz) > kEpsilon) {
-    const double s = std::sin(a) / v.wz, c = (1.0 - std::cos(a)) / v.wz;
-    dx = s * v.vx - c * v.vy;
-    dy = c * v.vx + s * v.vy;
-  }
-  pose.x += std::cos(pose.yaw) * dx - std::sin(pose.yaw) * dy;
-  pose.y += std::sin(pose.yaw) * dx + std::cos(pose.yaw) * dy;
-  pose.yaw = wrap_angle(pose.yaw + a);
 }
 } // namespace
 
@@ -181,6 +170,7 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
   }
   // Steering changes the encoder-derived twist too. Limit the joint step as a
   // whole, rather than checking acceleration at fixed steering angles only.
+  detail::MotionProfile profile;
   for (std::size_t attempt = 0;; ++attempt) {
     for (std::size_t i = 0; i < 4; ++i) {
       state.wheel_speeds[i] =
@@ -190,12 +180,13 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
             start.steering_angles[i] + fraction * (wheels.angles[i] - start.steering_angles[i]);
     }
     state.velocity = kinematics_.forward(state.wheel_speeds, state.steering_angles);
+    profile = detail::motion_profile(initial, state, start, config_);
     const bool module_consistent =
         !ready || (std::hypot(u.vx, u.vy) < kEpsilon && std::abs(u.wz) < kEpsilon) ||
         kinematics_.max_module_residual(state.wheel_speeds, state.steering_angles,
                                         state.velocity) <=
             config_.drive_kinematic_tolerance_mps + 1e-9;
-    if (module_consistent &&
+    if (module_consistent && profile.duration <= dt + 1e-12 &&
         velocity_change_time(initial.vx, initial.vy, state.velocity.vx, state.velocity.vy,
                              config_.max_linear_accel_mps2,
                              config_.max_linear_decel_mps2) <= dt + 1e-9 &&
@@ -212,7 +203,7 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
   if (ready)
     out.steering_targets = state.steering_angles;
   out.wheel_speed_targets = state.wheel_speeds;
-  integrate(state.pose, state.velocity, dt);
+  detail::integrate_profile(out, initial, profile, dt);
   state.stamp_s += dt;
   state.time_in_mode_s += dt;
   return out;

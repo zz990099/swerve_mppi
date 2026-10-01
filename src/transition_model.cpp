@@ -1,5 +1,6 @@
 #include "swerve_mppi/model.hpp"
 
+#include "motion_profile.hpp"
 #include "validation.hpp"
 #include <algorithm>
 #include <cmath>
@@ -8,7 +9,10 @@ namespace swerve_mppi {
 TransitionModel::TransitionModel(const Config &config) : config_(config), model_(config) {}
 double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std::size_t &steps,
                                 std::size_t maximum, std::vector<Pose2d> *trace,
-                                const Control &entry_intent) const {
+                                const Control &entry_intent, std::vector<double> *sweep_margins,
+                                double *position_error_m) const {
+  double local_error = 0;
+  double &error = position_error_m ? *position_error_m : local_error;
   if (!detail::valid_vehicle(state, config_) || steps >= maximum ||
       (target_mode != DriveMode::DualAckermann && target_mode != DriveMode::Spin &&
        target_mode != DriveMode::Crab) ||
@@ -16,7 +20,9 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
       !std::isfinite(entry_intent.wz))
     return -1.0;
   const std::size_t begin = steps;
-  while (!is_stopped(state, config_)) {
+  while (state.velocity.vx != 0 || state.velocity.vy != 0 || state.velocity.wz != 0 ||
+         std::any_of(state.wheel_speeds.begin(), state.wheel_speeds.end(),
+                     [](double speed) { return speed != 0; })) {
     if (steps >= maximum)
       return -1.0;
     auto next = model_.step(state, {}, config_.dt_s);
@@ -24,8 +30,7 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
       return -1.0;
     state = next.state;
     ++steps;
-    if (trace)
-      trace->push_back(state.pose);
+    detail::append_motion(next, trace, sweep_margins, error);
   }
   state.velocity = {};
   state.wheel_speeds.fill(0.0);
@@ -54,6 +59,8 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
     ++aligned_steps;
     if (trace)
       trace->push_back(state.pose);
+    if (sweep_margins)
+      sweep_margins->push_back(error);
   }
   if (config_.confirmation_prediction_s > (maximum - steps) * config_.dt_s)
     return -1.0;
@@ -71,9 +78,12 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
     return -1.0;
   state.stamp_s += wait * config_.dt_s;
   steps += wait;
-  if (trace)
-    for (std::size_t i = 0; i < wait; ++i)
+  for (std::size_t i = 0; i < wait; ++i) {
+    if (trace)
       trace->push_back(state.pose);
+    if (sweep_margins)
+      sweep_margins->push_back(error);
+  }
   state.actual_mode = target_mode;
   state.mode_confirmed = true;
   state.time_in_mode_s = 0.0;

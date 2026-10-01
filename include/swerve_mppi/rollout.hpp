@@ -11,6 +11,10 @@ struct Branch {
 struct Trajectory {
   Branch branch;
   std::vector<Pose2d> poses; // Initial pose followed by one pose per model tick.
+  // One nonnegative enclosure radius per pose segment, including accumulated
+  // integration error. Empty denotes a caller-supplied piecewise straight trace.
+  std::vector<double> sweep_margins_m;
+  double position_error_m = 0;
   std::vector<Control> controls;
   std::vector<bool> active_controls; // False for proposals ignored by a committed transition.
   VehicleState final_state;

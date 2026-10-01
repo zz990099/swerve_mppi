@@ -36,6 +36,9 @@ struct StepResult {
   std::array<double, 4> wheel_speed_targets{};
   bool valid = true;
   bool aligning = false;
+  // Conservative enclosure for the modeled within-tick body-twist ramp.
+  double sweep_margin_m = 0;
+  double integration_error_m = 0;
 };
 
 class DriveModel {
@@ -63,7 +66,8 @@ public:
 
   double rollout(VehicleState &state, DriveMode target_mode, std::size_t &steps_used,
                  std::size_t max_steps, std::vector<Pose2d> *trace = nullptr,
-                 const Control &entry_intent = {}) const;
+                 const Control &entry_intent = {}, std::vector<double> *sweep_margins = nullptr,
+                 double *position_error_m = nullptr) const;
 
 private:
   Config config_;

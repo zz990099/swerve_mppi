@@ -1,3 +1,4 @@
+#include "behavior_fixture.hpp"
 #include "swerve_mppi/controller.hpp"
 #include <cmath>
 #include <iostream>
@@ -121,6 +122,168 @@ void test_reversal_time_budget() {
   const auto out = Controller(c).compute(in);
   check(out.action == Action::Drive && out.body_command.vx >= .02 - 1e-8,
         "reverse capture must brake within the configured time budget before reversing");
+}
+void test_analytic_stopping_motion() {
+  // Independent closed form: proportional braking has distance v*T/2 and
+  // yaw w*T/2, with T set by the slowest body or rolling-speed limit.
+  for (double dt : {.05, .1, .2}) {
+    for (double speed : {.003, .1, .35}) {
+      for (double sign : {-1.0, 1.0}) {
+        Config c;
+        c.dt_s = dt;
+        c.horizon_steps = 2;
+        c.max_linear_decel_mps2 = .2;
+        c.max_wheel_accel_mps2 = .5;
+        for (auto mode : {DriveMode::DualAckermann, DriveMode::Crab, DriveMode::Spin}) {
+          VehicleState s;
+          s.actual_mode = mode;
+          const Control initial = mode == DriveMode::Spin   ? Control{0, 0, sign * speed}
+                                  : mode == DriveMode::Crab ? Control{0, sign * speed, 0}
+                                                            : Control{sign * speed, 0, 0};
+          const auto joint = Kinematics(c).inverse(initial, {});
+          s.steering_angles = joint.angles;
+          s.wheel_speeds = joint.speeds;
+          s.velocity = {initial.vx, initial.vy, initial.wz};
+          double duration = std::max(std::hypot(initial.vx, initial.vy) / c.max_linear_decel_mps2,
+                                     std::abs(initial.wz) / c.max_angular_decel_radps2);
+          for (double wheel : joint.speeds)
+            duration = std::max(duration, std::abs(wheel) / c.max_wheel_accel_mps2);
+          Trajectory stop;
+          RolloutEngine(c).generate_stop(s, stop);
+          check(stop.valid && close(stop.final_state.pose.x, initial.vx * duration / 2) &&
+                    close(stop.final_state.pose.y, initial.vy * duration / 2) &&
+                    close(stop.final_state.pose.yaw, initial.wz * duration / 2),
+                "complete braking must match the independent continuous stopping oracle");
+          check(stop.final_state.wheel_speeds == std::array<double, 4>{},
+                "a stopping threshold cannot truncate residual sub-threshold displacement");
+        }
+      }
+    }
+  }
+  Config c;
+  c.collision_margin_m = 0;
+  ControllerInput in;
+  in.vehicle.stamp_s = 1;
+  in.vehicle.velocity.vx = .1;
+  in.vehicle.wheel_speeds.fill(.1);
+  in.reference_path = {{0, 0, 0}};
+  in.obstacles = {{.553, 0, .05}};
+  Trajectory stop;
+  RolloutEngine(c).generate_stop(in.vehicle, stop);
+  check(close(stop.final_state.pose.x, .005) &&
+            TrajectoryValidator(c).check(in, stop) == TrajectoryStatus::Collision &&
+            Controller(c).compute(in).action == Action::SafeStop,
+        "an obstacle inside the analytic braking distance must reject the stop");
+}
+void test_curved_stop_and_reversal_enclosures() {
+  Config c;
+  c.dt_s = .2;
+  VehicleState start;
+  const Control initial{.4, 0, .3};
+  const auto joint = Kinematics(c).inverse(initial, {});
+  start.steering_angles = joint.angles;
+  start.wheel_speeds = joint.speeds;
+  start.velocity = {initial.vx, initial.vy, initial.wz};
+  double duration = std::max(.4 / c.max_linear_decel_mps2, .3 / c.max_angular_decel_radps2);
+  for (double wheel : joint.speeds)
+    duration = std::max(duration, std::abs(wheel) / c.max_wheel_accel_mps2);
+  Trajectory stop;
+  RolloutEngine(c).generate_stop(start, stop);
+  const double angle = .3 * duration / 2, radius = .4 / .3;
+  check(stop.valid &&
+            std::hypot(stop.final_state.pose.x - radius * std::sin(angle),
+                       stop.final_state.pose.y - radius * (1 - std::cos(angle))) <=
+                stop.position_error_m + 1e-10 &&
+            close(stop.final_state.pose.yaw, angle),
+        "curved braking must enclose the independent constant-curvature integral");
+  check(stop.sweep_margins_m.size() + 1 == stop.poses.size(),
+        "every curved motion segment must carry its conservative sweep enclosure");
+
+  c.dt_s = .4;
+  c.robot_radius_m = .001;
+  c.collision_margin_m = 0;
+  c.max_linear_decel_mps2 = .1;
+  c.max_linear_accel_mps2 = .9;
+  start = {};
+  start.velocity.vx = .03;
+  start.wheel_speeds.fill(.03);
+  const auto reversal = DriveModel(c).step(start, {-.04, 0, 0}, c.dt_s);
+  const double brake_time = .03 / .1, accel_time = .04 / .9;
+  const double expected =
+      .03 * brake_time / 2 - .04 * accel_time / 2 - .04 * (c.dt_s - brake_time - accel_time);
+  check(reversal.valid && close(reversal.state.pose.x, expected),
+        "reversal displacement must include braking, acceleration, and final-speed hold");
+  Trajectory trace;
+  trace.valid = true;
+  trace.poses = {start.pose, reversal.state.pose};
+  trace.sweep_margins_m = {reversal.sweep_margin_m};
+  ControllerInput in;
+  in.vehicle = start;
+  in.reference_path = {{0, 0, 0}};
+  in.obstacles = {{.0035, 0, 0}};
+  check(TrajectoryValidator(c).check(in, trace) == TrajectoryStatus::Collision,
+        "the sweep must detect a reversal excursion outside its endpoint chord");
+  trace.sweep_margins_m.clear();
+  check(TrajectoryValidator(c).check(in, trace) == TrajectoryStatus::Valid,
+        "the independent reversal example must actually be missed by the endpoint chord");
+  trace.sweep_margins_m = {-1};
+  check(TrajectoryValidator(c).check(in, trace) == TrajectoryStatus::Invalid,
+        "invalid swept-motion metadata must fail closed");
+}
+void test_independent_ramp_integration_and_fixture() {
+  for (double dt : {.05, .1, .2}) {
+    Config c;
+    c.dt_s = dt;
+    VehicleState start;
+    start.pose.yaw = .3;
+    const Control initial{.3, 0, .2};
+    const auto joint = Kinematics(c).inverse(initial, {});
+    start.steering_angles = joint.angles;
+    start.wheel_speeds = joint.speeds;
+    start.velocity = {initial.vx, initial.vy, initial.wz};
+    const auto step = DriveModel(c).step(start, {.4, 0, .3}, dt);
+    check(step.valid && !step.aligning, "independent ramp oracle must use a moving Drive");
+    const auto &end = step.state.velocity;
+    // This example only increases linear/angular speed: derive its ramp time
+    // directly from the endpoint changes, without using the production profile.
+    check(end.vx >= initial.vx && end.wz >= initial.wz,
+          "oracle assumptions require increasing speed and angular rate");
+    double duration = std::max(std::hypot(end.vx - initial.vx, end.vy) / c.max_linear_accel_mps2,
+                               std::abs(end.wz - initial.wz) / c.max_angular_accel_radps2);
+    for (std::size_t j = 0; j < 4; ++j)
+      duration = std::max(
+          {duration,
+           std::abs(step.state.wheel_speeds[j] - start.wheel_speeds[j]) / c.max_wheel_accel_mps2,
+           std::abs(step.state.steering_angles[j] - start.steering_angles[j]) /
+               c.max_steer_rate_radps});
+    Pose2d oracle = start.pose;
+    constexpr int substeps = 20000;
+    const double h = dt / substeps;
+    for (int i = 0; i < substeps; ++i) {
+      const double time = (i + .5) * h;
+      const double f = std::min(1.0, time / duration);
+      const double vx = initial.vx + f * (end.vx - initial.vx), vy = f * end.vy;
+      const double wz = initial.wz + f * (end.wz - initial.wz);
+      const double heading = oracle.yaw + wz * h / 2;
+      oracle.x += (std::cos(heading) * vx - std::sin(heading) * vy) * h;
+      oracle.y += (std::sin(heading) * vx + std::cos(heading) * vy) * h;
+      oracle.yaw += wz * h;
+    }
+    check(std::hypot(oracle.x - step.state.pose.x, oracle.y - step.state.pose.y) <=
+                  step.integration_error_m + 1e-9 &&
+              std::abs(oracle.yaw - step.state.pose.yaw) < 1e-8,
+          "the quadrature enclosure must contain an independent fine-step body ramp");
+  }
+  Config c;
+  VehicleState measured;
+  measured.velocity.vx = .1;
+  measured.wheel_speeds.fill(.1);
+  ExecutionResult brake;
+  brake.action = Action::Brake;
+  brake.feedback.confirmed = true;
+  test::actuate(measured, brake, c);
+  check(close(measured.pose.x, .005) && measured.wheel_speeds == std::array<double, 4>{},
+        "the independent encoder fixture must include continuous braking displacement");
 }
 void test_braking_before_steering() {
   Config c;
@@ -246,6 +409,9 @@ int main() {
     test_bounded_kinematics();
     test_braking_and_wheel_consistency();
     test_reversal_time_budget();
+    test_analytic_stopping_motion();
+    test_curved_stop_and_reversal_enclosures();
+    test_independent_ramp_integration_and_fixture();
     test_braking_before_steering();
     test_continuous_steering_limits();
     test_rate_limits_and_projection();

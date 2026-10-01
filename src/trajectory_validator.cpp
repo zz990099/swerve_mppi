@@ -23,12 +23,19 @@ void TrajectoryValidator::add(std::shared_ptr<const TrajectoryConstraint> constr
 }
 TrajectoryStatus TrajectoryValidator::check(const ControllerInput &input,
                                             const Trajectory &trajectory) const {
-  if (!trajectory.valid || trajectory.poses.empty() || !detail::valid_input(input, config_))
+  if (!trajectory.valid || trajectory.poses.empty() || !detail::valid_input(input, config_) ||
+      (!trajectory.sweep_margins_m.empty() &&
+       trajectory.sweep_margins_m.size() + 1 != trajectory.poses.size()))
     return TrajectoryStatus::Invalid;
   for (const auto &pose : trajectory.poses)
     if (!std::isfinite(pose.x) || !std::isfinite(pose.y) || !std::isfinite(pose.yaw))
       return TrajectoryStatus::Invalid;
+  for (double margin : trajectory.sweep_margins_m)
+    if (!std::isfinite(margin) || margin < 0)
+      return TrajectoryStatus::Invalid;
   for (std::size_t i = 0; i < trajectory.poses.size(); ++i) {
+    const double margin =
+        i == 0 || trajectory.sweep_margins_m.empty() ? 0 : trajectory.sweep_margins_m[i - 1];
     const auto &from = trajectory.poses[i == 0 ? 0 : i - 1];
     const auto &to = trajectory.poses[i];
     const double dx = to.x - from.x, dy = to.y - from.y;
@@ -41,7 +48,7 @@ TrajectoryStatus TrajectoryValidator::check(const ControllerInput &input,
               : 0.0;
       const double clearance =
           std::hypot(from.x + t * dx - obstacle.x, from.y + t * dy - obstacle.y) - obstacle.radius -
-          config_.robot_radius_m - config_.collision_margin_m;
+          config_.robot_radius_m - config_.collision_margin_m - margin;
       if (!std::isfinite(clearance))
         return TrajectoryStatus::Invalid;
       if (clearance <= 0)

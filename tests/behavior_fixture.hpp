@@ -38,31 +38,60 @@ inline void actuate(VehicleState &s, const ExecutionResult &command, const Confi
                        });
   const double x[] = {c.wheelbase_m / 2, c.wheelbase_m / 2, -c.wheelbase_m / 2, -c.wheelbase_m / 2};
   const double y[] = {c.track_m / 2, -c.track_m / 2, c.track_m / 2, -c.track_m / 2};
-  s.velocity = {};
-  double moment = 0;
+  const auto before = s;
+  std::array<double, 4> end_angles = s.steering_angles, end_speeds = s.wheel_speeds;
+  double braking_time = std::max(std::hypot(s.velocity.vx, s.velocity.vy) / c.max_linear_decel_mps2,
+                                 std::abs(s.velocity.wz) / c.max_angular_decel_radps2);
   for (std::size_t i = 0; i < 4; ++i) {
     if (stopped || moving_steering)
-      s.steering_angles[i] +=
+      end_angles[i] +=
           std::clamp(command.steering_targets[i] - s.steering_angles[i],
                      -c.max_steer_rate_radps * c.dt_s, c.max_steer_rate_radps * c.dt_s);
-    s.wheel_speeds[i] +=
-        std::clamp(command.wheel_speed_targets[i] - s.wheel_speeds[i],
-                   -c.max_wheel_accel_mps2 * c.dt_s, c.max_wheel_accel_mps2 * c.dt_s);
-    check(std::abs(s.steering_angles[i]) <= c.steering_limit_rad + 1e-9, "steering stop violated");
-    check(std::abs(s.wheel_speeds[i]) <= c.max_wheel_speed_mps + 1e-9, "wheel speed violated");
-    const double vx = s.wheel_speeds[i] * std::cos(s.steering_angles[i]);
-    const double vy = s.wheel_speeds[i] * std::sin(s.steering_angles[i]);
-    s.velocity.vx += vx / 4;
-    s.velocity.vy += vy / 4;
-    s.velocity.wz += x[i] * vy - y[i] * vx;
-    moment += x[i] * x[i] + y[i] * y[i];
+    end_speeds[i] += std::clamp(command.wheel_speed_targets[i] - s.wheel_speeds[i],
+                                -c.max_wheel_accel_mps2 * c.dt_s, c.max_wheel_accel_mps2 * c.dt_s);
+    braking_time = std::max(braking_time, std::abs(s.wheel_speeds[i]) / c.max_wheel_accel_mps2);
+    check(std::abs(end_angles[i]) <= c.steering_limit_rad + 1e-9, "steering stop violated");
+    check(std::abs(end_speeds[i]) <= c.max_wheel_speed_mps + 1e-9, "wheel speed violated");
   }
-  s.velocity.wz /= moment;
-  // Midpoint integration intentionally differs from the core SE(2) integrator.
-  const double yaw = s.pose.yaw + s.velocity.wz * c.dt_s / 2;
-  s.pose.x += (std::cos(yaw) * s.velocity.vx - std::sin(yaw) * s.velocity.vy) * c.dt_s;
-  s.pose.y += (std::sin(yaw) * s.velocity.vx + std::cos(yaw) * s.velocity.vy) * c.dt_s;
-  s.pose.yaw = wrap_angle(s.pose.yaw + s.velocity.wz * c.dt_s);
+  // Drive joint targets ramp over the control period. Stopping actions use a
+  // rate-limited braking ramp, then hold zero if braking ends before the tick.
+  // Derive each intermediate body twist independently from the encoder vectors.
+  auto twist_at = [&](double t) {
+    Twist2d v;
+    double moment = 0;
+    for (std::size_t i = 0; i < 4; ++i) {
+      const double angle =
+          before.steering_angles[i] + (end_angles[i] - before.steering_angles[i]) * t / c.dt_s;
+      const double speed =
+          moving_steering
+              ? before.wheel_speeds[i] + (end_speeds[i] - before.wheel_speeds[i]) * t / c.dt_s
+              : before.wheel_speeds[i] *
+                    (braking_time > 0 ? std::max(0.0, 1 - t / braking_time) : 0);
+      const double vx = speed * std::cos(angle), vy = speed * std::sin(angle);
+      v.vx += vx / 4;
+      v.vy += vy / 4;
+      v.wz += x[i] * vy - y[i] * vx;
+      moment += x[i] * x[i] + y[i] * y[i];
+    }
+    v.wz /= moment;
+    return v;
+  };
+  constexpr int substeps = 64;
+  const double h = c.dt_s / substeps;
+  for (int step = 0; step < substeps; ++step) {
+    const auto v = twist_at((step + .5) * h);
+    const double yaw = s.pose.yaw + v.wz * h / 2;
+    s.pose.x += (std::cos(yaw) * v.vx - std::sin(yaw) * v.vy) * h;
+    s.pose.y += (std::sin(yaw) * v.vx + std::cos(yaw) * v.vy) * h;
+    s.pose.yaw = wrap_angle(s.pose.yaw + v.wz * h);
+  }
+  s.steering_angles = end_angles;
+  for (std::size_t i = 0; i < 4; ++i)
+    s.wheel_speeds[i] = moving_steering
+                            ? end_speeds[i]
+                            : before.wheel_speeds[i] *
+                                  (braking_time > 0 ? std::max(0.0, 1 - c.dt_s / braking_time) : 0);
+  s.velocity = twist_at(c.dt_s);
   s.actual_mode = command.feedback.actual_mode;
   s.mode_confirmed = command.feedback.confirmed;
   s.mode_fault = command.feedback.fault;

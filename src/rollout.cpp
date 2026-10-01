@@ -1,4 +1,5 @@
 #include "swerve_mppi/rollout.hpp"
+#include "motion_profile.hpp"
 #include "validation.hpp"
 #include <algorithm>
 #include <cmath>
@@ -17,6 +18,8 @@ void RolloutEngine::stopping_rollout(const VehicleState &initial, const Branch &
                                      const Control *first_control, Trajectory &out) const {
   out.valid = false;
   out.poses.clear();
+  out.sweep_margins_m.clear();
+  out.position_error_m = 0;
   out.controls.clear();
   out.active_controls.clear();
   out.branch = branch;
@@ -33,7 +36,8 @@ void RolloutEngine::stopping_rollout(const VehicleState &initial, const Branch &
   std::size_t steps = 0;
   if (branch.switches &&
       transition_.rollout(out.final_state, branch.mode, steps, config_.stopping_horizon_steps,
-                          &out.poses, *first_control) < 0)
+                          &out.poses, *first_control, &out.sweep_margins_m,
+                          &out.position_error_m) < 0)
     return;
   out.controls.resize(steps);
   out.active_controls.resize(steps, false);
@@ -57,7 +61,7 @@ void RolloutEngine::stopping_rollout(const VehicleState &initial, const Branch &
     if (!next.valid)
       return;
     out.final_state = next.state;
-    out.poses.push_back(next.state.pose);
+    detail::append_motion(next, &out.poses, &out.sweep_margins_m, out.position_error_m);
     out.controls.push_back(control);
     out.active_controls.push_back(pending);
     if (!next.aligning)
@@ -76,6 +80,8 @@ void RolloutEngine::generate(const VehicleState &initial, const Branch &branch,
                              const std::vector<Control> &controls, Trajectory &out) const {
   out.valid = false;
   out.poses.clear();
+  out.sweep_margins_m.clear();
+  out.position_error_m = 0;
   out.controls.clear();
   out.active_controls.clear();
   out.branch = branch;
@@ -100,7 +106,8 @@ void RolloutEngine::generate(const VehicleState &initial, const Branch &branch,
       if (alignment)
         return;
       if (transition_.rollout(out.final_state, branch.mode, step, config_.horizon_steps, &out.poses,
-                              controls[branch.switch_step]) < 0.0)
+                              controls[branch.switch_step], &out.sweep_margins_m,
+                              &out.position_error_m) < 0.0)
         return;
       switched = true;
       // The switch-entry control remains committed through the first Drive.
@@ -132,7 +139,7 @@ void RolloutEngine::generate(const VehicleState &initial, const Branch &branch,
     } else if (!next.aligning) {
       alignment.reset();
     }
-    out.poses.push_back(next.state.pose);
+    detail::append_motion(next, &out.poses, &out.sweep_margins_m, out.position_error_m);
     ++step;
   }
   out.valid = out.poses.size() == config_.horizon_steps + 1;
