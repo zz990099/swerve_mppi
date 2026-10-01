@@ -15,7 +15,9 @@ struct PathMatch {
   double yaw;
 };
 PathMatch path_match(const Pose2d &pose, const std::vector<Pose2d> &path) {
-  PathMatch match{kInfinity, path.front().yaw};
+  double nearest_squared = kInfinity;
+  std::size_t nearest = 0;
+  double nearest_t = 0;
   for (std::size_t i = 1; i < path.size(); ++i) {
     const double dx = path[i].x - path[i - 1].x, dy = path[i].y - path[i - 1].y;
     const double length2 = dx * dx + dy * dy;
@@ -23,15 +25,23 @@ PathMatch path_match(const Pose2d &pose, const std::vector<Pose2d> &path) {
         length2 > 1e-12
             ? clamp(((pose.x - path[i - 1].x) * dx + (pose.y - path[i - 1].y) * dy) / length2, 0, 1)
             : 0;
-    const double distance =
-        std::hypot(pose.x - path[i - 1].x - t * dx, pose.y - path[i - 1].y - t * dy);
-    if (distance < match.distance)
-      match = {distance,
-               wrap_angle(path[i - 1].yaw + t * angle_distance(path[i].yaw, path[i - 1].yaw))};
+    const double x = pose.x - path[i - 1].x - t * dx, y = pose.y - path[i - 1].y - t * dy;
+    const double distance2 = x * x + y * y;
+    if (distance2 < nearest_squared) {
+      nearest_squared = distance2;
+      nearest = i;
+      nearest_t = t;
+    }
   }
   if (path.size() == 1)
-    match.distance = std::hypot(pose.x - path[0].x, pose.y - path[0].y);
-  return match;
+    return {std::hypot(pose.x - path[0].x, pose.y - path[0].y), path[0].yaw};
+  if (nearest == 0)
+    return {kInfinity, path.front().yaw};
+  // Compare squared distances while scanning; evaluate distance and body yaw
+  // only for the nearest segment, not for every intermediate improvement.
+  return {std::sqrt(nearest_squared),
+          wrap_angle(path[nearest - 1].yaw +
+                     nearest_t * angle_distance(path[nearest].yaw, path[nearest - 1].yaw))};
 }
 
 double segment_obstacle_cost(const Pose2d &previous, const Pose2d &next,

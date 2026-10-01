@@ -17,6 +17,15 @@ public:
 private:
   std::vector<Control> seed(const ControllerInput &input, const Branch &branch,
                             bool use_warm = true) const;
+  struct Sample {
+    std::vector<Control> noise;
+    std::vector<bool> active;
+    double cost = std::numeric_limits<double>::infinity();
+  };
+  std::vector<Sample> samples_;
+  std::vector<Control> candidate_;
+  std::vector<Control> weighted_;
+  Trajectory proposal_;
   Config config_;
   DriveModel model_;
   RolloutEngine rollout_;

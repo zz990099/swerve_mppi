@@ -173,6 +173,65 @@ void test_optimizer_reset_and_closed_loop() {
   check(std::abs(initial - in.vehicle.pose.x) < initial * .5,
         "deterministic closed-loop core must make measurable progress");
 }
+void test_reusable_rollouts_and_planning_stats() {
+  Config c;
+  c.minimum_mode_dwell_s = 100;
+  c.noise_v_mps = c.noise_w_radps = 0;
+  c.samples_per_branch = 8;
+  RolloutEngine engine(c);
+  auto in = input();
+  std::vector<Control> controls(c.horizon_steps, {.2, 0, 0});
+  Trajectory reuse;
+  engine.generate(in.vehicle, {}, controls, reuse);
+  auto original = reuse;
+  const auto *storage = reuse.poses.data();
+  engine.generate(in.vehicle, {}, controls, reuse);
+  check(reuse.valid && reuse.poses.data() == storage &&
+            reuse.poses.back().x == original.poses.back().x,
+        "reused valid rollouts must preserve capacity and trajectory semantics");
+  controls.pop_back();
+  engine.generate(in.vehicle, {}, controls, reuse);
+  check(!reuse.valid && reuse.poses.empty() && reuse.controls.empty() &&
+            reuse.active_controls.empty(),
+        "invalid reuse must clear validity and previous trace data");
+  const auto result = Optimizer(c).optimize(in, {});
+  const auto expected = 1 + c.iterations * (c.samples_per_branch + 1);
+  check(result.planning_stats.evaluated_rollouts == expected &&
+            result.planning_stats.feasible_rollouts == expected &&
+            result.planning_stats.fallback_updates == 0,
+        "work counters must include nominal, sampled and weighted evaluations");
+  const auto output = Controller(c).compute(in);
+  check(output.control_policy == ControlPolicy::Tracking && output.planning_stats.branches == 1 &&
+            output.planning_stats.evaluated_rollouts == expected &&
+            output.failure_reason == FailureReason::None,
+        "controller diagnostics must report the full executed planning work");
+  Optimizer optimizer(c);
+  const auto first = optimizer.optimize(in, {});
+  in.reference_path = {{0, 0, 0}, {-1, 0, 0}};
+  optimizer.optimize(in, {});
+  check(first.controls.front().vx > 0 && first.trajectory.poses.back().x > 0,
+        "returned solutions must own data independently of reused workspace");
+  auto copied = optimizer;
+  optimizer.reset();
+  copied.reset();
+  const auto a = optimizer.optimize(in, {}), b = copied.optimize(in, {});
+  check(a.cost == b.cost && a.controls.front().vx == b.controls.front().vx,
+        "copied optimizers must not alias each other's workspace");
+  Controller controller(c);
+  in = input();
+  controller.compute(in);
+  check(controller.compute(in).failure_reason == FailureReason::NonmonotonicTime,
+        "clock faults must have an inspectable reason");
+  in.vehicle.stamp_s += c.dt_s;
+  in.obstacles = {{0, 0, .1}};
+  const auto blocked = controller.compute(in);
+  check(blocked.action == Action::SafeStop &&
+            blocked.failure_reason == FailureReason::NoFeasiblePlan &&
+            blocked.planning_stats.evaluated_rollouts > 0 &&
+            blocked.planning_stats.feasible_rollouts == 0 &&
+            blocked.planning_stats.fallback_updates > 0,
+        "blocked paths must report work and infeasibility without stale counters");
+}
 void test_tracking_speed_limit() {
   Config c;
   c.minimum_mode_dwell_s = 0;
@@ -227,6 +286,7 @@ int main() {
     test_optimizer_reset_and_closed_loop();
     test_extension_and_invalid_inputs();
     test_tracking_speed_limit();
+    test_reusable_rollouts_and_planning_stats();
     std::cout << "Optimizer regressions passed\n";
     return 0;
   } catch (const std::exception &e) {

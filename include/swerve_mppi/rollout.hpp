@@ -22,6 +22,10 @@ public:
   Trajectory generate(const VehicleState &initial, const Branch &branch,
                       const std::vector<Control> &controls) const;
 
+  // Reuse caller-owned vector capacity. Controls must not alias out.controls.
+  void generate(const VehicleState &initial, const Branch &branch,
+                const std::vector<Control> &controls, Trajectory &out) const;
+
 private:
   Config config_;
   DriveModel model_;

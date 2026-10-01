@@ -89,6 +89,24 @@ struct ModeFeedback {
   double time_in_mode_s = 0.0;
 };
 
+enum class FailureReason {
+  None,
+  InvalidInput,
+  NonmonotonicTime,
+  InvalidPath,
+  FeedbackFault,
+  NoFeasiblePlan,
+  ModelFailure,
+  TransitionFault
+};
+enum class ControlPolicy { Stopped, Tracking, Alignment, Capture, ModeTransition, Fault };
+struct PlanningStats {
+  std::size_t branches = 0;
+  std::size_t evaluated_rollouts = 0;
+  std::size_t feasible_rollouts = 0;
+  std::size_t fallback_updates = 0;
+};
+
 struct Output {
   Action action = Action::SafeStop;
   DriveMode requested_mode = DriveMode::DualAckermann;
@@ -102,6 +120,10 @@ struct Output {
   double selected_cost = 0.0;
   double keep_cost = 0.0;
   std::size_t feasible_rollouts = 0;
+  // All optimized branches, including nominal and weighted evaluations.
+  PlanningStats planning_stats;
+  ControlPolicy control_policy = ControlPolicy::Fault;
+  FailureReason failure_reason = FailureReason::None;
   NavigationStatus navigation_status = NavigationStatus::Fault;
   bool goal_reached = false;
   bool stalled = false;

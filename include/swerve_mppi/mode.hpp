@@ -10,6 +10,7 @@ struct Solution {
   Trajectory trajectory;
   double cost = std::numeric_limits<double>::infinity();
   std::size_t feasible_rollouts = 0;
+  PlanningStats planning_stats;
 };
 class ModeScheduler {
 public:

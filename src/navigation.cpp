@@ -60,7 +60,9 @@ PathReference PathManager::update(const ControllerInput &input) {
   double best_distance = std::numeric_limits<double>::infinity();
   double best_progress = progress_;
   // Search in arc order; equal-distance candidates preserve the earlier branch.
-  for (std::size_t i = 1; i < path_.size(); ++i) {
+  const auto first = std::max<std::size_t>(
+      1, std::upper_bound(lengths_.begin(), lengths_.end(), progress_) - lengths_.begin());
+  for (std::size_t i = first; i < path_.size() && lengths_[i - 1] <= upper; ++i) {
     const double length = lengths_[i] - lengths_[i - 1];
     if (length < 1e-12 || lengths_[i] < progress_ || lengths_[i - 1] > upper)
       continue;
@@ -82,7 +84,7 @@ PathReference PathManager::update(const ControllerInput &input) {
   // Do not look through a reversal or sharp corner: its distant endpoint can
   // point backwards before the corner has actually been reached.
   double accumulated_turn = 0;
-  for (std::size_t i = 1; i + 1 < path_.size(); ++i) {
+  for (std::size_t i = first; i + 1 < path_.size() && lengths_[i] < end; ++i) {
     if (lengths_[i] <= progress_ + 1e-9 || lengths_[i] >= end)
       continue;
     const double ax = path_[i].x - path_[i - 1].x, ay = path_[i].y - path_[i - 1].y;
@@ -112,9 +114,11 @@ PathReference PathManager::update(const ControllerInput &input) {
   const auto nearest = interpolate(progress_);
   out.cross_track_error_m = std::hypot(pose.x - nearest.x, pose.y - nearest.y);
   out.local_path.push_back(nearest);
-  for (std::size_t i = 1; i < path_.size(); ++i)
-    if (lengths_[i] > progress_ + 1e-9 && lengths_[i] < end - 1e-9)
-      out.local_path.push_back(path_[i]);
+  const auto local_begin =
+      std::upper_bound(lengths_.begin(), lengths_.end(), progress_ + 1e-9) - lengths_.begin();
+  for (std::size_t i = static_cast<std::size_t>(local_begin);
+       i < path_.size() && lengths_[i] < end - 1e-9; ++i)
+    out.local_path.push_back(path_[i]);
   if (end > progress_ + 1e-9)
     out.local_path.push_back(interpolate(end));
   out.goal = path_.back();

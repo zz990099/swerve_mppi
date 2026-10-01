@@ -8,22 +8,29 @@
 
 namespace swerve_mppi {
 Controller::Controller(const Config &config)
-    : config_(config), model_(config), optimizer_(config), scheduler_(config),
+    : safety_rollout_(config), safety_critics_(config), safety_controls_(config.horizon_steps),
+      config_(config), model_(config), optimizer_(config), scheduler_(config),
       mode_manager_(config), path_manager_(config), goal_manager_(config) {}
 
 Output Controller::compute(const ControllerInput &input) {
   Output stop;
   stop.requested_mode = input.vehicle.actual_mode;
   stop.phase = mode_manager_.phase();
-  if (!detail::valid_input(input, config_) ||
-      (last_stamp_s_ >= 0.0 && input.vehicle.stamp_s <= last_stamp_s_))
+  if (!detail::valid_input(input, config_)) {
+    stop.failure_reason = FailureReason::InvalidInput;
     return stop;
+  }
+  if (last_stamp_s_ >= 0 && input.vehicle.stamp_s <= last_stamp_s_) {
+    stop.failure_reason = FailureReason::NonmonotonicTime;
+    return stop;
+  }
   stop.steering_targets = input.vehicle.steering_angles;
   last_stamp_s_ = input.vehicle.stamp_s;
   PathReference path;
   try {
     path = path_manager_.update(input);
   } catch (const std::invalid_argument &) {
+    stop.failure_reason = FailureReason::InvalidPath;
     return stop;
   }
   if (path.changed) {
@@ -31,8 +38,12 @@ Output Controller::compute(const ControllerInput &input) {
     goal_manager_.reset();
     alignment_control_.reset();
   }
-  ControllerInput prepared = input;
+  ControllerInput prepared;
+  prepared.vehicle = input.vehicle;
   prepared.reference_path = path.local_path;
+  prepared.obstacles = input.obstacles;
+  prepared.path_id = input.path_id;
+  prepared.heading_policy = input.heading_policy;
   double limit = std::max(config_.max_vx_mps, config_.max_crab_speed_mps);
   const double distance =
       std::hypot(path.goal.x - input.vehicle.pose.x, path.goal.y - input.vehicle.pose.y);
@@ -47,16 +58,21 @@ Output Controller::compute(const ControllerInput &input) {
   Output out;
   if (mode_manager_.active()) {
     out = mode_manager_.update(input.vehicle);
+    out.control_policy = ControlPolicy::ModeTransition;
+    if (out.action == Action::SafeStop)
+      out.failure_reason = FailureReason::TransitionFault;
     if (out.action == Action::Hold && out.phase == TransitionPhase::Stable)
       alignment_start_s_ = input.vehicle.stamp_s;
   } else if (!input.vehicle.mode_confirmed || input.vehicle.mode_fault) {
     out = stop;
+    out.failure_reason = FailureReason::FeedbackFault;
   } else if (goal.complete || goal.position_acquired ||
              (path.remaining_m < config_.goal_docking_distance_m &&
               distance < config_.goal_docking_distance_m)) {
     alignment_control_.reset();
     optimizer_.reset();
     out = compute_goal(prepared, goal);
+    out.control_policy = goal.complete ? ControlPolicy::Stopped : ControlPolicy::Capture;
   } else if (path.corner_target && std::hypot(path.local_path.back().x - input.vehicle.pose.x,
                                               path.local_path.back().y - input.vehicle.pose.y) <
                                        config_.goal_docking_distance_m) {
@@ -69,11 +85,16 @@ Output Controller::compute(const ControllerInput &input) {
     corner.tracking->speed_limit_mps = std::min(limit, config_.goal_translation_gain * d);
     GoalState approach;
     out = compute_goal(corner, approach);
+    out.control_policy = ControlPolicy::Capture;
   } else if (alignment_control_) {
     out = continue_alignment(prepared);
+    out.control_policy = ControlPolicy::Alignment;
   } else {
     out = compute_tracking(prepared);
+    out.control_policy = ControlPolicy::Tracking;
   }
+  if (out.action == Action::SafeStop)
+    out.control_policy = ControlPolicy::Fault;
   out.navigation_status = out.action == Action::SafeStop ? NavigationStatus::Fault : goal.status;
   out.goal_reached = goal.complete && out.action != Action::SafeStop;
   out.stalled = goal.stalled;
@@ -89,16 +110,27 @@ Output Controller::compute_tracking(const ControllerInput &input) {
   stop.requested_mode = input.vehicle.actual_mode;
   stop.steering_targets = input.vehicle.steering_angles;
   const auto branches = scheduler_.make_branches(input.vehicle);
+  PlanningStats stats;
   std::vector<Solution> solutions;
   solutions.reserve(branches.size());
-  for (const auto &branch : branches)
+  for (const auto &branch : branches) {
     solutions.push_back(optimizer_.optimize(input, branch));
+    const auto &work = solutions.back().planning_stats;
+    stats.branches += work.branches;
+    stats.evaluated_rollouts += work.evaluated_rollouts;
+    stats.feasible_rollouts += work.feasible_rollouts;
+    stats.fallback_updates += work.fallback_updates;
+  }
+  stop.planning_stats = stats;
   const auto &keep = solutions.front();
   const auto &best = solutions[scheduler_.select(solutions)];
-  if (!std::isfinite(best.cost))
+  if (!std::isfinite(best.cost)) {
+    stop.failure_reason = FailureReason::NoFeasiblePlan;
     return stop;
+  }
   if (best.branch.switches && best.branch.switch_step == 0) {
     auto out = request_mode(input, best.branch.mode, best.controls.front());
+    out.planning_stats = stats;
     out.selected_cost = best.cost;
     out.keep_cost = keep.cost;
     out.feasible_rollouts = best.feasible_rollouts;
@@ -107,10 +139,13 @@ Output Controller::compute_tracking(const ControllerInput &input) {
   const auto preview =
       model_.step(input.vehicle, model_.project(best.controls.front(), input.vehicle.actual_mode),
                   config_.dt_s);
-  if (!preview.valid)
+  if (!preview.valid) {
+    stop.failure_reason = FailureReason::ModelFailure;
     return stop;
+  }
   Output out;
   out.requested_mode = input.vehicle.actual_mode;
+  out.planning_stats = stats;
   out.selected_cost = best.cost;
   out.keep_cost = keep.cost;
   out.feasible_rollouts = best.feasible_rollouts;
@@ -121,6 +156,7 @@ Output Controller::compute_tracking(const ControllerInput &input) {
     alignment_start_s_ = input.vehicle.stamp_s;
     optimizer_.reset();
     out = continue_alignment(input);
+    out.planning_stats = stats;
     out.selected_cost = best.cost;
     out.keep_cost = keep.cost;
     out.feasible_rollouts = best.feasible_rollouts;
@@ -140,6 +176,7 @@ Output Controller::request_mode(const ControllerInput &input, DriveMode mode,
   try {
     mode_manager_.begin(mode, intent, input.vehicle);
   } catch (const std::overflow_error &) {
+    stop.failure_reason = FailureReason::TransitionFault;
     return stop;
   }
   optimizer_.reset();
@@ -190,17 +227,19 @@ Output Controller::compute_goal(const ControllerInput &input, const GoalState &g
   if (switching && (!is_stopped(input.vehicle, config_) ||
                     input.vehicle.time_in_mode_s < config_.minimum_mode_dwell_s))
     return out;
-  auto controls = std::vector<Control>(config_.horizon_steps, control);
-  const auto trace =
-      RolloutEngine(config_).generate(input.vehicle, {target_mode, 0, switching}, controls);
-  if (!std::isfinite(CriticManager(config_).score(input, trace))) {
+  std::fill(safety_controls_.begin(), safety_controls_.end(), control);
+  safety_rollout_.generate(input.vehicle, {target_mode, 0, switching}, safety_controls_,
+                           safety_trace_);
+  if (!std::isfinite(safety_critics_.score(input, safety_trace_))) {
     out.action = Action::SafeStop;
+    out.failure_reason = FailureReason::NoFeasiblePlan;
     return out;
   }
   if (switching)
     return request_mode(input, target_mode, control);
   const auto step = model_.step(input.vehicle, control, config_.dt_s);
   if (!step.valid) {
+    out.failure_reason = FailureReason::ModelFailure;
     out.action = Action::SafeStop;
     return out;
   }
@@ -221,18 +260,23 @@ Output Controller::continue_alignment(const ControllerInput &input) {
   if (input.vehicle.actual_mode != alignment_mode_ ||
       input.vehicle.stamp_s - alignment_start_s_ > config_.confirmation_timeout_s) {
     out.phase = TransitionPhase::Fault;
+    out.failure_reason = FailureReason::TransitionFault;
     return out;
   }
   // Recheck the committed intent against fresh obstacles while the optimizer
   // is paused. This deliberately conservative continuation may stop early.
-  const auto continuation = RolloutEngine(config_).generate(
-      input.vehicle, {alignment_mode_, 0, false},
-      std::vector<Control>(config_.horizon_steps, *alignment_control_));
-  if (!std::isfinite(CriticManager(config_).score(input, continuation)))
+  std::fill(safety_controls_.begin(), safety_controls_.end(), *alignment_control_);
+  safety_rollout_.generate(input.vehicle, {alignment_mode_, 0, false}, safety_controls_,
+                           safety_trace_);
+  if (!std::isfinite(safety_critics_.score(input, safety_trace_))) {
+    out.failure_reason = FailureReason::NoFeasiblePlan;
     return out;
+  }
   const auto preview = model_.step(input.vehicle, *alignment_control_, config_.dt_s);
-  if (!preview.valid)
+  if (!preview.valid) {
+    out.failure_reason = FailureReason::ModelFailure;
     return out;
+  }
   out.steering_targets = preview.steering_targets;
   if (preview.aligning) {
     out.action = is_stopped(input.vehicle, config_) ? Action::Hold : Action::Brake;

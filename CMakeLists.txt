@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.5.0 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.6.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 option(SWERVE_MPPI_BUILD_TESTS "Build standalone tests" ON)
+option(SWERVE_MPPI_BUILD_BENCHMARKS "Build standalone measurement tools" OFF)
 
 add_library(swerve_mppi_core
   src/navigation.cpp
@@ -59,6 +60,16 @@ if(SWERVE_MPPI_BUILD_TESTS)
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_test.cmake)
   set_tests_properties(swerve_mppi_tests model_regressions optimizer_regressions execution_regressions navigation_regressions
     installed_consumer PROPERTIES TIMEOUT 60)
+endif()
+
+if(SWERVE_MPPI_BUILD_BENCHMARKS)
+  add_executable(swerve_mppi_benchmark benchmarks/core_benchmark.cpp)
+  target_include_directories(swerve_mppi_benchmark PRIVATE tests)
+  target_link_libraries(swerve_mppi_benchmark PRIVATE swerve_mppi_core)
+  if(SWERVE_MPPI_BUILD_TESTS)
+    add_test(NAME benchmark_allocations COMMAND swerve_mppi_benchmark --smoke)
+    set_tests_properties(benchmark_allocations PROPERTIES TIMEOUT 60)
+  endif()
 endif()
 
 install(TARGETS swerve_mppi_core EXPORT swerve_mppiTargets

@@ -16,6 +16,10 @@ private:
   Output compute_goal(const ControllerInput &input, const GoalState &goal);
   Output request_mode(const ControllerInput &input, DriveMode mode, const Control &intent);
   Output continue_alignment(const ControllerInput &input);
+  RolloutEngine safety_rollout_;
+  CriticManager safety_critics_;
+  std::vector<Control> safety_controls_;
+  Trajectory safety_trace_;
   Config config_;
   DriveModel model_;
   Optimizer optimizer_;

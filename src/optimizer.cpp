@@ -9,7 +9,15 @@ namespace {
 double clamp(double value, double low, double high) { return std::clamp(value, low, high); }
 } // namespace
 Optimizer::Optimizer(const Config &config)
-    : config_(config), model_(config), rollout_(config), critics_(config), noise_(config) {}
+    : config_(config), model_(config), rollout_(config), critics_(config), noise_(config) {
+  samples_.resize(config_.samples_per_branch);
+  for (auto &sample : samples_) {
+    sample.noise.resize(config_.horizon_steps);
+    sample.active.resize(config_.horizon_steps);
+  }
+  candidate_.resize(config_.horizon_steps);
+  weighted_.resize(config_.horizon_steps);
+}
 std::vector<Control> Optimizer::seed(const ControllerInput &input, const Branch &branch,
                                      bool use_warm) const {
   if (use_warm && !branch.switches && warm_mode_ == input.vehicle.actual_mode &&
@@ -66,62 +74,62 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch)
   auto mean = seed(input, branch);
   for (std::size_t t = 0; t < mean.size(); ++t)
     mean[t] = constrain(mean[t], t);
+  PlanningStats stats;
+  stats.branches = 1;
   auto evaluate = [&](const std::vector<Control> &controls) {
-    Solution out;
+    rollout_.generate(input.vehicle, branch, controls, proposal_);
+    ++stats.evaluated_rollouts;
+    const double cost = critics_.score(input, proposal_);
+    stats.feasible_rollouts += std::isfinite(cost);
+    return cost;
+  };
+  auto capture = [&](Solution &out, const std::vector<Control> &controls, double cost) {
     out.branch = branch;
     out.controls = controls;
-    out.trajectory = rollout_.generate(input.vehicle, branch, controls);
-    out.cost = critics_.score(input, out.trajectory);
-    return out;
+    out.trajectory = proposal_;
+    out.cost = cost;
   };
-  result = evaluate(mean);
-  struct Sample {
-    std::vector<Control> noise;
-    std::vector<bool> active;
-    double cost = std::numeric_limits<double>::infinity();
-  };
-  std::vector<Sample> samples(config_.samples_per_branch);
-  std::vector<Control> candidate;
+  const double nominal_cost = evaluate(mean);
+  capture(result, mean, nominal_cost);
+  const auto fresh_seed = input.tracking ? seed(input, branch, false) : std::vector<Control>{};
   std::size_t feasible = 0;
   for (std::size_t iteration = 0; iteration < config_.iterations; ++iteration) {
     double minimum = std::numeric_limits<double>::infinity();
     Solution fallback = result;
-    for (std::size_t k = 0; k < samples.size(); ++k) {
-      auto &sample = samples[k];
+    for (std::size_t k = 0; k < samples_.size(); ++k) {
+      auto &sample = samples_[k];
       if (k == 0) {
-        // Preserve the nominal proposal when steering-sensitive noisy rollouts stall.
-        candidate = mean;
-        sample.noise.assign(mean.size(), Control{});
+        // Preserve the nominal proposal when noisy steering-sensitive paths stall.
+        candidate_ = mean;
       } else if (k == 1 && input.tracking) {
-        candidate = seed(input, branch, false);
-        sample.noise.resize(mean.size());
+        candidate_ = fresh_seed;
       } else {
-        noise_.sample(mean, branch, input.vehicle.actual_mode, candidate, sample.noise);
+        noise_.sample(mean, branch, input.vehicle.actual_mode, candidate_, sample.noise);
       }
-      for (std::size_t t = 0; t < candidate.size(); ++t) {
-        candidate[t] = constrain(candidate[t], t);
-        sample.noise[t] = {candidate[t].vx - mean[t].vx, candidate[t].vy - mean[t].vy,
-                           candidate[t].wz - mean[t].wz};
+      for (std::size_t t = 0; t < candidate_.size(); ++t) {
+        candidate_[t] = constrain(candidate_[t], t);
+        sample.noise[t] = {candidate_[t].vx - mean[t].vx, candidate_[t].vy - mean[t].vy,
+                           candidate_[t].wz - mean[t].wz};
       }
-      auto proposal = evaluate(candidate);
-      sample.active = proposal.trajectory.active_controls;
-      sample.cost = proposal.cost;
+      sample.cost = evaluate(candidate_);
+      sample.active = proposal_.active_controls;
       if (!std::isfinite(sample.cost))
         continue;
       ++feasible;
-      if (proposal.cost < fallback.cost)
-        fallback = proposal;
+      if (sample.cost < fallback.cost)
+        capture(fallback, candidate_, sample.cost);
       sample.cost += noise_.correction(mean, sample.noise, sample.active);
       if (std::isfinite(sample.cost))
         minimum = std::min(minimum, sample.cost);
     }
     if (!std::isfinite(minimum)) {
       result = std::move(fallback);
+      ++stats.fallback_updates;
       break;
     }
-    std::vector<Control> weighted(mean.size());
+    std::fill(weighted_.begin(), weighted_.end(), Control{});
     double total = 0.0;
-    for (const auto &sample : samples) {
+    for (const auto &sample : samples_) {
       if (!std::isfinite(sample.cost))
         continue;
       const double weight = std::exp(-(sample.cost - minimum) / config_.temperature);
@@ -129,28 +137,33 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch)
       for (std::size_t t = 0; t < mean.size(); ++t) {
         if (!sample.active[t])
           continue;
-        weighted[t].vx += weight * sample.noise[t].vx;
-        weighted[t].vy += weight * sample.noise[t].vy;
-        weighted[t].wz += weight * sample.noise[t].wz;
+        weighted_[t].vx += weight * sample.noise[t].vx;
+        weighted_[t].vy += weight * sample.noise[t].vy;
+        weighted_[t].wz += weight * sample.noise[t].wz;
       }
     }
     if (!(total > 0.0)) {
       result = std::move(fallback);
+      ++stats.fallback_updates;
       break;
     }
     for (std::size_t t = 0; t < mean.size(); ++t) {
-      mean[t].vx += weighted[t].vx / total;
-      mean[t].vy += weighted[t].vy / total;
-      mean[t].wz += weighted[t].wz / total;
+      mean[t].vx += weighted_[t].vx / total;
+      mean[t].vy += weighted_[t].vy / total;
+      mean[t].wz += weighted_[t].wz / total;
       mean[t] = constrain(mean[t], t);
     }
-    auto updated = evaluate(mean);
-    // Return the MPPI weighted sequence; a feasible sample is only a safety fallback.
-    const bool valid_update = std::isfinite(updated.cost);
-    result = valid_update ? std::move(updated) : std::move(fallback);
-    if (!valid_update)
+    // Return the weighted MPPI sequence; a feasible proposal is only a fallback.
+    const double updated_cost = evaluate(mean);
+    if (std::isfinite(updated_cost))
+      capture(result, mean, updated_cost);
+    else {
+      result = std::move(fallback);
       mean = result.controls;
+      ++stats.fallback_updates;
+    }
   }
+  result.planning_stats = stats;
   result.feasible_rollouts = feasible;
   return result;
 }

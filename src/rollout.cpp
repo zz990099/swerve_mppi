@@ -8,6 +8,15 @@ RolloutEngine::RolloutEngine(const Config &config)
 Trajectory RolloutEngine::generate(const VehicleState &initial, const Branch &branch,
                                    const std::vector<Control> &controls) const {
   Trajectory out;
+  generate(initial, branch, controls, out);
+  return out;
+}
+void RolloutEngine::generate(const VehicleState &initial, const Branch &branch,
+                             const std::vector<Control> &controls, Trajectory &out) const {
+  out.valid = false;
+  out.poses.clear();
+  out.controls.clear();
+  out.active_controls.clear();
   out.branch = branch;
   out.final_state = initial;
   if (!detail::valid_vehicle(initial, config_) || !initial.mode_confirmed || initial.mode_fault ||
@@ -16,7 +25,7 @@ Trajectory RolloutEngine::generate(const VehicleState &initial, const Branch &br
        (branch.mode == initial.actual_mode || branch.switch_step >= config_.horizon_steps ||
         initial.time_in_mode_s + branch.switch_step * config_.dt_s <
             config_.minimum_mode_dwell_s - 1e-9)))
-    return out;
+    return;
   out.poses.reserve(config_.horizon_steps + 1);
   out.poses.push_back(initial.pose);
   out.controls.resize(controls.size());
@@ -28,27 +37,25 @@ Trajectory RolloutEngine::generate(const VehicleState &initial, const Branch &br
   while (step < config_.horizon_steps) {
     if (branch.switches && !switched && step == branch.switch_step) {
       if (alignment)
-        return out;
-      std::vector<Pose2d> trace;
-      if (transition_.rollout(out.final_state, branch.mode, step, config_.horizon_steps, &trace,
+        return;
+      if (transition_.rollout(out.final_state, branch.mode, step, config_.horizon_steps, &out.poses,
                               controls[branch.switch_step]) < 0.0)
-        return out;
-      out.poses.insert(out.poses.end(), trace.begin(), trace.end());
+        return;
       switched = true;
       continue;
     }
     const DriveMode mode = switched ? branch.mode : initial.actual_mode;
     if (!std::isfinite(controls[step].vx) || !std::isfinite(controls[step].vy) ||
         !std::isfinite(controls[step].wz))
-      return out;
+      return;
     const bool continuing_alignment = alignment.has_value();
     if (continuing_alignment &&
         (step - alignment_begin) * config_.dt_s > config_.confirmation_timeout_s)
-      return out;
+      return;
     const Control control = alignment.value_or(model_.project(controls[step], mode));
     const auto next = model_.step(out.final_state, control, config_.dt_s);
     if (!next.valid)
-      return out;
+      return;
     out.final_state = next.state;
     out.controls[step] = control;
     // The first control commits entry geometry. Following controls are ignored
@@ -64,6 +71,5 @@ Trajectory RolloutEngine::generate(const VehicleState &initial, const Branch &br
     ++step;
   }
   out.valid = out.poses.size() == config_.horizon_steps + 1;
-  return out;
 }
 } // namespace swerve_mppi
