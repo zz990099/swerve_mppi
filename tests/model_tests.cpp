@@ -78,6 +78,55 @@ void test_braking_before_steering() {
   check(s.pose.y > 0 && std::abs(s.pose.yaw) < 1e-8,
         "stop/align/drive sequence must eventually make lateral progress");
 }
+void test_continuous_steering_limits() {
+  Config c;
+  c.max_steer_rate_radps = .3;
+  c.max_angular_accel_radps2 = .15;
+  c.max_angular_decel_radps2 = .12;
+  c.max_linear_accel_mps2 = .3;
+  c.max_linear_decel_mps2 = .2;
+  DriveModel model(c);
+  Kinematics k(c);
+  VehicleState state;
+  state.wheel_speeds.fill(.4);
+  state.velocity.vx = .4;
+  for (int tick = 0; tick < 80; ++tick) {
+    const Control control{.4, 0, .12 * std::sin(tick * .04)};
+    const auto next = model.step(state, control, c.dt_s);
+    check(next.valid && !next.aligning, "smooth curvature changes must drive without stopping");
+    for (std::size_t i = 0; i < 4; ++i) {
+      check(std::abs(next.state.steering_angles[i] - state.steering_angles[i]) <=
+                c.max_steer_rate_radps * c.dt_s + 1e-9,
+            "moving steering rate exceeded");
+      check(std::abs(next.state.wheel_speeds[i] - state.wheel_speeds[i]) <=
+                c.max_wheel_accel_mps2 * c.dt_s + 1e-9,
+            "moving wheel acceleration exceeded");
+    }
+    const auto v = next.state.velocity;
+    const auto before = state.velocity;
+    const double linear = std::hypot(v.vx, v.vy) < std::hypot(before.vx, before.vy)
+                              ? c.max_linear_decel_mps2
+                              : c.max_linear_accel_mps2;
+    const double angular = std::abs(v.wz) < std::abs(before.wz) ? c.max_angular_decel_radps2
+                                                                : c.max_angular_accel_radps2;
+    check(std::hypot(v.vx - before.vx, v.vy - before.vy) <= linear * c.dt_s + 1e-9 &&
+              std::abs(v.wz - before.wz) <= angular * c.dt_s + 1e-9,
+          "steering and wheel acceleration must be limited together");
+    const auto implied = k.forward(next.wheel_speed_targets, next.steering_targets);
+    check(close(implied.vx, v.vx) && close(implied.vy, v.vy) && close(implied.wz, v.wz),
+          "drive body command must describe the complete joint target step");
+    state = next.state;
+  }
+  check(state.pose.x > 2, "continuous steering must sustain forward progress");
+  state = {};
+  state.actual_mode = DriveMode::Crab;
+  state.steering_angles.fill(c.steering_limit_rad);
+  state.wheel_speeds.fill(.4);
+  state.velocity.vy = .4;
+  const auto crossing = model.step(state, {-.01, .4, 0}, c.dt_s);
+  check(crossing.aligning && crossing.steering_targets == state.steering_angles,
+        "an equivalent wheel direction across the hard stop must still brake first");
+}
 void test_rate_limits_and_projection() {
   Config c;
   c.max_wheel_accel_mps2 = .1;
@@ -136,6 +185,7 @@ int main() {
     test_bounded_kinematics();
     test_braking_and_wheel_consistency();
     test_braking_before_steering();
+    test_continuous_steering_limits();
     test_rate_limits_and_projection();
     test_zero_delay_transition_and_confirmation();
     test_configuration_ownership();

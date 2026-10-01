@@ -12,7 +12,7 @@ struct Trajectory {
   Branch branch;
   std::vector<Pose2d> poses; // Initial pose followed by one pose per model tick.
   std::vector<Control> controls;
-  std::vector<bool> active_controls; // False while braking/alignment/confirmation consumes ticks.
+  std::vector<bool> active_controls; // False for proposals ignored by a committed transition.
   VehicleState final_state;
   bool valid = false;
 };

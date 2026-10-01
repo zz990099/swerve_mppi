@@ -93,6 +93,59 @@ void test_effective_noise_and_disabled_noise() {
   check(disabled.correction(mean, effective, std::vector<bool>(mean.size(), true)) == 0,
         "zero noise must not divide by zero");
 }
+void test_correlated_noise_precision() {
+  Config c;
+  c.noise_correlation = .5;
+  c.noise_v_mps = 1;
+  c.noise_w_radps = 0;
+  c.control_correction_weight = 1;
+  NoiseGenerator noise(c);
+  std::vector<Control> mean{{1, 0, 0}, {2, 0, 0}, {3, 0, 0}};
+  std::vector<Control> perturbation{{.2, 0, 0}, {.4, 0, 0}, {.1, 0, 0}};
+  const double expected = .2 + (2 - .5) * (.4 - .1) / .75 + (3 - 1) * (.1 - .2) / .75;
+  check(std::abs(noise.correction(mean, perturbation, {true, true, true}) - expected) < 1e-9,
+        "correlated proposals must use their temporal precision in weighting");
+  check(std::abs(noise.correction(mean, perturbation, {true, false, true}) - .5) < 1e-9,
+        "masked intervals must isolate active noise correction segments");
+  mean.assign(c.horizon_steps, {.2, 0, 0});
+  std::vector<Control> a, b, effective;
+  noise.sample(mean, {}, DriveMode::DualAckermann, a, effective);
+  noise.reset();
+  noise.sample(mean, {}, DriveMode::DualAckermann, b, effective);
+  for (std::size_t i = 0; i < a.size(); ++i)
+    check(a[i].vx == b[i].vx && a[i].wz == b[i].wz,
+          "reset must reproduce nonzero correlated proposals");
+  for (double bad : {-1.0, 1.0, std::numeric_limits<double>::quiet_NaN()}) {
+    c.noise_correlation = bad;
+    bool rejected = false;
+    try {
+      validate(c);
+    } catch (const std::invalid_argument &) {
+      rejected = true;
+    }
+    check(rejected, "invalid temporal correlation must be rejected");
+  }
+}
+void test_frozen_alignment_rollout() {
+  Config c;
+  c.minimum_mode_dwell_s = 0;
+  VehicleState state;
+  state.actual_mode = DriveMode::Crab;
+  std::vector<Control> controls(c.horizon_steps, {.4, 0, 0});
+  controls[0] = {0, .4, 0};
+  const auto trace = RolloutEngine(c).generate(state, {DriveMode::Crab, 0, false}, controls);
+  check(trace.valid && trace.active_controls[0] && !trace.active_controls[1],
+        "alignment entry influences rollout but following proposals are masked");
+  std::size_t first = 1;
+  while (first < trace.poses.size() && trace.poses[first].y == 0)
+    ++first;
+  check(first < trace.poses.size() && trace.poses[first].y > 0 &&
+            std::abs(trace.poses[first].x) < trace.poses[first].y * .25 &&
+            trace.controls[first - 1].vx == 0 && trace.controls[first - 1].vy > 0,
+        "rollout must finish the frozen lateral alignment before changing direction");
+  const auto interrupted = RolloutEngine(c).generate(state, {DriveMode::Spin, 1, true}, controls);
+  check(!interrupted.valid, "a scheduled mode switch cannot preempt local alignment");
+}
 void test_optimizer_reset_and_closed_loop() {
   Config c;
   c.minimum_mode_dwell_s = 100;
@@ -148,6 +201,8 @@ int main() {
     test_hysteresis_selection();
     test_rollout_and_swept_collision();
     test_effective_noise_and_disabled_noise();
+    test_correlated_noise_precision();
+    test_frozen_alignment_rollout();
     test_optimizer_reset_and_closed_loop();
     test_extension_and_invalid_inputs();
     std::cout << "Optimizer regressions passed\n";

@@ -21,6 +21,7 @@ void validate(const Config &c) {
                              c.max_angular_accel_radps2,
                              c.max_angular_decel_radps2,
                              c.steering_tolerance_rad,
+                             c.drive_steering_limit_rad,
                              c.confirmation_timeout_s,
                              c.dt_s,
                              c.temperature};
@@ -52,7 +53,10 @@ void validate(const Config &c) {
     }
   }
   if (c.steering_limit_rad < 1.5707963267948966 || c.steering_limit_rad > 3.14159265358979323846 ||
-      c.steering_tolerance_rad >= c.steering_limit_rad || c.horizon_steps < 2 ||
+      !std::isfinite(c.noise_correlation) || c.noise_correlation < 0.0 ||
+      c.noise_correlation >= 1.0 || c.steering_tolerance_rad >= c.steering_limit_rad ||
+      c.drive_steering_limit_rad < c.steering_tolerance_rad ||
+      c.drive_steering_limit_rad > c.steering_limit_rad || c.horizon_steps < 2 ||
       c.samples_per_branch < 1 || c.iterations < 1) {
     throw std::invalid_argument("MPPI horizon, sample count, and iterations invalid");
   }

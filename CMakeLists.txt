@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.3.0 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.4.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -40,6 +40,12 @@ if(SWERVE_MPPI_BUILD_TESTS)
     add_executable(swerve_mppi_${suite}_tests tests/${suite}_tests.cpp)
     target_link_libraries(swerve_mppi_${suite}_tests PRIVATE swerve_mppi_core)
     add_test(NAME ${suite}_regressions COMMAND swerve_mppi_${suite}_tests)
+  endforeach()
+  add_executable(swerve_mppi_behavior_tests tests/behavior_tests.cpp)
+  target_link_libraries(swerve_mppi_behavior_tests PRIVATE swerve_mppi_core)
+  foreach(scenario straight lateral curve spin)
+    add_test(NAME behavior_${scenario} COMMAND swerve_mppi_behavior_tests ${scenario})
+    set_tests_properties(behavior_${scenario} PROPERTIES TIMEOUT 180)
   endforeach()
   add_test(NAME installed_consumer
     COMMAND ${CMAKE_COMMAND}

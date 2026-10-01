@@ -135,29 +135,33 @@ ExecutionResult ModeExecutor::update(const Output &command, const VehicleState &
 
   switch (command.action) {
   case Action::Drive: {
-    if (command.requested_mode != actual_mode_ ||
-        !std::isfinite(command.body_command.vx) || !std::isfinite(command.body_command.vy) ||
-        !std::isfinite(command.body_command.wz) ||
-        !detail::valid_steering(command.steering_targets, config_) ||
-        !detail::steering_aligned(measured.steering_angles, command.steering_targets, config_))
+    if (command.requested_mode != actual_mode_ || !std::isfinite(command.body_command.vx) ||
+        !std::isfinite(command.body_command.vy) || !std::isfinite(command.body_command.wz) ||
+        !detail::valid_steering(command.steering_targets, config_))
       return fault();
+    for (std::size_t i = 0; i < 4; ++i) {
+      const double delta = std::abs(command.steering_targets[i] - measured.steering_angles[i]);
+      if (delta > config_.drive_steering_limit_rad + 1e-9 ||
+          delta > config_.max_steer_rate_radps * config_.dt_s + 1e-9)
+        return fault();
+    }
     for (double speed : command.wheel_speed_targets)
       if (!std::isfinite(speed) || std::abs(speed) > config_.max_wheel_speed_mps + 1e-9)
         return fault();
     const auto implied =
-        Kinematics(config_).forward(command.wheel_speed_targets, measured.steering_angles);
+        Kinematics(config_).forward(command.wheel_speed_targets, command.steering_targets);
     if (std::abs(implied.vx - command.body_command.vx) > 1e-7 ||
         std::abs(implied.vy - command.body_command.vy) > 1e-7 ||
         std::abs(implied.wz - command.body_command.wz) > 1e-7)
       return fault();
-    // Measured steering can differ from targets within the allowed tolerance.
-    // Its encoder-derived twist need not lie exactly on the ideal mode manifold.
+    // A bounded joint interpolation need not lie exactly on the ideal mode
+    // manifold. Check the predicted joint pair, not the old measured angles.
     const auto projected =
         DriveModel(config_).project({implied.vx, implied.vy, implied.wz}, actual_mode_);
     double maximum_speed = 0.0;
     for (double speed : command.wheel_speed_targets)
       maximum_speed = std::max(maximum_speed, std::abs(speed));
-    const double linear_error = maximum_speed * config_.steering_tolerance_rad + 1e-7;
+    const double linear_error = maximum_speed * config_.drive_steering_limit_rad + 1e-7;
     const double radius = std::hypot(config_.wheelbase_m / 2, config_.track_m / 2);
     if (std::hypot(implied.vx - projected.vx, implied.vy - projected.vy) > linear_error ||
         std::abs(implied.wz - projected.wz) > linear_error / radius)

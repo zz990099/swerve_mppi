@@ -76,6 +76,7 @@ struct Output {
   Action action = Action::SafeStop;
   DriveMode requested_mode = DriveMode::DualAckermann;
   TransitionPhase phase = TransitionPhase::Stable;
+  // Drive: forward kinematics of the next steering/wheel target pair.
   Twist2d body_command;
   std::array<double, 4> steering_targets{};
   std::array<double, 4> wheel_speed_targets{};

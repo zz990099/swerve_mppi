@@ -23,13 +23,13 @@ cmake --install build --prefix "$PWD/install-local"
 Set SWERVE_MPPI_BUILD_TESTS=OFF for a library-only build.
 BUILD_SHARED_LIBS=ON selects a shared library on supported toolchains.
 CTest runs the original behavior checks, model, optimizer and execution
-regressions, and an independent consumer that finds and links the installed CMake package.
+regressions, default-noise multi-seed behavior checks, and an independent consumer that finds and links the installed CMake package.
 CI builds Debug and Release configurations through CMake.
 
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.3 CONFIG REQUIRED)
+find_package(swerve_mppi 0.4 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -78,11 +78,26 @@ remain conservative planning settings; they are not calibrated Gazebo dynamics.
 Components own their configuration, so temporaries and copied controllers cannot
 leave dangling configuration references.
 
-Version 0.3 adds ModeRequest/ModeFeedback and ModeExecutor. ModeManager::begin() now
-accepts a target mode, entry control intent and measured VehicleState. Adapters
-must echo the request ID and confirm measured steering as well as stopped body
-and wheels. The package minor version changes because the execution protocol
-and ModeManager API are incompatible with the previous confirmation-only API.
+Version 0.4 stabilizes default-noise core behavior. Small steering changes in a
+stable mode now advance steering and drive together, bounded by steering rate,
+wheel acceleration and body acceleration. Larger changes retain stop/align/drive
+and freeze the entry intent until the first Drive or a timeout. Mode switches
+still require measured confirmation and a stopped handover. Gaussian proposals
+now have configurable temporal correlation (`noise_correlation`, default 0.85;
+zero restores independent noise).
+
+`drive_steering_limit_rad` (default 0.20) bounds the requested joint change that
+may proceed while driving. Set it to `steering_tolerance_rad` for a conservative
+stop/align policy. This parameter represents an actuator capability assumption
+and must be calibrated before hardware deployment. Mechanical hard stops always
+use direct joint distances; equivalent wheel directions never bypass them.
+
+**0.4 execution migration:** a Drive's `body_command` is the forward kinematics
+of its **wheel-speed targets and steering targets**, not the old measured angles.
+Drive steering targets are the bounded next joint step, not an unrestricted final
+angle. Update custom execution supervisors accordingly; do not reconstruct wheel
+commands from body twist and discard these joint targets. Nonfinite body commands
+and excessive moving steering steps are rejected by ModeExecutor.
 
 This is a core research prototype. It has no ROS node or Nav2 plugin, and has not
 been validated in a combined Gazebo closed loop. Obstacles and the footprint are

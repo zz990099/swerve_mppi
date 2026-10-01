@@ -124,7 +124,7 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
       out.valid = false;
       return out;
     }
-    if (std::abs(wheels.angles[i] - start.steering_angles[i]) > config_.steering_tolerance_rad)
+    if (std::abs(wheels.angles[i] - start.steering_angles[i]) > config_.drive_steering_limit_rad)
       ready = false;
   }
   out.steering_targets =
@@ -140,7 +140,8 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
   }
   const std::array<double, 4> target = ready ? wheels.speeds : std::array<double, 4>{};
   const Twist2d initial = kinematics_.forward(start.wheel_speeds, start.steering_angles);
-  const Twist2d desired = kinematics_.forward(target, state.steering_angles);
+  const Twist2d desired =
+      kinematics_.forward(target, ready ? wheels.angles : state.steering_angles);
   const bool slowing = std::hypot(desired.vx, desired.vy) < std::hypot(initial.vx, initial.vy);
   const double linear_rate =
       slowing ? config_.max_linear_decel_mps2 : config_.max_linear_accel_mps2;
@@ -158,11 +159,42 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
     const double delta = std::abs(target[i] - start.wheel_speeds[i]);
     if (delta > kEpsilon)
       fraction = std::min(fraction, config_.max_wheel_accel_mps2 * dt / delta);
+    if (ready) {
+      const double steering_delta = std::abs(wheels.angles[i] - start.steering_angles[i]);
+      if (steering_delta > kEpsilon)
+        fraction = std::min(fraction, config_.max_steer_rate_radps * dt / steering_delta);
+    }
   }
-  for (std::size_t i = 0; i < 4; ++i) {
-    state.wheel_speeds[i] = start.wheel_speeds[i] + fraction * (target[i] - start.wheel_speeds[i]);
+  // Steering changes the encoder-derived twist too. Limit the joint step as a
+  // whole, rather than checking acceleration at fixed steering angles only.
+  for (std::size_t attempt = 0;; ++attempt) {
+    for (std::size_t i = 0; i < 4; ++i) {
+      state.wheel_speeds[i] =
+          start.wheel_speeds[i] + fraction * (target[i] - start.wheel_speeds[i]);
+      if (ready)
+        state.steering_angles[i] =
+            start.steering_angles[i] + fraction * (wheels.angles[i] - start.steering_angles[i]);
+    }
+    state.velocity = kinematics_.forward(state.wheel_speeds, state.steering_angles);
+    const double actual_linear_rate =
+        std::hypot(state.velocity.vx, state.velocity.vy) < std::hypot(initial.vx, initial.vy)
+            ? config_.max_linear_decel_mps2
+            : config_.max_linear_accel_mps2;
+    const double actual_angular_rate = std::abs(state.velocity.wz) < std::abs(initial.wz)
+                                           ? config_.max_angular_decel_radps2
+                                           : config_.max_angular_accel_radps2;
+    if (std::hypot(state.velocity.vx - initial.vx, state.velocity.vy - initial.vy) <=
+            actual_linear_rate * dt + 1e-9 &&
+        std::abs(state.velocity.wz - initial.wz) <= actual_angular_rate * dt + 1e-9)
+      break;
+    if (attempt == 60) {
+      out.valid = false;
+      return out;
+    }
+    fraction *= 0.5;
   }
-  state.velocity = kinematics_.forward(state.wheel_speeds, state.steering_angles);
+  if (ready)
+    out.steering_targets = state.steering_angles;
   out.wheel_speed_targets = state.wheel_speeds;
   integrate(state.pose, state.velocity, dt);
   state.stamp_s += dt;

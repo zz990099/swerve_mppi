@@ -1,4 +1,4 @@
-# Standalone execution protocol (0.3)
+# Standalone execution protocol (0.4)
 
 This contract is independent of ROS, Nav2 and Gazebo. ModeExecutor is a reference
 supervisor that can be used behind any transport or directly in core tests.
@@ -64,10 +64,21 @@ must also match the requested mode: parallel wheel axes for Crab, tangential
 axes for Spin, or a common Ackermann curvature respecting min_turn_radius_m.
 A retry after completion returns a stopped acknowledgement without restarting mode age.
 Replaying a completed request after the chassis has started moving is a fault.
-Drive validation allows linear mode-projection error up to maximum commanded
-wheel speed times steering_tolerance_rad, and angular error up to that bound
-divided by module radius. This permits the small nonideal twist caused by measured
-steering error while rejecting incompatible-mode drive.
+In 0.4 a Drive's body_command must be finite and match forward kinematics of
+wheel_speed_targets and steering_targets. These are the predicted next joint
+positions/speeds, not a twist computed at the previous measured angles. Each
+steering step is bounded by both drive_steering_limit_rad and
+max_steer_rate_radps * dt_s relative to measurement. The actuator must track both
+joint target arrays, including steering while driving; it must not gate all
+steering changes on zero speed.
+
+The mode-projection consistency allowance uses maximum commanded wheel speed
+times drive_steering_limit_rad for linear error, and that bound divided by module
+radius for angular error. This permits a bounded transient between steering
+geometries; it is not a calibrated tire-slip model. Large steering jumps and
+incompatible-mode body motion remain invalid. The model limits the complete
+wheel/steering step against body acceleration, and the actuator layer continues
+to own physical rate enforcement.
 
 The transport must preserve command order and have one serialized command writer.
 
@@ -84,7 +95,7 @@ ID, stopped measurements and steering, and emits one stopped handover cycle.
 
 | Action | Stable execution | During a committed transition |
 | --- | --- | --- |
-| Drive | Require matching actual mode, aligned measured joints, bounded finite wheel speeds and consistent encoder-derived body twist within mode limits, allowing bounded steering tracking error. | Mask drive and continue the committed stop/alignment. |
+| Drive | Require matching actual mode, finite twist/wheel targets, bounded moving-steering steps and consistency of the complete joint target step within mode limits. | Mask drive and continue the committed stop/alignment. |
 | Brake | Zero drive targets, retain measured steering. | Continue the committed transition. |
 | Hold | Zero drive; apply steering only when stopped, otherwise brake. | Continue the committed transition. |
 | RequestMode | Start/retry the explicit request. | Retry the same request; reject replacement. |
@@ -123,3 +134,15 @@ and Spin progress; and controller to executor to measured-feedback lateral
 progress. The fixture is deliberately small
 and has no Gazebo, ROS, terrain, tire slip, communication transport or dynamics
 calibration. Its results establish the core protocol behavior only.
+
+## Same-mode steering commitment
+
+A large steering change in the current mode produces Brake/Hold until it can
+resume bounded Drive. Controller freezes the control intent across those cycles,
+checks the continuation against fresh obstacles, and applies the original
+confirmation_timeout_s bound. This does not issue a ModeRequest or reset mode
+age. Reset cancels the commitment. A changed path is used by the next optimization
+after the committed entry; task cancellation still uses SafeStop/reset.
+
+Mode-entry intent is also retained for the first Drive after a confirmed switch,
+so stochastic optimization cannot immediately undo the steering handshake.

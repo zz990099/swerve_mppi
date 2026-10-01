@@ -35,7 +35,7 @@ void feedback(VehicleState &s, const ModeFeedback &f) {
 void actuate(VehicleState &s, const ExecutionResult &r, const Config &c) {
   const bool stopped = is_stopped(s, c);
   for (std::size_t i = 0; i < 4; ++i) {
-    if (stopped)
+    if (stopped || r.action == Action::Drive)
       s.steering_angles[i] +=
           std::clamp(r.steering_targets[i] - s.steering_angles[i], -c.max_steer_rate_radps * c.dt_s,
                      c.max_steer_rate_radps * c.dt_s);
@@ -375,24 +375,77 @@ void test_nonfinite_drive_commands() {
   Config c;
   VehicleState s;
   s.stamp_s = 1;
-  for (double bad : {std::numeric_limits<double>::quiet_NaN(),
-                     std::numeric_limits<double>::infinity(),
-                     -std::numeric_limits<double>::infinity()}) {
+  for (double bad :
+       {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity()}) {
     for (int axis = 0; axis < 3; ++axis) {
       ModeExecutor executor(c);
       Output command;
       command.action = Action::Drive;
       command.wheel_speed_targets.fill(.1);
       command.body_command = {.1, 0, 0};
-      if (axis == 0) command.body_command.vx = bad;
-      if (axis == 1) command.body_command.vy = bad;
-      if (axis == 2) command.body_command.wz = bad;
+      if (axis == 0)
+        command.body_command.vx = bad;
+      if (axis == 1)
+        command.body_command.vy = bad;
+      if (axis == 2)
+        command.body_command.wz = bad;
       const auto result = executor.update(command, s);
       check(result.feedback.fault && result.action == Action::SafeStop,
             "every nonfinite body command component must latch a fault");
       for (double speed : result.wheel_speed_targets)
         check(speed == 0, "invalid drive must never reach wheel targets");
     }
+  }
+}
+void test_frozen_controller_alignment() {
+  Config c;
+  c.minimum_mode_dwell_s = 100;
+  c.noise_v_mps = c.noise_w_radps = 0;
+  auto initial = [] {
+    ControllerInput in;
+    in.vehicle.actual_mode = DriveMode::Crab;
+    in.vehicle.stamp_s = 1;
+    in.reference_path = {{0, 0, 0}, {0, 1.4, 0}};
+    return in;
+  };
+  Controller controller(c);
+  auto in = initial();
+  const auto first = controller.compute(in);
+  check(first.action == Action::Hold, "large same-mode steering must start stopped alignment");
+  // Changing the path cannot chase the steering target while joints are aligning.
+  in.reference_path = {{0, 0, 0}, {1, 0, 0}};
+  in.vehicle.stamp_s += c.dt_s;
+  const auto retry = controller.compute(in);
+  check(retry.action == Action::Hold && retry.steering_targets == first.steering_targets,
+        "same-mode alignment must keep its entry intent across solves");
+  in.vehicle.stamp_s += c.confirmation_timeout_s;
+  check(controller.compute(in).action == Action::SafeStop,
+        "a stalled steering actuator must time out instead of holding forever");
+  controller.reset();
+  in = initial();
+  check(controller.compute(in).action == Action::Hold, "reset must clear stale alignment");
+  in.vehicle.stamp_s += c.dt_s;
+  in.obstacles = {{0, 0, .1}};
+  check(controller.compute(in).action == Action::SafeStop,
+        "new obstacles must be checked during committed local alignment");
+}
+void test_drive_steering_command_limits() {
+  Config c;
+  c.max_steer_rate_radps = .1;
+  for (double delta : {.02, .3}) {
+    VehicleState s;
+    s.actual_mode = DriveMode::Crab;
+    s.stamp_s = 1;
+    Output command;
+    command.action = Action::Drive;
+    command.requested_mode = DriveMode::Crab;
+    command.steering_targets.fill(delta);
+    command.wheel_speed_targets.fill(.2);
+    command.body_command = {.2 * std::cos(delta), .2 * std::sin(delta), 0};
+    ModeExecutor executor(c, DriveMode::Crab);
+    check(executor.update(command, s).feedback.fault,
+          "executor must reject steering jumps beyond rate or moving-angle limits");
   }
 }
 void test_curved_ackermann_and_spin_drive() {
@@ -451,6 +504,8 @@ int main() {
     test_controller_executor_lateral_loop();
     test_measured_steering_tolerance();
     test_nonfinite_drive_commands();
+    test_frozen_controller_alignment();
+    test_drive_steering_command_limits();
     test_curved_ackermann_and_spin_drive();
     test_rollout_entry_direction();
     std::cout << "Execution regressions passed\n";

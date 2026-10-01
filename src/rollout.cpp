@@ -23,8 +23,12 @@ Trajectory RolloutEngine::generate(const VehicleState &initial, const Branch &br
   out.active_controls.assign(controls.size(), false);
   std::size_t step = 0;
   bool switched = false;
+  std::optional<Control> alignment;
+  std::size_t alignment_begin = 0;
   while (step < config_.horizon_steps) {
     if (branch.switches && !switched && step == branch.switch_step) {
+      if (alignment)
+        return out;
       std::vector<Pose2d> trace;
       if (transition_.rollout(out.final_state, branch.mode, step, config_.horizon_steps, &trace,
                               controls[branch.switch_step]) < 0.0)
@@ -37,13 +41,25 @@ Trajectory RolloutEngine::generate(const VehicleState &initial, const Branch &br
     if (!std::isfinite(controls[step].vx) || !std::isfinite(controls[step].vy) ||
         !std::isfinite(controls[step].wz))
       return out;
-    const Control control = model_.project(controls[step], mode);
+    const bool continuing_alignment = alignment.has_value();
+    if (continuing_alignment &&
+        (step - alignment_begin) * config_.dt_s > config_.confirmation_timeout_s)
+      return out;
+    const Control control = alignment.value_or(model_.project(controls[step], mode));
     const auto next = model_.step(out.final_state, control, config_.dt_s);
     if (!next.valid)
       return out;
     out.final_state = next.state;
     out.controls[step] = control;
-    out.active_controls[step] = true;
+    // The first control commits entry geometry. Following controls are ignored
+    // until that same intent finishes alignment and emits its first Drive.
+    out.active_controls[step] = !continuing_alignment;
+    if (next.aligning && !alignment) {
+      alignment = control;
+      alignment_begin = step;
+    } else if (!next.aligning) {
+      alignment.reset();
+    }
     out.poses.push_back(next.state.pose);
     ++step;
   }

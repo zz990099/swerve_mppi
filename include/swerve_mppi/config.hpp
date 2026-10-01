@@ -28,6 +28,9 @@ struct Config {
   double max_angular_accel_radps2 = 1.3;
   double max_angular_decel_radps2 = 1.3;
   double steering_tolerance_rad = 0.05;
+  // Maximum target joint change allowed without stopping in a stable mode.
+  // Set equal to steering_tolerance_rad for a conservative stop/align policy.
+  double drive_steering_limit_rad = 0.20;
   double stopped_linear_mps = 0.035;
   double stopped_angular_radps = 0.035;
   double stopped_wheel_speed_mps = 0.005;
@@ -49,6 +52,8 @@ struct Config {
   double temperature = 0.35;
   double noise_v_mps = 0.30;
   double noise_w_radps = 0.35;
+  // Stationary AR(1) proposals; zero restores independent time-step noise.
+  double noise_correlation = 0.85;
   // Used for proposal weighting only; branch ranking uses physical critic costs.
   double control_correction_weight = 0.015;
   std::uint32_t random_seed = 42;

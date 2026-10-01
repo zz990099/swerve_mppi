@@ -35,6 +35,17 @@ are not thread-safe and must be serialized by their caller.
 6. Commit an immediate switch, or execute the first control in the current mode.
 7. Advance a warm start only for an emitted keep-mode drive action.
 
+Large same-mode steering changes commit a fixed control intent until alignment
+and the first drive tick complete, with the same configured timeout bound. New
+sampled directions cannot interrupt this operation. RolloutEngine predicts the
+same commitment, masks controls ignored during it, and rejects a planned mode
+switch that would preempt it. The initiating control remains active because it
+sets entry geometry. Controller rechecks a constant-intent continuation against
+fresh obstacles while local alignment is active; this check is conservative and
+can stop before a shorter continuation would become unsafe. Reset clears the
+commitment. A confirmed mode switch likewise preserves its agreed entry intent
+through the stopped handover and first drive tick.
+
 A rejected immediate switch uses the keep-mode solution, rather than projecting
 the rejected mode's first control into the current mode. Future transitions
 remain plans and require a fresh decision before execution. Future-switch plans
@@ -49,7 +60,8 @@ Timeout covers the entire committed transition, including braking.
 
 ## Continuous optimization
 
-The proposal is the nominal sequence plus Gaussian perturbations, projected into
+The proposal is the nominal sequence plus stationary AR(1) Gaussian perturbations,
+projected into
 the branch's mode and wheel-speed limits. One sample preserves the nominal
 sequence. Updates use the effective perturbation after projection, not discarded
 raw noise. Transition ticks are masked from the control-noise correction and
@@ -59,9 +71,14 @@ that control across all proposals, so masked noise cannot alter entry geometry.
 Entry intent currently comes from the branch seed; optimizing discrete entry
 directions as separate branches remains future work.
 
-Weights use a minimum-normalized exponential of trajectory cost plus
-control_correction_weight * nominal * effective_noise / variance. A disabled
-noise dimension contributes no correction. Mode selection compares physical
+`noise_correlation` controls temporal continuity without changing marginal noise
+variance. Zero selects independent noise. The noise process restarts after the
+frozen mode-entry control. Weighting whitens nominal controls and effective noise
+with the AR(1) precision operator inside each contiguous active segment; inactive
+ticks break segments and contribute no correction. For zero correlation this
+reduces to control_correction_weight * nominal * effective_noise / variance.
+A disabled noise dimension contributes no correction. Weights use a
+minimum-normalized exponential of trajectory cost plus that correction. Mode selection compares physical
 critic scores; proposal correction is used only for weighting within a branch.
 The output is the re-evaluated weighted sequence. A feasible nominal or sampled
 sequence is used only when the weighted sequence is infeasible or no finite
@@ -82,15 +99,25 @@ wheel speed sign for equivalent directions. Distances are direct joint distances
 not wrapped shortcuts across hard stops. Every control is uniformly scaled when
 wheel-speed limits would be exceeded, preserving its body twist direction.
 
-Within a stable mode, a significant steering change uses a conservative
-brake/align/drive sequence. Steering remains fixed until body and wheel feedback
-are stopped. Wheel acceleration, body linear acceleration/deceleration and angular
-acceleration/deceleration bound a common wheel-speed interpolation factor.
-Forward kinematics of those wheel speeds and measured steering angles gives the
-predicted body twist, which is integrated using constant-twist SE(2) integration.
-Measured wheel speeds are authoritative for propagation; odometry velocity is
-also checked by the stopped gate. The adapter must supply mutually consistent
-feedback and converts joint angular speeds to linear rolling speeds.
+Within a stable mode, joint changes within drive_steering_limit_rad use bounded
+continuous steering. Steering and wheel speeds share an interpolation factor,
+limited by wheel acceleration and steering rate. The model then checks the full
+encoder-derived twist change, including the steering contribution, and reduces
+the factor until linear/angular acceleration or deceleration limits hold.
+The search has a bounded iteration count and rejects an invalid step.
+
+Larger changes use brake/align/drive: steering stays fixed until body and wheel
+feedback are stopped. The local commitment prevents stochastic target chasing.
+Hard-stop crossings still require this stopped realignment. Mode transitions
+retain their separate explicit request and measured confirmation protocol.
+
+Forward kinematics of the next wheel speeds and next steering positions gives
+the predicted twist, integrated using constant-twist SE(2) integration. Drive
+outputs carry exactly those joint targets and that predicted body twist. The
+executor verifies their consistency and moving-steering bounds. Measured wheel
+speeds remain authoritative initial conditions; odometry is also checked by the
+stopped gate. The adapter must supply mutually consistent feedback and convert
+joint angular speeds to linear rolling speeds.
 
 Transitions consume braking, bounded mode-entry alignment and confirmation ticks.
 Even zero configured delays consume at least one tick to guarantee termination.
@@ -111,8 +138,8 @@ See docs/EXECUTION_CONTRACT.md for the API and reset protocol.
 ## Boundaries for simulation integration
 
 The geometry and actuator defaults correspond to the simulation configuration.
-The predictive drive interlock remains more conservative than the simulator's
-active double-Ackermann steering behavior. Braking response, body limits, slipping,
+The predictive drive model permits bounded continuous steering but retains
+stopped realignment for larger changes. Braking response, body limits, slipping,
 communication delay and transition times require identification before claiming
 model agreement.
 
@@ -145,3 +172,10 @@ These tests validate core contracts, not Gazebo tracking performance. The next
 stage must compare predicted trajectories against independent Gazebo truth and
 measure solve-time distributions, tracking error, mode-switch counts, stalls and
 faults.
+
+Default-noise behavior regressions run straight, lateral, curved and spin goals
+for five fixed random seeds using an independent encoder fixture and midpoint
+pose integration. They check bounded final error, no execution fault, a maximum
+unfinished stationary interval, and mode-change counts. They do not establish
+terminal stopping, task completion, arbitrary path tracking or calibrated plant
+agreement; those remain later stages.
