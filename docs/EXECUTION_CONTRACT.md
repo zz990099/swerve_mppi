@@ -101,6 +101,17 @@ ID, stopped measurements and steering, and emits one stopped handover cycle.
 | RequestMode | Start/retry the explicit request. | Retry the same request; reject replacement. |
 | SafeStop | Zero drive and latch fault. | Cancel alignment, retain measured steering and latch fault. |
 
+For every Drive, the executor checks each module's rolling vector against
+(vx - wz*y_i, vy + wz*x_i), in addition to encoder/body agreement and mode limits.
+The largest residual must not exceed drive_kinematic_tolerance_mps (default
+0.02 m/s, nonnegative; zero requires ideal kinematics within numerical tolerance).
+Aggregate least-squares agreement alone cannot validate mutually opposing wheels.
+DriveModel applies the same residual envelope to nonzero, ready Drive steps while
+limiting wheel/steering changes jointly. Braking keeps measured steering and does
+not require a measured slipping wheel pair to become an ideal kinematic pair.
+The allowance bounds target interpolation error; it is not a tire-slip model or
+proof that the chassis will follow those targets.
+
 SafeStop is the explicit cancellation operation. An empty or invalid path also
 causes Controller to emit SafeStop. Hold or a different DriveMode request cannot
 cancel a committed transition or recover a fault.
@@ -112,9 +123,16 @@ calling process stops running. The core cannot detect silence without calls.
 ModeManager's deadline starts when a switch is committed, including its braking.
 ModeExecutor's deadline starts when it receives the first RequestMode, including
 any local braking. Retries renew neither deadline. TransitionModel accounts for
-braking, bounded alignment and confirmation_prediction_s; the last parameter is
-a planning allowance for feedback/transport delay, not permission to synthesize
-confirmation. It rejects predicted transitions beyond confirmation_timeout_s.
+braking and bounded alignment, then reserves max(2, ceil(confirmation_prediction_s
+/ dt_s)) stopped cycles. These include the executor confirmation Hold and the
+manager's measured-feedback handover Hold. The parameter is the total
+post-alignment planning allowance: values below two ticks cannot remove protocol
+cycles; larger values reserve additional feedback/transport latency. The default
+0.20 s at dt_s=0.1 retains two cycles. It never permits synthesized confirmation.
+The receipt deadline includes braking/alignment and confirmation receipt, before
+the final handover cycle ends; first Drive may occur one tick after that deadline.
+A horizon must still contain both stopped cycles. Predicted late receipt is
+infeasible.
 Feedback age, clock-reset handling and transport latency remain caller duties.
 The reusable guarded entry point below enforces these checks when the caller
 provides a current clock and periodic watchdog ticks.

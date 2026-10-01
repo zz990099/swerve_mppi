@@ -29,7 +29,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.8 CONFIG REQUIRED)
+find_package(swerve_mppi 0.9 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -90,6 +90,18 @@ The optional allocation regression runs in CI; wall-clock timing is not a CI gat
 
 ## Current status
 
+Version 0.9 closes configurable dynamics and public safety/execution boundaries.
+Signed linear/angular reversals spend braking time before accelerating in the
+opposite direction. Injected validators must share the consumer's footprint,
+margin and measured joint validity envelope. Model and executor bound each
+module's rolling-vector residual against its declared rigid-body twist using
+`drive_kinematic_tolerance_mps` (default 0.02 m/s). Switch prediction reserves at
+least two post-alignment confirmation/handover ticks, even with zero configured
+delay. Actual execution still requires matching measured confirmation.
+Rebuild downstream consumers against 0.9; the public Config layout has changed.
+See [docs/SAFETY_CONTRACT_VALIDATION.md](docs/SAFETY_CONTRACT_VALIDATION.md) for the
+new contracts and current verification results.
+
 Version 0.8 gives navigation an explicit effective target and terminal eligibility.
 Uncaptured corners own their slowdown/capture target, even near a closed-loop or
 foldback endpoint. Goal acquisition and terminal capture require that eligibility.
@@ -97,9 +109,9 @@ All controlled stops share one output check, including terminal early returns,
 completed-task external motion and unconfirmed mode requests. Stopping predictions
 preserve measured mode feedback and never synthesize confirmation. New closed loops
 cover short foldbacks, short squares, near-terminal corners and a close obstacle
-corridor. Rebuild consumers against 0.8 after the public navigation/rollout additions.
-See [docs/CORE_REVIEW_VALIDATION.md](docs/CORE_REVIEW_VALIDATION.md) for the current
-regression results and committed Release measurement matrix.
+corridor. Those public navigation/rollout additions required rebuilding 0.8 consumers.
+See [docs/CORE_REVIEW_VALIDATION.md](docs/CORE_REVIEW_VALIDATION.md) for the historical
+0.8 regression results and committed Release measurement matrix.
 
 Version 0.7 fixes segment-order matching on short loops/crossings/foldbacks,
 unifies tracking/corner/terminal alignment and preserves switch-entry intent through

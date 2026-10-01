@@ -4,7 +4,10 @@ Stage 3 covers standalone core performance and observability. No simulator,
 ROS adapter, transport protocol or hardware integration was added. Tracking
 parameters, completion tolerances and execution interlocks retain their 0.5 defaults.
 Version 0.8 adds current-target slowdown, terminal eligibility and unified stopping
-validation. Measurements below use that implementation. Historical stage 3 results
+validation. Committed timing measurements below use that historical implementation;
+commands build the current source. The 0.9 dynamics/residual/protocol changes have
+new regression evidence in SAFETY_CONTRACT_VALIDATION.md and do not inherit 0.8
+solve-time percentiles or completion ticks. Historical stage 3 results
 and tuning conclusions remain identified as 0.6 evidence in VALIDATION.md.
 
 ## Reproduce a measurement

@@ -74,3 +74,8 @@ solver deadline remain documented model limits, not completed simulation work.
 
 For the subsequent 0.8 target-eligibility and stopping corrections, current
 validation and committed timing CSVs, see CORE_REVIEW_VALIDATION.md.
+
+For the subsequent 0.9 configurable reversal, validator compatibility, module
+residual and fixed protocol-cycle corrections, see SAFETY_CONTRACT_VALIDATION.md.
+The integration contract above is historical 0.7 guidance; current consumers must
+rebuild against find_package(swerve_mppi 0.9 CONFIG REQUIRED).
