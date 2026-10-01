@@ -10,21 +10,28 @@ namespace {
 constexpr double kInfinity = std::numeric_limits<double>::infinity();
 double clamp(double value, double low, double high) { return std::max(low, std::min(value, high)); }
 
-double path_distance(const Pose2d &pose, const std::vector<Pose2d> &path) {
-  double nearest = kInfinity;
+struct PathMatch {
+  double distance;
+  double yaw;
+};
+PathMatch path_match(const Pose2d &pose, const std::vector<Pose2d> &path) {
+  PathMatch match{kInfinity, path.front().yaw};
   for (std::size_t i = 1; i < path.size(); ++i) {
-    const double dx = path[i].x - path[i - 1].x;
-    const double dy = path[i].y - path[i - 1].y;
+    const double dx = path[i].x - path[i - 1].x, dy = path[i].y - path[i - 1].y;
     const double length2 = dx * dx + dy * dy;
     const double t =
         length2 > 1e-12
-            ? clamp(((pose.x - path[i - 1].x) * dx + (pose.y - path[i - 1].y) * dy) / length2, 0.0,
-                    1.0)
-            : 0.0;
-    nearest = std::min(
-        nearest, std::hypot(pose.x - (path[i - 1].x + t * dx), pose.y - (path[i - 1].y + t * dy)));
+            ? clamp(((pose.x - path[i - 1].x) * dx + (pose.y - path[i - 1].y) * dy) / length2, 0, 1)
+            : 0;
+    const double distance =
+        std::hypot(pose.x - path[i - 1].x - t * dx, pose.y - path[i - 1].y - t * dy);
+    if (distance < match.distance)
+      match = {distance,
+               wrap_angle(path[i - 1].yaw + t * angle_distance(path[i].yaw, path[i - 1].yaw))};
   }
-  return path.size() == 1 ? std::hypot(pose.x - path[0].x, pose.y - path[0].y) : nearest;
+  if (path.size() == 1)
+    match.distance = std::hypot(pose.x - path[0].x, pose.y - path[0].y);
+  return match;
 }
 
 double segment_obstacle_cost(const Pose2d &previous, const Pose2d &next,
@@ -60,8 +67,12 @@ public:
       return kInfinity;
     double cost = 0.0;
     for (std::size_t i = 1; i < trajectory.poses.size(); ++i) {
-      const double d = path_distance(trajectory.poses[i], input.reference_path);
-      cost += config_.dt_s * config_.path_weight * d * d;
+      const auto match = path_match(trajectory.poses[i], input.reference_path);
+      cost += config_.dt_s * config_.path_weight * match.distance * match.distance;
+      if (input.tracking && input.tracking->heading_policy == PathHeadingPolicy::FollowPath) {
+        const double yaw = angle_distance(trajectory.poses[i].yaw, match.yaw);
+        cost += config_.dt_s * config_.path_heading_weight * yaw * yaw;
+      }
     }
     return cost;
   }
@@ -98,7 +109,15 @@ public:
     const auto &pose = trajectory.final_state.pose;
     const double d = std::hypot(pose.x - goal.x, pose.y - goal.y);
     const double yaw = angle_distance(pose.yaw, goal.yaw);
-    return config_.goal_weight * d * d + config_.yaw_weight * yaw * yaw;
+    const bool terminal =
+        !input.tracking || (input.tracking->terminal &&
+                            input.tracking->remaining_length_m < config_.goal_slowdown_distance_m);
+    double cost = config_.goal_weight * d * d + (terminal ? config_.yaw_weight * yaw * yaw : 0.0);
+    if (input.tracking && terminal) {
+      const auto &v = trajectory.final_state.velocity;
+      cost += config_.goal_speed_weight * (v.vx * v.vx + v.vy * v.vy);
+    }
+    return cost;
   }
 
 private:
@@ -112,6 +131,30 @@ public:
     double cost = 0.0;
     for (const auto &u : trajectory.controls)
       cost += config_.dt_s * config_.effort_weight * (u.vx * u.vx + u.vy * u.vy + u.wz * u.wz);
+    return cost;
+  }
+
+private:
+  Config config_;
+};
+class SmoothnessCritic final : public Critic {
+public:
+  explicit SmoothnessCritic(Config config) : config_(config) {}
+  std::string_view name() const override { return "ControlChange"; }
+  double score(const ControllerInput &input, const Trajectory &trajectory) const override {
+    if (trajectory.active_controls.size() != trajectory.controls.size())
+      return kInfinity;
+    Control previous{input.vehicle.velocity.vx, input.vehicle.velocity.vy,
+                     input.vehicle.velocity.wz};
+    double cost = 0;
+    for (std::size_t i = 0; i < trajectory.controls.size(); ++i) {
+      if (!trajectory.active_controls[i])
+        continue;
+      const auto &u = trajectory.controls[i];
+      const double vx = u.vx - previous.vx, vy = u.vy - previous.vy, wz = u.wz - previous.wz;
+      cost += config_.smoothness_weight * (vx * vx + vy * vy + wz * wz);
+      previous = u;
+    }
     return cost;
   }
 
@@ -137,6 +180,7 @@ CriticManager::CriticManager(const Config &config) {
   add(std::make_shared<GoalCritic>(config));
   add(std::make_shared<EffortCritic>(config));
   add(std::make_shared<SwitchCritic>(config));
+  add(std::make_shared<SmoothnessCritic>(config));
 }
 void CriticManager::add(std::shared_ptr<const Critic> critic) {
   if (!critic)

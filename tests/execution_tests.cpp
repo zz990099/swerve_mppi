@@ -413,8 +413,7 @@ void test_frozen_controller_alignment() {
   auto in = initial();
   const auto first = controller.compute(in);
   check(first.action == Action::Hold, "large same-mode steering must start stopped alignment");
-  // Changing the path cannot chase the steering target while joints are aligning.
-  in.reference_path = {{0, 0, 0}, {1, 0, 0}};
+  // Repeated updates of the same path cannot chase a committed steering target.
   in.vehicle.stamp_s += c.dt_s;
   const auto retry = controller.compute(in);
   check(retry.action == Action::Hold && retry.steering_targets == first.steering_targets,

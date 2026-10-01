@@ -11,6 +11,8 @@ namespace swerve_mppi {
 enum class DriveMode { DualAckermann, Spin, Crab };
 enum class TransitionPhase { Stable, Braking, Aligning, AwaitingConfirmation, Fault };
 enum class Action { Drive, Brake, RequestMode, Hold, SafeStop };
+enum class NavigationStatus { Tracking, ApproachingGoal, AligningGoal, Settling, Complete, Fault };
+enum class PathHeadingPolicy { FollowPath, GoalOnly };
 
 struct Pose2d {
   double x = 0.0;
@@ -45,10 +47,25 @@ struct CircleObstacle {
   double radius = 0.0;
 };
 
+struct TrackingContext {
+  Pose2d goal;
+  double remaining_length_m = 0.0;
+  double speed_limit_mps = 0.0;
+  bool terminal = false;
+  PathHeadingPolicy heading_policy = PathHeadingPolicy::FollowPath;
+};
+
 struct ControllerInput {
   VehicleState vehicle;
   std::vector<Pose2d> reference_path;
   std::vector<CircleObstacle> obstacles;
+  // Change this ID to restart an identical path as a new task. Geometry changes
+  // are also detected automatically. Keep the full path stable between replans.
+  std::uint64_t path_id = 0;
+  PathHeadingPolicy heading_policy = PathHeadingPolicy::FollowPath;
+  // Populated by Controller for Optimizer/Critic calls; Controller overwrites
+  // caller-supplied context. Standalone Optimizer callers may supply it.
+  std::optional<TrackingContext> tracking;
 };
 
 struct Control {
@@ -85,6 +102,14 @@ struct Output {
   double selected_cost = 0.0;
   double keep_cost = 0.0;
   std::size_t feasible_rollouts = 0;
+  NavigationStatus navigation_status = NavigationStatus::Fault;
+  bool goal_reached = false;
+  bool stalled = false;
+  double path_progress_m = 0.0;
+  double remaining_path_m = 0.0;
+  double cross_track_error_m = 0.0;
+  double goal_distance_m = 0.0;
+  double goal_yaw_error_rad = 0.0;
 };
 
 } // namespace swerve_mppi

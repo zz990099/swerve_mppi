@@ -4,6 +4,16 @@
 namespace swerve_mppi {
 void validate(const Config &c) {
   const double positive[] = {c.wheelbase_m,
+                             c.path_lookahead_m,
+                             c.path_lookahead_turn_rad,
+                             c.path_search_window_m,
+                             c.goal_position_tolerance_m,
+                             c.goal_yaw_tolerance_rad,
+                             c.goal_slowdown_distance_m,
+                             c.goal_translation_gain,
+                             c.goal_rotation_gain,
+                             c.progress_timeout_s,
+                             c.progress_distance_m,
                              c.track_m,
                              c.wheel_radius_m,
                              c.robot_radius_m,
@@ -31,6 +41,11 @@ void validate(const Config &c) {
     }
   }
   const double nonnegative[] = {c.control_correction_weight,
+                                c.path_progress_slack_m,
+                                c.goal_settle_time_s,
+                                c.path_heading_weight,
+                                c.smoothness_weight,
+                                c.goal_speed_weight,
                                 c.stopped_wheel_speed_mps,
                                 c.collision_margin_m,
                                 c.stopped_linear_mps,
@@ -53,8 +68,13 @@ void validate(const Config &c) {
     }
   }
   if (c.steering_limit_rad < 1.5707963267948966 || c.steering_limit_rad > 3.14159265358979323846 ||
-      !std::isfinite(c.noise_correlation) || c.noise_correlation < 0.0 ||
-      c.noise_correlation >= 1.0 || c.steering_tolerance_rad >= c.steering_limit_rad ||
+      c.goal_docking_distance_m <= c.goal_position_tolerance_m ||
+      c.goal_docking_distance_m > c.goal_slowdown_distance_m ||
+      !std::isfinite(c.goal_docking_distance_m) ||
+      c.goal_yaw_tolerance_rad >= 3.14159265358979323846 ||
+      c.path_lookahead_turn_rad >= 3.14159265358979323846 || !std::isfinite(c.noise_correlation) ||
+      c.noise_correlation < 0.0 || c.noise_correlation >= 1.0 ||
+      c.steering_tolerance_rad >= c.steering_limit_rad ||
       c.drive_steering_limit_rad < c.steering_tolerance_rad ||
       c.drive_steering_limit_rad > c.steering_limit_rad || c.horizon_steps < 2 ||
       c.samples_per_branch < 1 || c.iterations < 1) {

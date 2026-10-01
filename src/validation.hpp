@@ -43,6 +43,18 @@ inline bool valid_vehicle(const VehicleState &vehicle, const Config &config) {
   return true;
 }
 inline bool valid_input(const ControllerInput &input, const Config &config) {
+  if (input.heading_policy != PathHeadingPolicy::FollowPath &&
+      input.heading_policy != PathHeadingPolicy::GoalOnly)
+    return false;
+  if (input.tracking) {
+    const auto &t = *input.tracking;
+    if (!std::isfinite(t.goal.x) || !std::isfinite(t.goal.y) || !std::isfinite(t.goal.yaw) ||
+        !std::isfinite(t.remaining_length_m) || t.remaining_length_m < 0 ||
+        !std::isfinite(t.speed_limit_mps) || t.speed_limit_mps < 0 ||
+        (t.heading_policy != PathHeadingPolicy::FollowPath &&
+         t.heading_policy != PathHeadingPolicy::GoalOnly))
+      return false;
+  }
   if (input.reference_path.empty() || !valid_vehicle(input.vehicle, config))
     return false;
   for (const auto &waypoint : input.reference_path) {

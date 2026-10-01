@@ -15,7 +15,8 @@ public:
   CriticManager &critics() { return critics_; }
 
 private:
-  std::vector<Control> seed(const ControllerInput &input, const Branch &branch) const;
+  std::vector<Control> seed(const ControllerInput &input, const Branch &branch,
+                            bool use_warm = true) const;
   Config config_;
   DriveModel model_;
   RolloutEngine rollout_;

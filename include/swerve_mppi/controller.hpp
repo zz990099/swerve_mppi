@@ -1,5 +1,6 @@
 #pragma once
 
+#include "swerve_mppi/navigation.hpp"
 #include "swerve_mppi/optimizer.hpp"
 
 namespace swerve_mppi {
@@ -11,12 +12,17 @@ public:
   TransitionPhase transition_phase() const { return mode_manager_.phase(); }
 
 private:
+  Output compute_tracking(const ControllerInput &input);
+  Output compute_goal(const ControllerInput &input, const GoalState &goal);
+  Output request_mode(const ControllerInput &input, DriveMode mode, const Control &intent);
   Output continue_alignment(const ControllerInput &input);
   Config config_;
   DriveModel model_;
   Optimizer optimizer_;
   ModeScheduler scheduler_;
   ModeManager mode_manager_;
+  PathManager path_manager_;
+  GoalManager goal_manager_;
   double last_stamp_s_ = -1.0;
   std::optional<Control> alignment_control_;
   DriveMode alignment_mode_ = DriveMode::DualAckermann;

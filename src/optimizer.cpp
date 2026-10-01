@@ -10,8 +10,9 @@ double clamp(double value, double low, double high) { return std::clamp(value, l
 } // namespace
 Optimizer::Optimizer(const Config &config)
     : config_(config), model_(config), rollout_(config), critics_(config), noise_(config) {}
-std::vector<Control> Optimizer::seed(const ControllerInput &input, const Branch &branch) const {
-  if (!branch.switches && warm_mode_ == input.vehicle.actual_mode &&
+std::vector<Control> Optimizer::seed(const ControllerInput &input, const Branch &branch,
+                                     bool use_warm) const {
+  if (use_warm && !branch.switches && warm_mode_ == input.vehicle.actual_mode &&
       warm_start_.size() == config_.horizon_steps)
     return warm_start_;
   const Pose2d &goal = input.reference_path.back();
@@ -30,8 +31,9 @@ std::vector<Control> Optimizer::seed(const ControllerInput &input, const Branch 
                    config_.max_vx_mps);
       if (std::abs(u.vx) < 0.15 && std::abs(local_y) > 0.2)
         u.vx = 0.35;
-      const double heading = std::atan2(local_y, std::max(0.2, local_x));
-      u.wz = clamp(1.5 * heading, -config_.max_yaw_rate_radps, config_.max_yaw_rate_radps);
+      // Signed pure-pursuit curvature preserves reverse travel semantics.
+      const double curvature = 2.0 * local_y / std::max(.04, local_x * local_x + local_y * local_y);
+      u.wz = clamp(u.vx * curvature, -config_.max_yaw_rate_radps, config_.max_yaw_rate_radps);
     } else if (mode == DriveMode::Spin) {
       u.wz = clamp(angle_distance(goal.yaw, pose.yaw), -config_.max_spin_radps,
                    config_.max_spin_radps);
@@ -49,7 +51,21 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch)
   result.branch = branch;
   if (!detail::valid_input(input, config_))
     return result;
+  const auto constrain = [&](Control u, std::size_t t) {
+    const auto mode =
+        branch.switches && t >= branch.switch_step ? branch.mode : input.vehicle.actual_mode;
+    u = model_.project(u, mode);
+    if (input.tracking && mode != DriveMode::Spin) {
+      const double speed = std::hypot(u.vx, u.vy);
+      const double scale =
+          speed > input.tracking->speed_limit_mps ? input.tracking->speed_limit_mps / speed : 1.0;
+      u = {u.vx * scale, u.vy * scale, u.wz * scale};
+    }
+    return model_.project(u, mode);
+  };
   auto mean = seed(input, branch);
+  for (std::size_t t = 0; t < mean.size(); ++t)
+    mean[t] = constrain(mean[t], t);
   auto evaluate = [&](const std::vector<Control> &controls) {
     Solution out;
     out.branch = branch;
@@ -76,8 +92,16 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch)
         // Preserve the nominal proposal when steering-sensitive noisy rollouts stall.
         candidate = mean;
         sample.noise.assign(mean.size(), Control{});
+      } else if (k == 1 && input.tracking) {
+        candidate = seed(input, branch, false);
+        sample.noise.resize(mean.size());
       } else {
         noise_.sample(mean, branch, input.vehicle.actual_mode, candidate, sample.noise);
+      }
+      for (std::size_t t = 0; t < candidate.size(); ++t) {
+        candidate[t] = constrain(candidate[t], t);
+        sample.noise[t] = {candidate[t].vx - mean[t].vx, candidate[t].vy - mean[t].vy,
+                           candidate[t].wz - mean[t].wz};
       }
       auto proposal = evaluate(candidate);
       sample.active = proposal.trajectory.active_controls;
@@ -118,9 +142,7 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch)
       mean[t].vx += weighted[t].vx / total;
       mean[t].vy += weighted[t].vy / total;
       mean[t].wz += weighted[t].wz / total;
-      const DriveMode mode =
-          branch.switches && t >= branch.switch_step ? branch.mode : input.vehicle.actual_mode;
-      mean[t] = model_.project(mean[t], mode);
+      mean[t] = constrain(mean[t], t);
     }
     auto updated = evaluate(mean);
     // Return the MPPI weighted sequence; a feasible sample is only a safety fallback.

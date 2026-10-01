@@ -63,6 +63,23 @@ struct Config {
   double yaw_weight = 0.8;
   double effort_weight = 0.015;
   double clearance_weight = 0.08;
+  double path_heading_weight = 0.3;
+  double smoothness_weight = 0.08;
+  double goal_speed_weight = 2.0;
+
+  double path_lookahead_m = 1.0;
+  double path_lookahead_turn_rad = 1.0;
+  double path_search_window_m = 1.5;
+  double path_progress_slack_m = 0.1;
+  double goal_position_tolerance_m = 0.06;
+  double goal_yaw_tolerance_rad = 0.05;
+  double goal_settle_time_s = 0.3;
+  double goal_slowdown_distance_m = 0.6;
+  double goal_docking_distance_m = 0.25;
+  double goal_translation_gain = 1.2;
+  double goal_rotation_gain = 1.5;
+  double progress_timeout_s = 3.0;
+  double progress_distance_m = 0.03;
 };
 
 void validate(const Config &config);

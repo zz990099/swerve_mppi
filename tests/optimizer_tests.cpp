@@ -173,6 +173,27 @@ void test_optimizer_reset_and_closed_loop() {
   check(std::abs(initial - in.vehicle.pose.x) < initial * .5,
         "deterministic closed-loop core must make measurable progress");
 }
+void test_tracking_speed_limit() {
+  Config c;
+  c.minimum_mode_dwell_s = 0;
+  for (auto mode : {DriveMode::DualAckermann, DriveMode::Crab}) {
+    auto in = input();
+    in.vehicle.actual_mode = mode;
+    in.tracking = TrackingContext{{1, 0, 0}, .2, .08, true, PathHeadingPolicy::FollowPath};
+    const auto result = Optimizer(c).optimize(in, {mode, 0, false});
+    check(std::isfinite(result.cost), "speed-limited tracking must retain feasible proposals");
+    for (const auto &u : result.controls)
+      check(std::hypot(u.vx, u.vy) <= .08 + 1e-9,
+            "nominal, noise and weighted controls must obey terminal speed limit");
+  }
+  auto in = input();
+  in.reference_path = {{0, 0, 0}, {0, 1, 0}};
+  in.tracking = TrackingContext{{0, 1, 0}, 1, .08, false, PathHeadingPolicy::FollowPath};
+  const auto result = Optimizer(c).optimize(in, {DriveMode::Crab, 0, true});
+  check(std::isfinite(result.cost) && result.controls[0].vx == 0 &&
+            std::abs(result.controls[0].vy - .08) < 1e-9,
+        "tracking proposals must preserve the constrained frozen mode-entry seed");
+}
 class RejectAll final : public Critic {
 public:
   std::string_view name() const override { return "RejectAll"; }
@@ -205,6 +226,7 @@ int main() {
     test_frozen_alignment_rollout();
     test_optimizer_reset_and_closed_loop();
     test_extension_and_invalid_inputs();
+    test_tracking_speed_limit();
     std::cout << "Optimizer regressions passed\n";
     return 0;
   } catch (const std::exception &e) {
