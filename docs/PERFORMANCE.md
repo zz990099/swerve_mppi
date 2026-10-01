@@ -5,7 +5,7 @@ ROS adapter, transport protocol or hardware integration was added. Tracking
 parameters, completion tolerances and execution interlocks retain their 0.5 defaults.
 Version 0.8 adds current-target slowdown, terminal eligibility and unified stopping
 validation. Committed timing measurements below use that historical implementation;
-commands build the current source. The 0.9 dynamics/residual/protocol changes have
+commands build the current source. The 0.9/0.10 dynamics, safety and protocol changes have
 new regression evidence in SAFETY_CONTRACT_VALIDATION.md and do not inherit 0.8
 solve-time percentiles or completion ticks. Historical stage 3 results
 and tuning conclusions remain identified as 0.6 evidence in VALIDATION.md.
@@ -75,7 +75,7 @@ Optimizer owns reusable sample noise/masks, candidate/weighted controls and one
 proposal trajectory. RolloutEngine supports both a value-returning API and an
 output-parameter overload that retains vector capacity. Transition poses append
 into that buffer. Results/fallbacks copy only data needed for returned solutions.
-Controller retains capture/alignment safety models, controls and trace. In 0.7
+Controller retains its safety rollout engine and a reusable continuation trace. In 0.7
 hard validation is shared with Optimizer instead of a separate safety CriticManager.
 
 Returned Solution/Trajectory values own their storage; subsequent solves cannot

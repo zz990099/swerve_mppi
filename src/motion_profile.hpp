@@ -100,7 +100,11 @@ inline void integrate_profile(StepResult &out, const Twist2d &before, const Moti
   integrate_constant(out.state.pose, v, remaining);
   // A curve with bounded world acceleration deviates from its endpoint chord
   // by <= A*dt^2/8, including interior excursions during a signed reversal.
-  out.sweep_margin_m = acceleration * dt * dt / 8 + out.integration_error_m;
+  const bool straight_monotonic = before.wz == 0 && v.wz == 0 &&
+                                  before.vx * v.vy == before.vy * v.vx &&
+                                  before.vx * v.vx + before.vy * v.vy >= 0;
+  out.sweep_margin_m =
+      (straight_monotonic ? 0 : acceleration * dt * dt / 8) + out.integration_error_m;
 }
 inline void append_motion(const StepResult &step, std::vector<Pose2d> *poses,
                           std::vector<double> *margins, double &position_error) {

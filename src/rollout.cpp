@@ -1,5 +1,6 @@
 #include "swerve_mppi/rollout.hpp"
 #include "motion_profile.hpp"
+#include "time_comparison.hpp"
 #include "validation.hpp"
 #include <algorithm>
 #include <cmath>
@@ -30,7 +31,7 @@ void RolloutEngine::stopping_rollout(const VehicleState &initial, const Branch &
         !std::isfinite(first_control->vy) || !std::isfinite(first_control->wz))) ||
       (branch.switches &&
        (!first_control || branch.switch_step != 0 || branch.mode == initial.actual_mode ||
-        initial.time_in_mode_s < config_.minimum_mode_dwell_s - 1e-9)))
+        !detail::elapsed_at_least(initial.time_in_mode_s, 0, config_.minimum_mode_dwell_s))))
     return;
   out.poses.push_back(initial.pose);
   std::size_t steps = 0;
@@ -53,7 +54,8 @@ void RolloutEngine::stopping_rollout(const VehicleState &initial, const Branch &
   };
   while (pending || !at_rest()) {
     if (steps >= config_.stopping_horizon_steps ||
-        (pending && (steps - alignment_begin) * config_.dt_s > config_.confirmation_timeout_s))
+        (pending && detail::duration_exceeded((steps - alignment_begin) * config_.dt_s,
+                                              config_.confirmation_timeout_s)))
       return;
     const Control control =
         pending ? model_.project(*first_control, out.final_state.actual_mode) : Control{};
@@ -63,7 +65,7 @@ void RolloutEngine::stopping_rollout(const VehicleState &initial, const Branch &
     out.final_state = next.state;
     detail::append_motion(next, &out.poses, &out.sweep_margins_m, out.position_error_m);
     out.controls.push_back(control);
-    out.active_controls.push_back(pending);
+    out.active_controls.push_back(first_control && steps == alignment_begin);
     if (!next.aligning)
       pending = false;
     ++steps;
@@ -90,8 +92,8 @@ void RolloutEngine::generate(const VehicleState &initial, const Branch &branch,
       controls.size() != config_.horizon_steps ||
       (branch.switches &&
        (branch.mode == initial.actual_mode || branch.switch_step >= config_.horizon_steps ||
-        initial.time_in_mode_s + branch.switch_step * config_.dt_s <
-            config_.minimum_mode_dwell_s - 1e-9)))
+        !detail::elapsed_at_least(initial.time_in_mode_s + branch.switch_step * config_.dt_s, 0,
+                                  config_.minimum_mode_dwell_s))))
     return;
   out.poses.reserve(config_.horizon_steps + 1);
   out.poses.push_back(initial.pose);
@@ -121,8 +123,8 @@ void RolloutEngine::generate(const VehicleState &initial, const Branch &branch,
         !std::isfinite(controls[step].wz))
       return;
     const bool continuing_alignment = alignment.has_value();
-    if (continuing_alignment &&
-        (step - alignment_begin) * config_.dt_s > config_.confirmation_timeout_s)
+    if (continuing_alignment && detail::duration_exceeded((step - alignment_begin) * config_.dt_s,
+                                                          config_.confirmation_timeout_s))
       return;
     const Control control = alignment.value_or(model_.project(controls[step], mode));
     const auto next = model_.step(out.final_state, control, config_.dt_s);

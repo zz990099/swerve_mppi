@@ -129,8 +129,9 @@ The obstacle critic contributes clearance cost; lowering a weight cannot overrid
 a hard rejection.
 
 When planning has no feasible result, Controller discards warm/local intent and
-checks zero-control braking through the horizon. Only a valid trace ending with
-stopped body and all wheels can produce recoverable Brake/Hold. Otherwise
+checks zero-control braking using stopping_horizon_steps (default 200), independently
+of the MPPI horizon. Only a valid trace ending with exactly zero modeled body and
+wheels can produce recoverable Brake/Hold. Otherwise
 UnsafeStoppingTrajectory produces SafeStop. Waiting/Blocked describes a checked
 planning stop awaiting fresh input, not completed navigation.
 
@@ -186,15 +187,23 @@ Hard-stop crossings still require this stopped realignment. Mode transitions
 retain their separate explicit request and measured confirmation protocol.
 
 Forward kinematics of the next wheel speeds and next steering positions gives
-the predicted twist, integrated using constant-twist SE(2) integration. Drive
-outputs carry exactly those joint targets and that predicted body twist. The
+the endpoint twist. Motion uses a piecewise linear body-twist ramp, split at the
+linear speed minimum and angular zero crossing. Each phase consumes the slowest
+body/joint rate budget; remaining tick time holds the endpoint twist. Straight
+and fixed-curvature ramps integrate exactly in SE(2); noncommuting ramps use eight
+midpoint quadrature intervals with an explicit error bound. Each trajectory segment
+includes a conservative curve-to-chord radius and accumulated position error.
+This describes the predictive body ramp, not calibrated intermediate tire motion.
+Drive outputs carry exactly those joint targets and that endpoint body twist. The
 executor verifies their consistency and moving-steering bounds. Measured wheel
 speeds remain authoritative initial conditions; odometry is also checked by the
 stopped gate. The adapter must supply mutually consistent feedback and convert
 joint angular speeds to linear rolling speeds.
 
 Transitions consume braking, bounded mode-entry alignment and confirmation ticks.
-Even zero configured delays consume at least one tick to guarantee termination.
+Even zero configured delays reserve two post-alignment cycles: executor
+confirmation Hold, then manager measured-feedback handover Hold. The receipt
+deadline precedes the end of handover by one tick.
 Entry steering comes from the branch's intended control using the same bounded
 kinematics in prediction and execution. Crab aligns directly to its translation
 direction; Ackermann can enter its planned curvature. Zero intent uses the
@@ -208,6 +217,17 @@ It blocks drive during transitions, retains steering while braking, persists
 mode on zero drive, rejects changed/replayed requests and latches SafeStop.
 The actuator layer owns rate limiting, encoder sampling and command watchdogs.
 See docs/EXECUTION_CONTRACT.md for the API and reset protocol.
+
+Every Drive policy uses Controller::apply_control's first-Drive plus complete-stop
+gate before output and warm-start acceptance. RolloutEngine::generate_continuation
+retains committed entry/alignment intent until that first Drive, then brakes fully
+to zero. Exhausting stopping_horizon_steps fails closed. Stop thresholds are used
+for measured execution handover, not to discard residual predicted displacement.
+Zero intent is explicitly Brake/Hold and retains measured steering and zero drive
+targets; measured module residuals do not incorrectly turn braking into Drive.
+Shared inclusive time comparisons use a 1 ns floor or four times double precision epsilon times
+the timestamp magnitude, whichever is larger. Duration-to-ticks rounding uses the
+same tolerance. Timestamp order and replay protection remain strictly increasing.
 
 ## Boundaries for simulation integration
 
@@ -252,9 +272,9 @@ stage must compare predicted trajectories against independent Gazebo truth and
 measure solve-time distributions, tracking error, mode-switch counts, stalls and
 faults.
 
-Default-noise behavior regressions cover nine scenarios and five fixed seeds,
+Default-noise behavior regressions cover thirteen scenarios and five fixed seeds,
 including reverse travel, terminal yaw, S-curves, reversals and a closed square.
-An independent encoder fixture with midpoint pose integration checks completion,
+An independent encoder fixture with 64 substeps per tick checks completion,
 measured stopping, one second of post-completion Hold, path error, mode changes
 and unfinished stationary intervals. These are standalone regressions, not a
 calibrated plant or Gazebo benchmark. See docs/VALIDATION.md for measured results.

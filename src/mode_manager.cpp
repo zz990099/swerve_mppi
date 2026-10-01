@@ -1,4 +1,5 @@
 #include "swerve_mppi/mode.hpp"
+#include "time_comparison.hpp"
 #include "validation.hpp"
 #include <algorithm>
 #include <limits>
@@ -37,7 +38,7 @@ Output ModeManager::update(const VehicleState &observed) {
   if (!detail::valid_vehicle(observed, config_) || observed.stamp_s < start_s_ ||
       observed.stamp_s <= last_stamp_s_ || observed.mode_fault ||
       phase_ == TransitionPhase::Fault ||
-      observed.stamp_s - start_s_ > config_.confirmation_timeout_s) {
+      detail::deadline_exceeded(observed.stamp_s, start_s_, config_.confirmation_timeout_s)) {
     phase_ = TransitionPhase::Fault;
     out.phase = phase_;
     out.action = Action::SafeStop;

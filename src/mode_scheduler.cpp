@@ -1,4 +1,5 @@
 #include "swerve_mppi/mode.hpp"
+#include "time_comparison.hpp"
 #include "validation.hpp"
 #include <algorithm>
 #include <cmath>
@@ -11,10 +12,10 @@ std::vector<Branch> ModeScheduler::make_branches(const VehicleState &state) cons
   const double wait = config_.minimum_mode_dwell_s - state.time_in_mode_s;
   if (!state.mode_confirmed || state.mode_fault)
     return branches;
-  if (wait >= config_.dt_s * config_.horizon_steps)
+  const auto ticks = detail::duration_ticks(wait, config_.dt_s, config_.horizon_steps - 1);
+  if (!ticks)
     return branches;
-  const std::size_t earliest =
-      wait <= 0.0 ? 0 : static_cast<std::size_t>(std::ceil(wait / config_.dt_s));
+  const std::size_t earliest = *ticks;
   const DriveMode modes[] = {DriveMode::DualAckermann, DriveMode::Spin, DriveMode::Crab};
   for (DriveMode mode : modes) {
     if (mode == state.actual_mode)

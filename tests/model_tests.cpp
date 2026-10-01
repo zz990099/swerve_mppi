@@ -229,6 +229,11 @@ void test_curved_stop_and_reversal_enclosures() {
   trace.sweep_margins_m = {-1};
   check(TrajectoryValidator(c).check(in, trace) == TrajectoryStatus::Invalid,
         "invalid swept-motion metadata must fail closed");
+  trace.sweep_margins_m = {0};
+  trace.poses = {{0, 0, 0}, {1e-7, 0, 0}};
+  in.obstacles = {{.00100005, 0, 0}};
+  check(TrajectoryValidator(c).check(in, trace) == TrajectoryStatus::Collision,
+        "a short but nonzero swept segment must include its far endpoint");
 }
 void test_independent_ramp_integration_and_fixture() {
   for (double dt : {.05, .1, .2}) {

@@ -1,5 +1,6 @@
 #include "swerve_mppi/executor.hpp"
 
+#include "time_comparison.hpp"
 #include "validation.hpp"
 #include <algorithm>
 #include <stdexcept>
@@ -109,7 +110,7 @@ ExecutionResult ModeExecutor::update(const Output &command, const VehicleState &
 
   if (phase_ != TransitionPhase::Stable) {
     // Retries cannot renew the deadline; Drive/Hold/Brake cannot cancel a request.
-    if (measured.stamp_s - start_s_ > config_.confirmation_timeout_s)
+    if (detail::deadline_exceeded(measured.stamp_s, start_s_, config_.confirmation_timeout_s))
       return fault();
     if (!is_stopped(measured, config_)) {
       phase_ = TransitionPhase::Braking;
@@ -123,7 +124,7 @@ ExecutionResult ModeExecutor::update(const Output &command, const VehicleState &
     }
     out.action = Action::RequestMode;
     out.steering_targets = request_->steering_targets;
-    if (measured.stamp_s - alignment_start_s_ + 1e-9 >= config_.alignment_min_s &&
+    if (detail::elapsed_at_least(measured.stamp_s, alignment_start_s_, config_.alignment_min_s) &&
         detail::steering_aligned(measured.steering_angles, out.steering_targets, config_)) {
       actual_mode_ = request_->mode;
       confirmed_s_ = measured.stamp_s;

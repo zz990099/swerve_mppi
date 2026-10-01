@@ -1,4 +1,5 @@
 #include "swerve_mppi/navigation.hpp"
+#include "time_comparison.hpp"
 #include "validation.hpp"
 #include <algorithm>
 #include <cmath>
@@ -174,8 +175,9 @@ GoalState GoalManager::update(const VehicleState &s, const PathReference &path, 
       path.progress_m < 0)
     throw std::invalid_argument("invalid goal input");
   // Sparse or repeated observations cannot establish continuous stopped dwell.
-  if (last_observation_s_ >= 0 && (s.stamp_s <= last_observation_s_ ||
-                                   s.stamp_s - last_observation_s_ > 1.5 * config_.dt_s + 1e-9))
+  if (last_observation_s_ >= 0 &&
+      (s.stamp_s <= last_observation_s_ ||
+       detail::deadline_exceeded(s.stamp_s, last_observation_s_, 1.5 * config_.dt_s)))
     settle_start_ = -1;
   last_observation_s_ = s.stamp_s;
   GoalState out;
@@ -196,7 +198,7 @@ GoalState GoalManager::update(const VehicleState &s, const PathReference &path, 
       is_stopped(s, config_)) {
     if (settle_start_ < 0)
       settle_start_ = s.stamp_s;
-    if (s.stamp_s - settle_start_ + 1e-9 >= config_.goal_settle_time_s)
+    if (detail::elapsed_at_least(s.stamp_s, settle_start_, config_.goal_settle_time_s))
       complete_ = true;
   } else
     settle_start_ = -1;
@@ -218,7 +220,8 @@ GoalState GoalManager::update(const VehicleState &s, const PathReference &path, 
     last_distance_ = out.distance_m;
     last_yaw_error_ = yaw;
   }
-  out.stalled = !complete_ && s.stamp_s - progress_stamp_ >= config_.progress_timeout_s;
+  out.stalled = !complete_ &&
+                detail::elapsed_at_least(s.stamp_s, progress_stamp_, config_.progress_timeout_s);
   return out;
 }
 void GoalManager::reset() {

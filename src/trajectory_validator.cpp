@@ -42,7 +42,7 @@ TrajectoryStatus TrajectoryValidator::check(const ControllerInput &input,
     const double length2 = dx * dx + dy * dy;
     for (const auto &obstacle : input.obstacles) {
       const double t =
-          length2 > 1e-12
+          length2 > 0
               ? std::clamp(((obstacle.x - from.x) * dx + (obstacle.y - from.y) * dy) / length2, 0.0,
                            1.0)
               : 0.0;

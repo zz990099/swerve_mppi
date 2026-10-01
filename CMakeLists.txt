@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.9.0 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.10.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)

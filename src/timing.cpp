@@ -1,11 +1,11 @@
 #include "swerve_mppi/timing.hpp"
+#include "time_comparison.hpp"
 #include <cmath>
 #include <stdexcept>
 
 namespace swerve_mppi {
 namespace {
 bool valid_time(double stamp) { return std::isfinite(stamp) && stamp >= 0; }
-constexpr double kTolerance = 1e-9;
 } // namespace
 TimingGuard::TimingGuard(const Config &config, std::uint64_t session_id, const TimingLimits &limits)
     : dt_s_(config.dt_s), limits_(limits), session_id_(session_id) {
@@ -19,15 +19,16 @@ TimingGuard::TimingGuard(const Config &config, std::uint64_t session_id, const T
 TimingError TimingGuard::check_feedback(double stamp, double now) {
   if (error_ != TimingError::None)
     return error_;
-  if (!valid_time(now) || !valid_time(stamp) || stamp > now + kTolerance)
+  if (!valid_time(now) || !valid_time(stamp) || detail::deadline_exceeded(stamp, now, 0))
     return error_ = TimingError::InvalidTime;
   if (last_now_s_ >= 0 && now <= last_now_s_)
     return error_ = TimingError::ClockDiscontinuity;
-  if (now - stamp > limits_.max_feedback_age_s + kTolerance)
+  if (detail::deadline_exceeded(now, stamp, limits_.max_feedback_age_s))
     return error_ = TimingError::FeedbackTimeout;
   if (last_measurement_s_ >= 0 && stamp <= last_measurement_s_)
     return error_ = TimingError::NonmonotonicFeedback;
-  const double tolerance = limits_.period_tolerance_ratio * dt_s_ + kTolerance;
+  const double tolerance =
+      limits_.period_tolerance_ratio * dt_s_ + detail::time_tolerance(now, stamp);
   if (last_now_s_ >= 0 && (std::abs(now - last_now_s_ - dt_s_) > tolerance ||
                            std::abs(stamp - last_measurement_s_ - dt_s_) > tolerance))
     return error_ = TimingError::OffPeriod;
@@ -38,16 +39,17 @@ TimingError TimingGuard::check_feedback(double stamp, double now) {
 TimingError TimingGuard::check_command(const std::optional<CommandEnvelope> &command, double now) {
   if (error_ != TimingError::None)
     return error_;
-  if (!valid_time(now) || last_now_s_ < 0 || std::abs(now - last_now_s_) > kTolerance)
+  if (!valid_time(now) || last_now_s_ < 0 ||
+      std::abs(now - last_now_s_) > detail::time_tolerance(now, last_now_s_))
     return error_ = TimingError::InvalidTime;
   if (!command)
     return error_ = TimingError::MissingCommand;
   const auto &envelope = *command;
   if (envelope.session_id != session_id_)
     return error_ = TimingError::SessionMismatch;
-  if (!valid_time(envelope.issued_at_s) || envelope.issued_at_s > now + kTolerance)
+  if (!valid_time(envelope.issued_at_s) || detail::deadline_exceeded(envelope.issued_at_s, now, 0))
     return error_ = TimingError::InvalidTime;
-  if (now - envelope.issued_at_s > limits_.max_command_age_s + kTolerance)
+  if (detail::deadline_exceeded(now, envelope.issued_at_s, limits_.max_command_age_s))
     return error_ = TimingError::CommandTimeout;
   if (now <= last_command_tick_s_ || envelope.sequence == 0 ||
       envelope.sequence <= last_sequence_ || envelope.issued_at_s <= last_command_s_)

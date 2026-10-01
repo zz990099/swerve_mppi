@@ -430,6 +430,105 @@ void test_confirmation_receipt_deadline() {
   check(TransitionModel(c).rollout(predicted, DriveMode::Crab, steps, 4, nullptr, {.2, 0, 0}) < 0,
         "prediction must reject receipt after the execution deadline");
 }
+void test_decimal_deadline_and_tick_boundaries() {
+  for (double dt : {.01, .04, .1, .125}) {
+    for (double stamp : {1.0, 1e6, 1700000000.0}) {
+      for (double lateness : {0.0, 1e-5}) {
+        Config c;
+        c.dt_s = dt;
+        c.alignment_min_s = c.confirmation_prediction_s = 0;
+        c.confirmation_timeout_s = dt;
+        VehicleState state;
+        state.stamp_s = stamp;
+        ModeManager manager(c);
+        ModeExecutor executor(c);
+        manager.begin(DriveMode::Crab, {.2, 0, 0}, state);
+        const auto command = manager.update(state);
+        const auto confirmed = executor.update(command, state);
+        check(confirmed.feedback.confirmed, "decimal boundary setup must confirm immediately");
+        state.actual_mode = confirmed.feedback.actual_mode;
+        state.mode_confirmed = true;
+        state.mode_request_id = confirmed.feedback.request_id;
+        state.stamp_s = stamp + dt + lateness;
+        check((manager.update(state).action == Action::SafeStop) == (lateness > 0),
+              "decimal confirmation receipt must accept the deadline and reject actual lateness");
+
+        // Exercise the executor's own inclusive deadline while still aligning.
+        state = {};
+        state.stamp_s = stamp;
+        c.alignment_min_s = dt;
+        ModeManager requestor(c);
+        ModeExecutor aligning(c);
+        requestor.begin(DriveMode::Crab, {.2, 0, 0}, state);
+        const auto request = requestor.update(state);
+        check(!aligning.update(request, state).feedback.confirmed,
+              "executor deadline setup must retain an active request");
+        state.stamp_s = stamp + dt + lateness;
+        check(aligning.update(request, state).feedback.fault == (lateness > 0),
+              "executor and manager must agree on inclusive decimal deadlines");
+      }
+    }
+  }
+  Config c;
+  c.dt_s = .04;
+  c.alignment_min_s = .28; // .28/.04 rounds above seven in binary floating point.
+  c.confirmation_prediction_s = 0;
+  VehicleState state;
+  state.stamp_s = 1;
+  std::size_t steps = 0;
+  auto predicted = state;
+  check(TransitionModel(c).rollout(predicted, DriveMode::Crab, steps, 9, nullptr, {.2, 0, 0}) > 0 &&
+            steps == 9,
+        "decimal alignment quantization must reserve seven alignment and two protocol ticks");
+  ModeManager manager(c);
+  ModeExecutor executor(c);
+  manager.begin(DriveMode::Crab, {.2, 0, 0}, state);
+  for (int tick = 0; tick < 9; ++tick) {
+    const auto command = manager.update(state);
+    const auto result = executor.update(command, state);
+    check(command.action != Action::SafeStop && !result.feedback.fault,
+          "decimal quantization must execute without timeout");
+    test::actuate(state, result, c);
+    check(manager.active() == (tick < 8),
+          "predicted decimal alignment and measured handover must finish on the same tick");
+  }
+  c.alignment_min_s = 0;
+  c.confirmation_prediction_s = .28;
+  steps = 0;
+  predicted = {};
+  check(TransitionModel(c).rollout(predicted, DriveMode::Crab, steps, 7) > 0 && steps == 7,
+        "decimal confirmation allowances cannot gain a spurious prediction tick");
+  c.horizon_steps = 20;
+  c.minimum_mode_dwell_s = .28;
+  const auto branches = ModeScheduler(c).make_branches({});
+  check(branches.size() > 1 && branches[1].switch_step == 7,
+        "the scheduler must use the same duration-to-ticks rule as transition prediction");
+}
+void test_same_mode_alignment_decimal_deadline() {
+  for (double lateness : {0.0, 1e-5}) {
+    Config c;
+    c.confirmation_timeout_s = c.dt_s;
+    c.max_steer_rate_radps = 20;
+    c.horizon_steps = 2;
+    ControllerInput input;
+    input.vehicle.actual_mode = DriveMode::Crab;
+    input.vehicle.stamp_s = 1;
+    input.reference_path = {{0, 0, 0}, {0, .1, 0}};
+    std::vector<Control> controls(c.horizon_steps, {0, .12, 0});
+    check(RolloutEngine(c).generate(input.vehicle, {}, controls).valid,
+          "same-mode prediction must admit its first Drive at the alignment deadline");
+    Controller controller(c);
+    ModeExecutor executor(c, DriveMode::Crab);
+    const auto alignment = controller.compute(input);
+    check(alignment.action == Action::Hold,
+          "same-mode deadline setup must commit a stopped steering alignment");
+    test::actuate(input.vehicle, executor.update(alignment, input.vehicle), c);
+    input.vehicle.stamp_s += lateness;
+    const auto command = controller.compute(input);
+    check(command.action == (lateness > 0 ? Action::SafeStop : Action::Drive),
+          "same-mode execution must accept the decimal boundary and reject actual lateness");
+  }
+}
 void test_zero_delay_controller_capture_timing() {
   Config c;
   c.alignment_min_s = c.confirmation_prediction_s = 0;
@@ -736,6 +835,8 @@ int main() {
     test_transition_protocol_tick_matrix();
     test_zero_delay_controller_capture_timing();
     test_confirmation_receipt_deadline();
+    test_decimal_deadline_and_tick_boundaries();
+    test_same_mode_alignment_decimal_deadline();
     test_controller_executor_lateral_loop();
     test_measured_steering_tolerance();
     test_nonfinite_drive_commands();

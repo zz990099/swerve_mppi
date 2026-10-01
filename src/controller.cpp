@@ -1,5 +1,6 @@
 #include "swerve_mppi/controller.hpp"
 
+#include "time_comparison.hpp"
 #include "validation.hpp"
 #include <algorithm>
 #include <cmath>
@@ -131,6 +132,11 @@ Output Controller::compute_tracking(const ControllerInput &input) {
     return out;
   }
   if (best.branch.switches && best.branch.switch_step == 0) {
+    if (!safe_control(input, best.branch, best.controls.front())) {
+      auto out = planning_stop(input);
+      out.planning_stats = stats;
+      return out;
+    }
     auto out = request_mode(input, best.branch.mode, best.controls.front());
     out.planning_stats = stats;
     out.selected_cost = best.cost;
@@ -203,8 +209,9 @@ Output Controller::compute_goal(const ControllerInput &input, const GoalState &g
     control = model_.project(control, target_mode);
   }
   const bool switching = input.vehicle.actual_mode != target_mode;
-  if (switching && (!is_stopped(input.vehicle, config_) ||
-                    input.vehicle.time_in_mode_s < config_.minimum_mode_dwell_s))
+  if (switching &&
+      (!is_stopped(input.vehicle, config_) ||
+       !detail::elapsed_at_least(input.vehicle.time_in_mode_s, 0, config_.minimum_mode_dwell_s)))
     return out;
   if (switching && !safe_control(input, {target_mode, 0, true}, control))
     return planning_stop(input);
@@ -217,7 +224,8 @@ Output Controller::continue_alignment(const ControllerInput &input) {
   out.requested_mode = input.vehicle.actual_mode;
   out.steering_targets = input.vehicle.steering_angles;
   if (input.vehicle.actual_mode != alignment_mode_ ||
-      input.vehicle.stamp_s - alignment_start_s_ > config_.confirmation_timeout_s) {
+      detail::deadline_exceeded(input.vehicle.stamp_s, alignment_start_s_,
+                                config_.confirmation_timeout_s)) {
     out.phase = TransitionPhase::Fault;
     out.failure_reason = FailureReason::TransitionFault;
     return out;

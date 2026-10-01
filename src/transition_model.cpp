@@ -1,6 +1,7 @@
 #include "swerve_mppi/model.hpp"
 
 #include "motion_profile.hpp"
+#include "time_comparison.hpp"
 #include "validation.hpp"
 #include <algorithm>
 #include <cmath>
@@ -35,17 +36,17 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
   state.velocity = {};
   state.wheel_speeds.fill(0.0);
   const auto angles = model_.steering_for_entry(target_mode, entry_intent, state.steering_angles);
-  if (config_.alignment_min_s > (maximum - steps) * config_.dt_s)
+  const auto minimum =
+      detail::duration_ticks(config_.alignment_min_s, config_.dt_s, maximum - steps);
+  if (!minimum)
     return -1.0;
-  const std::size_t minimum =
-      static_cast<std::size_t>(std::ceil(config_.alignment_min_s / config_.dt_s));
   std::size_t aligned_steps = 0;
   while (true) {
     bool aligned = true;
     for (std::size_t i = 0; i < 4; ++i)
       if (std::abs(angles[i] - state.steering_angles[i]) > config_.steering_tolerance_rad)
         aligned = false;
-    if (aligned && aligned_steps >= minimum)
+    if (aligned && aligned_steps >= *minimum)
       break;
     if (steps >= maximum)
       return -1.0;
@@ -62,19 +63,20 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
     if (sweep_margins)
       sweep_margins->push_back(error);
   }
-  if (config_.confirmation_prediction_s > (maximum - steps) * config_.dt_s)
+  const auto confirmation =
+      detail::duration_ticks(config_.confirmation_prediction_s, config_.dt_s, maximum - steps);
+  if (!confirmation)
     return -1.0;
-  const std::size_t confirmation =
-      static_cast<std::size_t>(std::ceil(config_.confirmation_prediction_s / config_.dt_s));
   // Even immediate transport needs an executor confirmation Hold, followed by
   // the manager's measured-feedback handover Hold. The configured allowance
   // covers these cycles and may reserve additional feedback/transport latency.
-  const std::size_t wait = std::max(confirmation, std::size_t{2});
+  const std::size_t wait = std::max(*confirmation, std::size_t{2});
   if (wait > maximum - steps)
     return -1.0;
   // The deadline applies at receipt of confirmation, before the final handover
   // cycle ends. First Drive may occur one tick after that receipt deadline.
-  if ((steps + wait - 1 - begin) * config_.dt_s > config_.confirmation_timeout_s + 1e-9)
+  if (detail::duration_exceeded((steps + wait - 1 - begin) * config_.dt_s,
+                                config_.confirmation_timeout_s))
     return -1.0;
   state.stamp_s += wait * config_.dt_s;
   steps += wait;

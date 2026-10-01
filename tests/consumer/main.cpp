@@ -15,6 +15,10 @@ int main() {
       swerve_mppi::Kinematics(swerve_mppi::Config{}).max_module_residual({}, {}, {});
   swerve_mppi::Trajectory stop;
   swerve_mppi::RolloutEngine(swerve_mppi::Config{}).generate_stop({}, stop);
+  swerve_mppi::Trajectory continuation;
+  swerve_mppi::RolloutEngine(swerve_mppi::Config{})
+      .generate_continuation({}, {}, {.1, 0, 0}, continuation);
+  const auto step = swerve_mppi::DriveModel(swerve_mppi::Config{}).step({}, {.1, 0, 0}, .1);
   swerve_mppi::PathManager paths(swerve_mppi::Config{});
   swerve_mppi::ControllerInput input;
   input.reference_path = {{0, 0, 0}};
@@ -22,7 +26,10 @@ int main() {
   return controller.compute({}).action == swerve_mppi::Action::SafeStop &&
                  result.feedback.confirmed &&
                  guarded.timing_error == swerve_mppi::TimingError::None && residual == 0 &&
-                 stop.valid && path.goal_eligible &&
+                 stop.valid && continuation.valid &&
+                 continuation.sweep_margins_m.size() + 1 == continuation.poses.size() &&
+                 continuation.position_error_m >= 0 && step.sweep_margin_m >= 0 &&
+                 step.integration_error_m >= 0 && path.goal_eligible &&
                  path.target_kind == swerve_mppi::PathTargetKind::Goal &&
                  validator.check({}, {}) == swerve_mppi::TrajectoryStatus::Invalid
              ? 0

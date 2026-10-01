@@ -1,4 +1,4 @@
-# Standalone execution protocol (0.8)
+# Standalone execution protocol (0.10)
 
 This contract is independent of ROS, Nav2 and Gazebo. ModeExecutor is a reference
 supervisor that can be used behind any transport or directly in core tests.
@@ -150,7 +150,7 @@ zero-control stopping trace through its hard TrajectoryValidator, including the
 current footprint and every swept segment. If valid and stopped at its end, it
 emits Brake/Hold with Waiting/Blocked, retains measured steering and permits fresh
 replanning. Warm start and local alignment are cleared. If stopping is rejected
-or cannot finish within the horizon, UnsafeStoppingTrajectory emits SafeStop.
+or cannot finish within stopping_horizon_steps, UnsafeStoppingTrajectory emits SafeStop.
 Invalid inputs, model failures and handshake failures also remain SafeStop.
 These predictive checks do not establish braking safety for uncalibrated actuators
 or tire slip.
@@ -163,6 +163,29 @@ Waiting/Blocked. Rejection clears the request and emits UnsafeStoppingTrajectory
 so ModeExecutor cancels the transition and latches fault. The stopping rollout
 retains measured steering, actual mode, request ID and unconfirmed feedback;
 checking a stop never grants drive permission or synthesizes an acknowledgement.
+
+Version 0.10 also gates every first Drive plus its complete stopping continuation
+through that validator. `stopping_horizon_steps` is an independent bounded budget
+(default 200 ticks) for entry/alignment, first Drive and braking. A rejected Drive
+falls back to the separately checked current stop; warm starts are accepted only
+after a validated Drive. `generate_stop` ends when modeled wheels/body reach zero,
+including motion below handover thresholds, and returns invalid on exhaustion.
+Zero intent emits Brake/Hold with measured steering and zero drive targets, even
+when measured wheel residuals exceed the Drive allowance.
+
+Trajectories use piecewise linear body-twist ramps with separate braking and
+acceleration phases. They include deceleration displacement, any final-speed hold,
+per-segment curve-to-chord enclosure and accumulated quadrature error. These bounds
+apply to the predictive ramp, not unspecified actuator dynamics or tire slip.
+A caller-supplied trace with empty sweep_margins_m denotes piecewise straight motion;
+provided margins must be finite, nonnegative and match the pose segments.
+
+All inclusive time boundaries share a 1 ns numerical floor, enlarged to four times double precision epsilon times
+the timestamp magnitude for subtraction of large stamps. Deadline receipt at the
+boundary is accepted; actual lateness beyond that tolerance faults. The same rule
+covers alignment minima, dwell quantization, stopping/alignment prediction and
+command/feedback age limits. Duration-to-ticks rounding removes numerical extra
+ticks. Timestamp monotonicity, sequence and replay checks remain strict.
 
 ## Guarded timing and command envelopes
 

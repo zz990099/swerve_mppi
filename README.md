@@ -29,7 +29,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.9 CONFIG REQUIRED)
+find_package(swerve_mppi 0.10 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -71,6 +71,12 @@ period ratios are not supported yet.
   passes the shared hard validator. It reports Waiting/Blocked and retries on fresh
   input. UnsafeStoppingTrajectory, invalid input and execution faults still use
   latched SafeStop.
+- Every Drive passes a shared first-command plus complete-stop check before
+  publication or warm-start acceptance. `stopping_horizon_steps` (default 200)
+  bounds this safety work independently of the MPPI horizon. Budget exhaustion
+  rejects Drive; an unsafe or incomplete current stop produces SafeStop.
+- Zero intent emits Brake/Hold with zero wheel targets and measured steering,
+  including measured wheel pairs outside the Drive residual allowance.
 - Every healthy Brake, Hold and pending RequestMode also passes the stopping
   validator against fresh constraints. Normal terminal braking keeps its navigation
   status; rejection reports UnsafeStoppingTrajectory and cancels the request.
@@ -90,6 +96,16 @@ The optional allocation regression runs in CI; wall-clock timing is not a CI gat
 
 ## Current status
 
+Version 0.10 adds a bounded common Drive-to-stop safety gate, explicit zero-intent
+braking, and continuous ramp displacement for braking and signed reversals.
+Trajectories carry conservative per-segment swept-motion enclosures and accumulated
+integration error; straight/fixed-curvature ramps use exact SE(2) integration and
+other ramps use bounded quadrature. Time deadlines, alignment/dwell quantization
+and guarded command ages share inclusive numerical comparisons.
+Rebuild downstream consumers against 0.10: Config, StepResult and Trajectory layouts
+and rollout APIs changed. See [docs/STOPPING_REVIEW_VALIDATION.md](docs/STOPPING_REVIEW_VALIDATION.md)
+for the implementation, independent oracles and current verification evidence.
+
 Version 0.9 closes configurable dynamics and public safety/execution boundaries.
 Signed linear/angular reversals spend braking time before accelerating in the
 opposite direction. Injected validators must share the consumer's footprint,
@@ -98,9 +114,9 @@ module's rolling-vector residual against its declared rigid-body twist using
 `drive_kinematic_tolerance_mps` (default 0.02 m/s). Switch prediction reserves at
 least two post-alignment confirmation/handover ticks, even with zero configured
 delay. Actual execution still requires matching measured confirmation.
-Rebuild downstream consumers against 0.9; the public Config layout has changed.
+The 0.9 release changed the public Config layout.
 See [docs/SAFETY_CONTRACT_VALIDATION.md](docs/SAFETY_CONTRACT_VALIDATION.md) for the
-new contracts and current verification results.
+0.9 contracts and historical verification results.
 
 Version 0.8 gives navigation an explicit effective target and terminal eligibility.
 Uncaptured corners own their slowdown/capture target, even near a closed-loop or
