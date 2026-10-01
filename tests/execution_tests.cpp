@@ -1,3 +1,4 @@
+#include "behavior_fixture.hpp"
 #include "swerve_mppi/controller.hpp"
 #include "swerve_mppi/executor.hpp"
 #include <algorithm>
@@ -309,6 +310,151 @@ void test_transition_prediction_deadline() {
                                    intent(DriveMode::Crab)) < 0,
         "prediction must reject alignment exceeding the real execution deadline");
 }
+void test_transition_protocol_tick_matrix() {
+  // Compare predicted first motion with a protocol loop advanced by the
+  // independent encoder fixture, including deliberately delayed confirmation.
+  for (double dt : {.05, .1, .2}) {
+    for (double allowance : {0.0, .05, .1, .2, .35}) {
+      for (double alignment : {0.0, .13}) {
+        for (double steer_rate : {2.5, 10.0}) {
+          Config c;
+          c.dt_s = dt;
+          c.confirmation_prediction_s = allowance;
+          c.alignment_min_s = alignment;
+          c.max_steer_rate_radps = steer_rate;
+          c.minimum_mode_dwell_s = 0;
+          c.horizon_steps = 80;
+          for (auto from : {DriveMode::DualAckermann, DriveMode::Spin, DriveMode::Crab}) {
+            for (auto to : {DriveMode::DualAckermann, DriveMode::Spin, DriveMode::Crab}) {
+              if (from == to)
+                continue;
+              for (std::size_t switch_step : {0u, 3u}) {
+                VehicleState state;
+                state.actual_mode = from;
+                state.stamp_s = 1;
+                state.time_in_mode_s = 2;
+                state.steering_angles = DriveModel(c).steering_for_entry(from, intent(from), {});
+                std::vector<Control> controls(c.horizon_steps);
+                controls[switch_step] = intent(to);
+                const auto trace =
+                    RolloutEngine(c).generate(state, {to, switch_step, true}, controls);
+                check(trace.valid, "parameterized transition prediction must fit its horizon");
+                std::size_t predicted = c.horizon_steps;
+                for (std::size_t step = 0; step + 1 < trace.poses.size(); ++step) {
+                  const auto &a = trace.poses[step], &b = trace.poses[step + 1];
+                  if (std::hypot(b.x - a.x, b.y - a.y) > 1e-9 ||
+                      std::abs(angle_distance(b.yaw, a.yaw)) > 1e-9) {
+                    predicted = step;
+                    break;
+                  }
+                }
+                ModeManager manager(c);
+                ModeExecutor executor(c, from);
+                const std::size_t allowance_ticks =
+                    static_cast<std::size_t>(std::ceil(allowance / dt));
+                const std::size_t delivery_delay = allowance_ticks > 2 ? allowance_ticks - 2 : 0;
+                std::optional<std::size_t> confirmed_tick;
+                std::size_t actual = c.horizon_steps;
+                for (std::size_t tick = 0; tick < c.horizon_steps; ++tick) {
+                  Output command;
+                  command.action = Action::Hold;
+                  command.requested_mode = state.actual_mode;
+                  command.steering_targets = state.steering_angles;
+                  if (tick == switch_step)
+                    manager.begin(to, intent(to), state);
+                  if (tick >= switch_step) {
+                    if (manager.active())
+                      command = manager.update(state);
+                    else {
+                      actual = tick;
+                      break;
+                    }
+                  }
+                  auto result = executor.update(command, state);
+                  check(!result.feedback.fault && result.action != Action::Drive &&
+                            command.action != Action::SafeStop,
+                        "prediction comparison must retain the measured confirmation gate");
+                  if (result.feedback.confirmed && result.feedback.actual_mode == to) {
+                    if (!confirmed_tick)
+                      confirmed_tick = tick;
+                    if (tick - *confirmed_tick < delivery_delay) {
+                      result.feedback.actual_mode = from;
+                      result.feedback.confirmed = false;
+                      result.feedback.request_id = 0;
+                    }
+                  }
+                  test::actuate(state, result, c);
+                }
+                check(predicted == actual && actual < c.horizon_steps,
+                      "predicted first motion must match protocol confirmation and handover ticks");
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+void test_confirmation_receipt_deadline() {
+  Config c;
+  c.dt_s = .125;
+  c.alignment_min_s = c.confirmation_prediction_s = 0;
+  c.confirmation_timeout_s = c.dt_s;
+  VehicleState initial;
+  initial.stamp_s = 1;
+  std::size_t steps = 0;
+  auto predicted = initial;
+  check(TransitionModel(c).rollout(predicted, DriveMode::Crab, steps, 4, nullptr, {.2, 0, 0}) ==
+                .25 &&
+            steps == 2,
+        "confirmation receipt may meet its deadline before the handover cycle ends");
+  ModeManager manager(c);
+  ModeExecutor executor(c);
+  manager.begin(DriveMode::Crab, {.2, 0, 0}, initial);
+  auto state = initial;
+  for (int tick = 0; tick < 2; ++tick) {
+    const auto command = manager.update(state);
+    const auto result = executor.update(command, state);
+    check(command.action != Action::SafeStop && !result.feedback.fault,
+          "matching confirmation at the receipt deadline must remain executable");
+    test::actuate(state, result, c);
+  }
+  check(!manager.active(), "deadline receipt must complete measured handover");
+  steps = 0;
+  predicted = initial;
+  check(TransitionModel(c).rollout(predicted, DriveMode::Crab, steps, 1, nullptr, {.2, 0, 0}) < 0,
+        "one remaining horizon tick cannot contain both mandatory stopped cycles");
+  c.confirmation_timeout_s = .12;
+  steps = 0;
+  predicted = initial;
+  check(TransitionModel(c).rollout(predicted, DriveMode::Crab, steps, 4, nullptr, {.2, 0, 0}) < 0,
+        "prediction must reject receipt after the execution deadline");
+}
+void test_zero_delay_controller_capture_timing() {
+  Config c;
+  c.alignment_min_s = c.confirmation_prediction_s = 0;
+  c.max_steer_rate_radps = 10;
+  ControllerInput input;
+  input.vehicle.stamp_s = 1;
+  input.vehicle.time_in_mode_s = 2;
+  input.reference_path = {{0, 0, 0}, {.1, .1, 0}};
+  std::vector<Control> controls(c.horizon_steps);
+  controls[0] = {.12, .12, 0};
+  const auto trace = RolloutEngine(c).generate(input.vehicle, {DriveMode::Crab, 0, true}, controls);
+  check(trace.valid && std::hypot(trace.poses[3].x, trace.poses[3].y) < 1e-9 &&
+            std::hypot(trace.poses[4].x, trace.poses[4].y) > 1e-9,
+        "zero-delay diagonal entry must reserve three stopped ticks before first motion");
+  Controller controller(c);
+  ModeExecutor executor(c);
+  for (int tick = 0; tick <= 3; ++tick) {
+    const auto command = controller.compute(input);
+    check((command.action == Action::Drive) == (tick == 3),
+          "controller capture must share the predicted first-Drive timing");
+    const auto result = executor.update(command, input.vehicle);
+    check(!result.feedback.fault, "zero-delay capture must retain a healthy measured handshake");
+    test::actuate(input.vehicle, result, c);
+  }
+}
 void test_controller_executor_lateral_loop() {
   Config c;
   c.horizon_steps = 32;
@@ -587,6 +733,9 @@ int main() {
     test_persistent_mode_and_unconfirmed_drive();
     test_boot_age_drive_consistency_and_preemption();
     test_transition_prediction_deadline();
+    test_transition_protocol_tick_matrix();
+    test_zero_delay_controller_capture_timing();
+    test_confirmation_receipt_deadline();
     test_controller_executor_lateral_loop();
     test_measured_steering_tolerance();
     test_nonfinite_drive_commands();

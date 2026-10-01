@@ -59,11 +59,15 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
     return -1.0;
   const std::size_t confirmation =
       static_cast<std::size_t>(std::ceil(config_.confirmation_prediction_s / config_.dt_s));
-  // A zero-delay transition still consumes a tick, guaranteeing rollout progress.
-  const std::size_t wait = std::max(confirmation, steps == begin ? std::size_t{1} : std::size_t{0});
+  // Even immediate transport needs an executor confirmation Hold, followed by
+  // the manager's measured-feedback handover Hold. The configured allowance
+  // covers these cycles and may reserve additional feedback/transport latency.
+  const std::size_t wait = std::max(confirmation, std::size_t{2});
   if (wait > maximum - steps)
     return -1.0;
-  if ((steps + wait - begin) * config_.dt_s > config_.confirmation_timeout_s + 1e-9)
+  // The deadline applies at receipt of confirmation, before the final handover
+  // cycle ends. First Drive may occur one tick after that receipt deadline.
+  if ((steps + wait - 1 - begin) * config_.dt_s > config_.confirmation_timeout_s + 1e-9)
     return -1.0;
   state.stamp_s += wait * config_.dt_s;
   steps += wait;

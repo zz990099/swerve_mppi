@@ -41,6 +41,7 @@ struct Config {
   // Age of the confirmed actual mode, not request stability time.
   double minimum_mode_dwell_s = 1.0;
   double alignment_min_s = 0.25;
+  // Total post-alignment allowance; prediction enforces at least two protocol ticks.
   double confirmation_prediction_s = 0.20;
   // Execution deadline includes braking, alignment and acknowledgement.
   double confirmation_timeout_s = 2.0;
