@@ -31,6 +31,9 @@ struct Config {
   // Maximum target joint change allowed without stopping in a stable mode.
   // Set equal to steering_tolerance_rad for a conservative stop/align policy.
   double drive_steering_limit_rad = 0.20;
+  // Maximum per-module rolling-vector residual from the declared rigid-body twist.
+  // Small nonzero values allow bounded joint interpolation; zero requires ideal kinematics.
+  double drive_kinematic_tolerance_mps = 0.02;
   double stopped_linear_mps = 0.035;
   double stopped_angular_radps = 0.035;
   double stopped_wheel_speed_mps = 0.005;

@@ -22,6 +22,10 @@ public:
   WheelCommand inverse(const Control &control, const std::array<double, 4> &current_angles) const;
   Twist2d forward(const std::array<double, 4> &speeds, const std::array<double, 4> &angles) const;
 
+  // Largest module rolling-vector error against one rigid-body velocity field.
+  double max_module_residual(const std::array<double, 4> &speeds,
+                             const std::array<double, 4> &angles, const Twist2d &twist) const;
+
 private:
   Config config_;
 };

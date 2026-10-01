@@ -19,6 +19,50 @@ Config deterministic() {
   c.samples_per_branch = 8;
   return c;
 }
+void test_validator_configuration_contract() {
+  const Config c;
+  for (int field = 0; field < 4; ++field) {
+    Config different = c;
+    if (field == 0)
+      different.robot_radius_m = .4;
+    if (field == 1)
+      different.collision_margin_m = .01;
+    if (field == 2)
+      different.steering_limit_rad = 2;
+    if (field == 3)
+      different.max_wheel_speed_mps = 3;
+    const auto validator = std::make_shared<TrajectoryValidator>(different);
+    for (int consumer = 0; consumer < 3; ++consumer) {
+      bool rejected = false;
+      try {
+        if (consumer == 0) {
+          Controller controller(c, validator);
+        }
+        if (consumer == 1) {
+          Optimizer optimizer(c, validator);
+        }
+        if (consumer == 2) {
+          CriticManager critics(c, validator);
+        }
+      } catch (const std::invalid_argument &) {
+        rejected = true;
+      }
+      check(rejected, "all validator consumers must reject a different safety configuration");
+    }
+  }
+  Config planning = c;
+  planning.random_seed = 7;
+  planning.goal_weight = 2;
+  auto validator = std::make_shared<TrajectoryValidator>(planning);
+  Controller controller(c, validator);
+  auto input = straight();
+  input.reference_path.back().x = .2;
+  input.obstacles = {{.555, 0, .05}};
+  check(controller.compute(input).action == Action::SafeStop,
+        "compatible injected validator must enforce the controller footprint during capture");
+  check(!std::isfinite(Optimizer(c, validator).optimize(input, {}).cost),
+        "compatible injected validator must enforce the same footprint during tracking");
+}
 void test_temporary_failure_stops_and_recovers() {
   const auto c = deterministic();
   Controller controller(c);
@@ -267,6 +311,7 @@ int main() {
     test_pending_request_rechecks_fresh_stopping_constraints();
     test_stop_rollout_preserves_unconfirmed_feedback();
     test_shared_hard_constraints();
+    test_validator_configuration_contract();
     std::cout << "Safety regressions passed\n";
     return 0;
   } catch (const std::exception &error) {

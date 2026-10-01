@@ -447,6 +447,37 @@ void test_drive_steering_command_limits() {
           "executor must reject steering jumps beyond rate or moving-angle limits");
   }
 }
+void test_module_velocity_residuals() {
+  Config c;
+  VehicleState state;
+  state.stamp_s = 1;
+  for (auto speeds :
+       {std::array<double, 4>{.5, -.5, -.5, .5}, std::array<double, 4>{.5, -.5, .5, -.5}}) {
+    Output command;
+    command.action = Action::Drive;
+    command.wheel_speed_targets = speeds;
+    command.body_command = Kinematics(c).forward(speeds, command.steering_targets);
+    const auto result = ModeExecutor(c).update(command, state);
+    check(result.action == Action::SafeStop && result.feedback.fault &&
+              result.wheel_speed_targets == std::array<double, 4>{},
+          "least-squares body agreement cannot hide incompatible module velocity vectors");
+  }
+  for (double residual : {.01, .03}) {
+    Output command;
+    command.action = Action::Drive;
+    command.wheel_speed_targets = {.2 + residual, .2 - residual, .2 - residual, .2 + residual};
+    command.body_command = {.2, 0, 0};
+    check(ModeExecutor(c).update(command, state).feedback.fault == (residual > .02),
+          "per-module residual allowance must be explicit and bounded");
+  }
+  c.drive_kinematic_tolerance_mps = 0;
+  Output exact;
+  exact.action = Action::Drive;
+  exact.wheel_speed_targets.fill(.2);
+  exact.body_command = {.2, 0, 0};
+  check(!ModeExecutor(c).update(exact, state).feedback.fault,
+        "zero module tolerance must permit ideal rigid-body commands");
+}
 void test_curved_ackermann_and_spin_drive() {
   Config c;
   c.minimum_mode_dwell_s = 100;
@@ -561,6 +592,7 @@ int main() {
     test_nonfinite_drive_commands();
     test_frozen_controller_alignment();
     test_drive_steering_command_limits();
+    test_module_velocity_residuals();
     test_curved_ackermann_and_spin_drive();
     test_rollout_entry_direction();
     test_capture_alignment_commitment();

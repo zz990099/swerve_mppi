@@ -40,7 +40,8 @@ void validate(const Config &c) {
       throw std::invalid_argument("positive, finite vehicle and MPPI parameters required");
     }
   }
-  const double nonnegative[] = {c.control_correction_weight,
+  const double nonnegative[] = {c.drive_kinematic_tolerance_mps,
+                                c.control_correction_weight,
                                 c.path_progress_slack_m,
                                 c.goal_settle_time_s,
                                 c.path_heading_weight,

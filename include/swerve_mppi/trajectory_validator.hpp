@@ -18,6 +18,9 @@ class TrajectoryValidator {
 public:
   explicit TrajectoryValidator(const Config &config);
   void add(std::shared_ptr<const TrajectoryConstraint> constraint);
+  // Reject a different footprint, margin or measured joint validity envelope.
+  // Planning-only parameters may differ because check() consumes explicit poses.
+  void require_compatible(const Config &config) const;
   TrajectoryStatus check(const ControllerInput &input, const Trajectory &trajectory) const;
 
 private:

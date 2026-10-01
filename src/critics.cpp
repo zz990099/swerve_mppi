@@ -187,6 +187,7 @@ CriticManager::CriticManager(const Config &config,
                              std::shared_ptr<const TrajectoryValidator> validator)
     : validator_(validator ? std::move(validator) : std::make_shared<TrajectoryValidator>(config)) {
   validate(config);
+  validator_->require_compatible(config);
   add(std::make_shared<PathCritic>(config));
   add(std::make_shared<ObstacleCritic>(config));
   add(std::make_shared<GoalCritic>(config));

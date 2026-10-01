@@ -75,4 +75,23 @@ Twist2d Kinematics::forward(const std::array<double, 4> &speeds,
   v.wz /= moment;
   return v;
 }
+double Kinematics::max_module_residual(const std::array<double, 4> &speeds,
+                                       const std::array<double, 4> &angles,
+                                       const Twist2d &twist) const {
+  if (!std::isfinite(twist.vx) || !std::isfinite(twist.vy) || !std::isfinite(twist.wz))
+    return std::numeric_limits<double>::infinity();
+  const double x[] = {config_.wheelbase_m / 2, config_.wheelbase_m / 2, -config_.wheelbase_m / 2,
+                      -config_.wheelbase_m / 2};
+  const double y[] = {config_.track_m / 2, -config_.track_m / 2, config_.track_m / 2,
+                      -config_.track_m / 2};
+  double maximum = 0;
+  for (std::size_t i = 0; i < speeds.size(); ++i) {
+    if (!std::isfinite(speeds[i]) || !std::isfinite(angles[i]))
+      return std::numeric_limits<double>::infinity();
+    maximum = std::max(maximum,
+                       std::hypot(speeds[i] * std::cos(angles[i]) - (twist.vx - twist.wz * y[i]),
+                                  speeds[i] * std::sin(angles[i]) - (twist.vy + twist.wz * x[i])));
+  }
+  return maximum;
+}
 } // namespace swerve_mppi

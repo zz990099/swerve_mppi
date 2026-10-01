@@ -190,7 +190,13 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
             start.steering_angles[i] + fraction * (wheels.angles[i] - start.steering_angles[i]);
     }
     state.velocity = kinematics_.forward(state.wheel_speeds, state.steering_angles);
-    if (velocity_change_time(initial.vx, initial.vy, state.velocity.vx, state.velocity.vy,
+    const bool module_consistent =
+        !ready || (std::hypot(u.vx, u.vy) < kEpsilon && std::abs(u.wz) < kEpsilon) ||
+        kinematics_.max_module_residual(state.wheel_speeds, state.steering_angles,
+                                        state.velocity) <=
+            config_.drive_kinematic_tolerance_mps + 1e-9;
+    if (module_consistent &&
+        velocity_change_time(initial.vx, initial.vy, state.velocity.vx, state.velocity.vy,
                              config_.max_linear_accel_mps2,
                              config_.max_linear_decel_mps2) <= dt + 1e-9 &&
         velocity_change_time(initial.wz, 0.0, state.velocity.wz, 0.0,

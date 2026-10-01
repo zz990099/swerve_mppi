@@ -8,6 +8,14 @@ namespace swerve_mppi {
 TrajectoryValidator::TrajectoryValidator(const Config &config) : config_(config) {
   validate(config_);
 }
+void TrajectoryValidator::require_compatible(const Config &config) const {
+  validate(config);
+  if (config.robot_radius_m != config_.robot_radius_m ||
+      config.collision_margin_m != config_.collision_margin_m ||
+      config.steering_limit_rad != config_.steering_limit_rad ||
+      config.max_wheel_speed_mps != config_.max_wheel_speed_mps)
+    throw std::invalid_argument("trajectory validator safety configuration differs from consumer");
+}
 void TrajectoryValidator::add(std::shared_ptr<const TrajectoryConstraint> constraint) {
   if (!constraint)
     throw std::invalid_argument("trajectory constraint must not be null");

@@ -11,7 +11,9 @@ Controller::Controller(const Config &config, std::shared_ptr<const TrajectoryVal
     : validator_(validator ? std::move(validator) : std::make_shared<TrajectoryValidator>(config)),
       safety_rollout_(config), safety_controls_(config.horizon_steps), config_(config),
       model_(config), optimizer_(config, validator_), scheduler_(config), mode_manager_(config),
-      path_manager_(config), goal_manager_(config) {}
+      path_manager_(config), goal_manager_(config) {
+  validator_->require_compatible(config_);
+}
 
 Output Controller::compute(const ControllerInput &input) {
   Output stop;

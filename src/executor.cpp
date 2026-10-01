@@ -154,6 +154,10 @@ ExecutionResult ModeExecutor::update(const Output &command, const VehicleState &
         std::abs(implied.vy - command.body_command.vy) > 1e-7 ||
         std::abs(implied.wz - command.body_command.wz) > 1e-7)
       return fault();
+    if (Kinematics(config_).max_module_residual(command.wheel_speed_targets,
+                                                command.steering_targets, implied) >
+        config_.drive_kinematic_tolerance_mps + 1e-9)
+      return fault();
     // A bounded joint interpolation need not lie exactly on the ideal mode
     // manifold. Check the predicted joint pair, not the old measured angles.
     const auto projected =
