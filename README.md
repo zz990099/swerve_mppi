@@ -23,13 +23,13 @@ cmake --install build --prefix "$PWD/install-local"
 Set SWERVE_MPPI_BUILD_TESTS=OFF for a library-only build.
 BUILD_SHARED_LIBS=ON selects a shared library on supported toolchains.
 CTest runs the original behavior checks, model, optimizer and execution
-regressions, default-noise multi-seed behavior checks, and an independent consumer that finds and links the installed CMake package.
+and navigation regressions, default-noise multi-seed behavior checks, and an independent consumer that finds and links the installed CMake package.
 CI builds Debug and Release configurations through CMake.
 
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.4 CONFIG REQUIRED)
+find_package(swerve_mppi 0.5 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -38,7 +38,8 @@ Add the install prefix to CMAKE_PREFIX_PATH.
 ## Controller contract
 
 Call Controller::compute(input) once per Config::dt_s using fresh, consistent
-measured vehicle state and a nonempty local path. The current warm-start sequence
+measured vehicle state and a nonempty ordered task path. Keep the same path
+and `path_id` on subsequent ticks; the core manages progress and local pruning. The current warm-start sequence
 advances by one model step per accepted drive action; arbitrary controller/model
 period ratios are not supported yet.
 
@@ -78,7 +79,14 @@ remain conservative planning settings; they are not calibrated Gazebo dynamics.
 Components own their configuration, so temporaries and copied controllers cannot
 leave dangling configuration references.
 
-Version 0.4 stabilizes default-noise core behavior. Small steering changes in a
+Version 0.5 adds path progress, bounded local references, sharp-corner capture,
+terminal slowdown, pose alignment and measured-stop completion. It supports
+reverse waypoint order and an explicit body-heading policy. New geometry,
+heading policy or `path_id` resets task progress; completed tasks remain stopped.
+See [docs/NAVIGATION.md](docs/NAVIGATION.md) for lifecycle, tuning and migration,
+and [docs/VALIDATION.md](docs/VALIDATION.md) for the 45 seeded completion runs.
+
+Version 0.4 established default-noise core behavior. Small steering changes in a
 stable mode now advance steering and drive together, bounded by steering rate,
 wheel acceleration and body acceleration. Larger changes retain stop/align/drive
 and freeze the entry intent until the first Drive or a timeout. Mode switches
@@ -101,8 +109,9 @@ and excessive moving steering steps are rejected by ModeExecutor.
 
 This is a core research prototype. It has no ROS node or Nav2 plugin, and has not
 been validated in a combined Gazebo closed loop. Obstacles and the footprint are
-circles, the local goal is the last path pose, and each horizon allows one mode
-change. Path progress/pruning, goal completion, footprint/costmap queries,
-actuator-delay calibration and transport adapters remain future work. The typed
+circles, and each horizon allows one mode change. Footprint/costmap queries,
+actuator-delay calibration, solve-time profiling and transport adapters remain
+future work. Path tracking and completion are implemented for ordered task paths;
+localization jumps and unrestricted global-path reacquisition are not supported. The typed
 mode contract and standalone execution supervisor are implemented and tested.
 These core tests do not establish agreement with physical or Gazebo dynamics.

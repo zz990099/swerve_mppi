@@ -1,0 +1,134 @@
+# Navigation lifecycle (0.5)
+
+## Input and task identity
+
+Supply the complete ordered task path on every Controller::compute call, in the
+same world frame as vehicle.pose. Keep geometry, heading_policy and path_id stable
+while following that task. PathManager performs local pruning internally. Do not
+send a newly cropped path each tick: exact geometry changes are treated as replans.
+
+A change to any waypoint position/yaw, heading_policy or path_id restarts progress,
+clears the optimizer warm start and resets goal/stall state. Increment path_id to
+restart an identical completed task. Controller::reset also clears navigation
+state, while preserving the execution request ID high-water mark. The controller
+expects finite, strictly increasing timestamps and one call per dt_s; an adapter
+must handle freshness, time resets, cancellation and localization discontinuities.
+
+Replanning cancels obsolete same-mode alignment intent. It does **not** cancel or
+rewrite an already issued RequestMode: that immutable handshake must complete or
+time out under its original deadline. The next drive is planned for the new path.
+For emergency cancellation use the execution SafeStop/recovery contract.
+
+PathHeadingPolicy specifies **body yaw**, independently of path travel direction:
+
+- FollowPath (default): interpolate waypoint yaw along arc length and penalize
+  heading error throughout tracking. This is a soft cost, not a hard constraint.
+- GoalOnly: ignore intermediate yaw in tracking costs and require only final yaw.
+
+Waypoint order defines travel order, including reverse travel and foldbacks. Do
+not reverse the point array to request reverse gear; specify positions behind the
+robot while keeping the desired body yaw. A zero-length path requests final yaw
+alignment. Consecutive duplicate positions are allowed; they do not encode a
+mandatory intermediate spin or stop. Final yaw is retained.
+
+Controller fills TrackingContext after pruning. Callers should leave input.tracking
+empty; a standalone Optimizer caller may supply a validated local context with a
+nonnegative speed cap. All supplied fields must be finite even when Controller
+will replace them.
+
+## Path progress
+
+PathManager stores cumulative arc length and projects measured XY onto a bounded
+forward interval. Progress never decreases within one task. The first interval
+has path_search_window_m length; subsequent intervals are limited to the smaller
+of that window and measured displacement plus path_progress_slack_m. Equal-distance
+matches keep the earlier arc branch. This avoids a global nearest-point jump at
+self-intersections; it is not global relocalization or unrestricted loop matching.
+Start near the beginning of the task path. For a major localization jump, submit
+a new task path beginning near the corrected pose.
+
+The local target lies path_lookahead_m ahead in arc length. Accumulated geometric
+turn greater than path_lookahead_turn_rad truncates the target at the corner, so
+lookahead cannot point behind a not-yet-reached reversal. A corner is captured
+only when both the arc gap and measured XY gap are within position tolerance.
+Within goal_docking_distance_m, a bounded low-speed translation policy finishes
+corner capture. Intermediate corners never trigger task completion.
+
+The path heading uses shortest-angle interpolation. Cross-track output is the XY
+distance to the matched monotonic progress point, not a global nearest-distance
+query. Progress and remaining length are diagnostics, not obstacle clearances.
+The implementation scans the stored path and copies the local reference each tick;
+allocation-free operation and large-path solve-time profiling remain future work.
+
+## Terminal control and completion
+
+Within goal_slowdown_distance_m of the end, sampled, nominal and weighted controls
+obey a translation speed cap based on goal distance, a proportional gain and a
+stopping-distance bound. Tracking costs add path-heading, command-change and
+terminal-speed penalties. The optimizer reserves a fresh geometric seed alongside
+the nominal and Gaussian proposals to adapt to moving local targets.
+
+Within goal_docking_distance_m of both the path end and goal position, Controller
+uses deterministic low-speed capture. It retains straight DualAckermann motion
+when the lateral error is small; otherwise it uses Crab translation. After position
+capture it brakes and requests Spin when final yaw requires correction. Switching
+requires measured stopping and minimum mode dwell. Positive drive and new requests
+are checked through a constant-intent rollout and the circular obstacle critic;
+this conservative check can reject a command earlier than a shorter rollout would.
+Terminal control is a proportional capture policy, not an additional MPPI solve.
+
+NavigationStatus is separate from the execution TransitionPhase:
+
+| Status | Meaning |
+| --- | --- |
+| Tracking | Following the ordered path |
+| ApproachingGoal | Remaining arc length is within slowdown distance |
+| AligningGoal | Final position acquired; yaw still outside tolerance |
+| Settling | Position acquired and yaw in tolerance; waiting for strict pose/stop dwell |
+| Complete | Measured completion latched for this task |
+| Fault | Controller emitted SafeStop |
+
+Completion requires remaining arc length and position capture, actual XY/yaw
+within their tolerances, confirmed fault-free mode, stopped body **and every wheel**,
+no active execution/alignment, and a continuous goal_settle_time_s dwell. Being
+near the endpoint of a closed loop at startup cannot complete it. Position capture
+uses hysteresis while correcting yaw; completion always uses strict tolerances.
+
+Output::goal_reached latches after completion until replan/reset. The controller
+then emits Hold (or Brake if external motion is measured), without stochastic
+resampling. The latch records task success; it is not a continuously recomputed
+pose-in-tolerance flag and does not automatically drive back after external drift.
+
+Output also reports path_progress_m, remaining_path_m, cross_track_error_m,
+goal_distance_m, goal_yaw_error_rad and stalled. The stall timer observes arc
+advance, goal-distance reduction or terminal yaw improvement. Active handshakes
+and local committed alignment use their own execution timeout. Stable stopping
+and completed tasks do not report a stall; wheels that never stop can. stalled
+is a diagnostic only: recovery policy belongs to the caller.
+
+## New configuration defaults
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| path_lookahead_m | 1.0 m | Arc-length local target |
+| path_lookahead_turn_rad | 1.0 rad | Corner lookahead cutoff |
+| path_search_window_m | 1.5 m | Maximum forward match window |
+| path_progress_slack_m | 0.1 m | Additional match allowance per tick |
+| goal_position_tolerance_m | 0.06 m | Position/corner capture tolerance |
+| goal_yaw_tolerance_rad | 0.05 rad | Final body yaw tolerance |
+| goal_settle_time_s | 0.3 s | Continuous measured-stop dwell |
+| goal_slowdown_distance_m | 0.6 m | Start terminal translation cap/cost |
+| goal_docking_distance_m | 0.25 m | Start deterministic capture |
+| goal_translation_gain | 1.2 /s | Position correction gain |
+| goal_rotation_gain | 1.5 /s | Yaw correction gain |
+| progress_timeout_s | 3.0 s | No-progress diagnostic interval |
+| progress_distance_m | 0.03 m | Significant progress threshold |
+| path_heading_weight | 0.3 | Per-tick body-yaw tracking cost |
+| smoothness_weight | 0.08 | Squared active command differences |
+| goal_speed_weight | 2.0 | Terminal squared translation speed |
+
+The existing stopped thresholds, rate limits and execution deadlines still apply.
+These gains and geometric tolerances are standalone defaults, not calibrated
+hardware settings. Version 0.5 adds public fields and changes task semantics;
+rebuild downstream users and request find_package(swerve_mppi 0.5 CONFIG REQUIRED).
+The version 0.4 joint-target execution contract remains in effect.

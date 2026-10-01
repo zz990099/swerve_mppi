@@ -8,7 +8,9 @@ Nav2 controller plugin belong in separate adapter packages.
 
 | Component | Responsibility |
 | --- | --- |
-| Controller | Validate input, continue committed transitions, select a solution and emit one action. |
+| Controller | Validate input, coordinate path/goal state, continue committed transitions and emit one action. |
+| PathManager | Monotonic arc progress, bounded matching, local reference and corner capture. |
+| GoalManager | Pose acquisition, measured-stop settling, completion latch and progress diagnostics. |
 | ModeScheduler | Enumerate keep/single-switch branches; enforce dwell and switch hysteresis before selection. |
 | ModeManager | Commit a frozen entry request; gate handover on its matching ID and measured state. |
 | ModeExecutor | Persist actual mode; supervise braking/alignment, acknowledge requests and latch execution faults. |
@@ -18,7 +20,7 @@ Nav2 controller plugin belong in separate adapter packages.
 | DriveModel | Mode constraints, braking/steering interlock and rate-limited wheel/body propagation. |
 | Kinematics | Mechanical steering limits, signed wheel directions and encoder forward kinematics. |
 | TransitionModel | Predict braking, mode-entry steering and confirmation delay. |
-| CriticManager | Combine path, circle-obstacle, goal, effort and switch objectives. |
+| CriticManager | Combine path distance/heading, circle-obstacle, goal, effort, smoothness and switch objectives. |
 
 All configuration-bearing components store values instead of references into
 other objects. Models and stateful controllers can therefore be constructed from
@@ -28,12 +30,21 @@ are not thread-safe and must be serialized by their caller.
 ## Planning and execution
 
 1. Check the timestamp, finite state, measured joint limits and path.
-2. If a committed transition is active, update it from actual measured feedback.
-3. Enumerate candidate discrete branches. Each makes at most one transition.
-4. Optimize each branch independently; never average controls across modes.
-5. Reject switch candidates that fail hysteresis before selecting the winner.
-6. Commit an immediate switch, or execute the first control in the current mode.
-7. Advance a warm start only for an emitted keep-mode drive action.
+2. Update path progress and local target; reset task state for a new path/ID/policy.
+3. If a committed mode transition is active, update it from actual measured feedback.
+4. At the terminal pose or a nearby sharp corner, use bounded deterministic capture;
+   otherwise finish local alignment or enumerate keep/single-switch branches.
+5. Optimize each branch independently; never average controls across modes.
+6. Reject switch candidates that fail hysteresis before selecting the winner.
+7. Commit an immediate switch, or execute the first control in the current mode.
+8. Advance a warm start only for an emitted keep-mode MPPI drive action.
+9. Publish navigation status, progress, goal errors and the completion latch.
+
+Terminal/corner capture is a separate low-speed policy in Controller, using the
+same DriveModel, RolloutEngine collision checks and measured ModeManager protocol.
+It avoids resampling a near-zero MPPI command at the completion boundary. GoalManager
+only judges measured state; it never treats a predicted endpoint as completion.
+See docs/NAVIGATION.md for the task and heading contracts.
 
 Large same-mode steering changes commit a fixed control intent until alignment
 and the first drive tick complete, with the same configured timeout bound. New
@@ -43,8 +54,11 @@ switch that would preempt it. The initiating control remains active because it
 sets entry geometry. Controller rechecks a constant-intent continuation against
 fresh obstacles while local alignment is active; this check is conservative and
 can stop before a shorter continuation would become unsafe. Reset clears the
-commitment. A confirmed mode switch likewise preserves its agreed entry intent
-through the stopped handover and first drive tick.
+commitment. Replanning clears obsolete local alignment, but never mutates an
+active explicit mode request. A confirmed mode switch preserves its agreed entry
+intent through the stopped handover; normal tracking then applies the first drive
+intent. A new path or terminal/corner capture may choose a fresh intent afterward,
+subject to the same stopped realignment interlock.
 
 A rejected immediate switch uses the keep-mode solution, rather than projecting
 the rejected mode's first control into the current mode. Future transitions
@@ -63,7 +77,11 @@ Timeout covers the entire committed transition, including braking.
 The proposal is the nominal sequence plus stationary AR(1) Gaussian perturbations,
 projected into
 the branch's mode and wheel-speed limits. One sample preserves the nominal
-sequence. Updates use the effective perturbation after projection, not discarded
+sequence; tracking also reserves one proposal for the fresh geometric seed,
+so a shifted local target can replace stale warm-start direction. Ackermann seeds
+use signed pure-pursuit curvature; Crab seeds use body-frame translation. The
+approach speed cap applies to every proposal and the weighted sequence.
+Updates use the effective perturbation after projection, not discarded
 raw noise. Transition ticks are masked from the control-noise correction and
 weighted update because no sampled drive control is applied during those ticks.
 The control at switch_step defines a frozen entry intent. NoiseGenerator preserves
@@ -149,13 +167,13 @@ Integration must resolve that mismatch. Do not translate RequestMode to an
 ordinary zero Twist or report confirmation based on elapsed time alone.
 
 The next adapter should own message/TF conversion, feedback ages, simulation time,
-path lifecycle, transport for the implemented mode command/feedback protocol,
-and deliberate recovery. A later Nav2 adapter adds lifecycle handling, local
-path transformation/pruning,
-costmap/footprint queries and goal completion. The core has no autonomous handling
-of arbitrary control periods or global path progress yet. SafeStop supports core
-execution cancellation; navigation task lifecycle and goal completion remain
-adapter responsibilities.
+task IDs, transport for the mode command/feedback protocol and deliberate recovery.
+A later Nav2 adapter adds lifecycle/cancellation handling, path frame transforms
+and costmap/footprint queries. Core PathManager now owns ordered path progress and
+pruning; GoalManager owns pose/stop completion. The core still assumes one call
+per fixed model tick and bounded localization displacement. SafeStop supports
+execution cancellation, while action-server cancellation and recovery policy
+remain adapter responsibilities.
 
 ## Validation
 
@@ -173,9 +191,9 @@ stage must compare predicted trajectories against independent Gazebo truth and
 measure solve-time distributions, tracking error, mode-switch counts, stalls and
 faults.
 
-Default-noise behavior regressions run straight, lateral, curved and spin goals
-for five fixed random seeds using an independent encoder fixture and midpoint
-pose integration. They check bounded final error, no execution fault, a maximum
-unfinished stationary interval, and mode-change counts. They do not establish
-terminal stopping, task completion, arbitrary path tracking or calibrated plant
-agreement; those remain later stages.
+Default-noise behavior regressions cover nine scenarios and five fixed seeds,
+including reverse travel, terminal yaw, S-curves, reversals and a closed square.
+An independent encoder fixture with midpoint pose integration checks completion,
+measured stopping, one second of post-completion Hold, path error, mode changes
+and unfinished stationary intervals. These are standalone regressions, not a
+calibrated plant or Gazebo benchmark. See docs/VALIDATION.md for measured results.

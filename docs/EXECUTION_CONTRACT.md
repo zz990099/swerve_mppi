@@ -146,3 +146,12 @@ after the committed entry; task cancellation still uses SafeStop/reset.
 
 Mode-entry intent is also retained for the first Drive after a confirmed switch,
 so stochastic optimization cannot immediately undo the steering handshake.
+
+## Navigation lifecycle in 0.5
+
+Controller now owns ordered-path progress and measured goal completion. Navigation
+status is separate from execution phase. Replanning clears local optimizer and
+same-mode alignment state, while an active RequestMode retains its ID, complete
+payload and original deadline. Completion requires stopped body/wheels and a
+confirmed mode over a settling dwell; afterward Controller holds the task stopped.
+See [NAVIGATION.md](NAVIGATION.md) for path identity, heading policy and diagnostics.
