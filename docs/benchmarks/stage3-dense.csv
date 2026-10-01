@@ -1,0 +1,2 @@
+scenario,seed,calls,completion_s,max_path_error_m,rms_path_error_m,mode_changes,p50_ms,p95_ms,p99_ms,max_ms,period_overruns,mean_allocations,peak_allocations,planning_calls,planning_p95_ms,planning_mean_allocations,evaluated_rollouts,feasible_rollouts,fallback_updates
+dense_curve,42,70,6.9,0.0665719398,0.0369959713,2,0.021322,26.125387,28.783798,28.783798,0,41.1428571,92,30,26.605394,85.9,24368,18296,1

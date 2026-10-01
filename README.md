@@ -29,7 +29,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.5 CONFIG REQUIRED)
+find_package(swerve_mppi 0.6 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -71,6 +71,13 @@ period ratios are not supported yet.
 See [docs/EXECUTION_CONTRACT.md](docs/EXECUTION_CONTRACT.md) for the transport-free
 ModeExecutor API, feedback mapping, cancellation and timing contract.
 
+## Measurement tools
+
+Enable `SWERVE_MPPI_BUILD_BENCHMARKS=ON` to build `swerve_mppi_benchmark`.
+It reports solve-time percentiles, allocations and path/completion metrics as CSV.
+See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for commands and measurement limits.
+The optional allocation regression runs in CI; wall-clock timing is not a CI gate.
+
 ## Current status
 
 The default chassis dimensions, wheel radius, steering rate and wheel limits
@@ -79,7 +86,13 @@ remain conservative planning settings; they are not calibrated Gazebo dynamics.
 Components own their configuration, so temporaries and copied controllers cannot
 leave dangling configuration references.
 
-Version 0.5 adds path progress, bounded local references, sharp-corner capture,
+Version 0.6 reuses optimizer/rollout storage, retains safety-check models and
+limits path geometry scans to their forward windows. Path scoring computes the
+nearest-segment distance/yaw once per pose. `Output` now explains the computation
+policy, failure reason and work across all planning branches. Returned solutions
+still own their data; controller/optimizer objects must be called serially.
+
+Version 0.5 added path progress, bounded local references, sharp-corner capture,
 terminal slowdown, pose alignment and measured-stop completion. It supports
 reverse waypoint order and an explicit body-heading policy. New geometry,
 heading policy or `path_id` resets task progress; completed tasks remain stopped.

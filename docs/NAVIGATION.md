@@ -57,8 +57,10 @@ corner capture. Intermediate corners never trigger task completion.
 The path heading uses shortest-angle interpolation. Cross-track output is the XY
 distance to the matched monotonic progress point, not a global nearest-distance
 query. Progress and remaining length are diagnostics, not obstacle clearances.
-The implementation scans the stored path and copies the local reference each tick;
-allocation-free operation and large-path solve-time profiling remain future work.
+Geometry scans now start at progress via binary lookup and stop at the bounded
+window. Validation and path identity checks still scan the full input, and the
+local reference is copied each tick. Allocation-free operation remains future
+work; docs/PERFORMANCE.md includes dense-path profiling.
 
 ## Terminal control and completion
 
@@ -132,3 +134,7 @@ These gains and geometric tolerances are standalone defaults, not calibrated
 hardware settings. Version 0.5 adds public fields and changes task semantics;
 rebuild downstream users and request find_package(swerve_mppi 0.5 CONFIG REQUIRED).
 The version 0.4 joint-target execution contract remains in effect.
+
+Version 0.6 retains these navigation defaults and adds computation policy, failure
+reason and planning-work diagnostics. Rebuild consumers against the 0.6 package;
+see PERFORMANCE.md for the workspace ownership and diagnostic contracts.

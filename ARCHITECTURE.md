@@ -24,8 +24,11 @@ Nav2 controller plugin belong in separate adapter packages.
 
 All configuration-bearing components store values instead of references into
 other objects. Models and stateful controllers can therefore be constructed from
-temporary configuration values and safely copied. Individual controller objects
-are not thread-safe and must be serialized by their caller.
+temporary configuration values and safely copied. Controller and Optimizer own mutable reusable workspaces and are not thread-safe;
+serialize calls to each instance. Returned Solution and Trajectory values own
+independent copies and can safely outlive the next solve. Copies of controllers
+and optimizers do not alias workspace storage. Reset clears task/RNG/warm-start
+state while retaining vector capacity.
 
 ## Planning and execution
 
@@ -109,6 +112,30 @@ A nonfinite critic result rejects a trajectory. Each rollout exposes its initial
 pose and one pose per tick, final vehicle state, applied controls and transition
 mask. The obstacle critic checks swept centre-line segments with a circular
 footprint, including braking and stationary alignment.
+
+## Workspaces and diagnostics
+
+Optimizer preallocates proposal noise, active masks, candidate/weighted controls
+and reuses one rollout trace. It copies trajectory data only for nominal/weighted
+results or an improved safety fallback, preserving value ownership. RolloutEngine
+also exposes a caller-owned output overload; controls must not alias its output
+controls. A new rollout clears validity and vector contents while retaining
+capacity. Transition traces append directly to the preallocated pose buffer.
+
+Controller retains RolloutEngine/CriticManager and constant-intent storage for
+capture/alignment safety checks. It copies only the pruned path into planning
+input. PathManager starts geometry scans with arc-length binary lookup and stops
+at the match/lookahead bounds; full input validation and geometry identity checks
+still scan the supplied task path. PathCritic compares squared distances and
+interpolates body yaw only at the nearest segment.
+
+Output::control_policy identifies Tracking, Alignment, Capture, ModeTransition,
+Stopped or Fault. FailureReason separates invalid data, clock/path/feedback faults,
+no feasible plan, model failure and transition faults. PlanningStats counts all
+branches, physical rollout evaluations, finite scores and fallback updates in the
+current compute call. It does not report elapsed time or enforce a solve deadline.
+Legacy Output::feasible_rollouts remains the selected branch's feasible proposal
+count. See docs/PERFORMANCE.md for measurement and exact counter semantics.
 
 ## Motion prediction
 
