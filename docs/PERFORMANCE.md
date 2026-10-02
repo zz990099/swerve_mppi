@@ -1,11 +1,13 @@
-# Core workspaces, diagnostics and measurement (0.12)
+# Core workspaces, diagnostics and measurement (0.13)
 
 Stage 3 covers standalone core performance and observability. No simulator,
 ROS adapter, transport protocol or hardware integration was added. Tracking
 parameters, completion tolerances and execution interlocks retain their 0.5 defaults.
 Version 0.12 adds whole-period absolute speed certification, phased residual
-braking/alignment and duplicate-point curvature handling. Current measurement
-evidence is in ACTUATION_BOUNDARY_VALIDATION.md and benchmarks/*v0.12_release.csv.
+braking/alignment and duplicate-point curvature handling. Version 0.13 fixes marginal correlated-noise weighting and current-pose validation.
+Current measurement evidence is in CORRELATION_ANCHOR_VALIDATION.md and
+benchmarks/*v0.13_release.csv. The 0.12 ACTUATION_BOUNDARY_VALIDATION.md and CSVs
+remain historical evidence.
 The 0.11 DRIVE_EXECUTION_VALIDATION.md and CSVs remain historical evidence. The 0.8 CSVs
 and stage 3 tuning conclusions remain historical evidence; their timings and
 completion ticks do not describe the current source.
@@ -138,7 +140,7 @@ are covered by the optimizer regressions.
 
 ## Measurement evidence and tuning decisions
 
-See ACTUATION_BOUNDARY_VALIDATION.md and benchmarks/*v0.12_release.csv for the current
+See CORRELATION_ANCHOR_VALIDATION.md and benchmarks/*v0.13_release.csv for the current
 measurement, source commit, environment and acceptance results. CORE_REVIEW_VALIDATION.md
 records the historical 0.8 matrix; VALIDATION.md records stage 3 tuning probes.
 Allocation peaks are a repeatable structural comparison. Timing on a shared host
