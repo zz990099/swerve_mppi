@@ -230,46 +230,106 @@ ticks. Timestamp monotonicity, sequence and replay checks remain strict.
 
 ## Guarded timing and command envelopes
 
-Use TimedExecutor instead of direct ModeExecutor for queued/transported commands.
-Each CommandEnvelope has a nonzero session_id, a strictly increasing nonzero
-sequence, a strictly increasing issued_at_s and the complete Output. RequestMode
-retries retain their mode request ID but get new envelope sequences and issue
-times; transport sequence and mode request ID are independent.
+Use TimedExecutor for queued/transported commands. In 0.14 its update API takes the
+current ControllerInput, including path, obstacles and vehicle state, rather than
+VehicleState alone. Its validator may be the same shared const validator supplied
+to Controller. The validator must have compatible safety limits.
+
+CommandEnvelope requires a nonzero session_id, strictly increasing nonzero sequence,
+strictly increasing issued_at_s, Output, source_stamp_s, execute_at_s and valid_until_s.
+The last three fields have invalid defaults: legacy envelopes fail closed.
+source_stamp_s is the observation used to compute the plan; rewrapping/republishing
+must not refresh it. execute_at_s is the earliest scheduled application instant;
+valid_until_s is the final admissible start instant. Required ordering is
+source_stamp_s <= issued_at_s <= execute_at_s <= valid_until_s. All times are finite,
+nonnegative and in one clock domain. Request retries preserve their mode request
+payload but use a new envelope sequence/issue time and truthful source metadata.
 
 ```cpp
 #include <swerve_mppi/controller.hpp>
 #include <swerve_mppi/timing.hpp>
 
-swerve_mppi::Controller controller(config);
-swerve_mppi::TimedExecutor executor(config, session_id, initial_actual_mode);
-// One serialized call per model tick, with fresh measurements and clock_now_s:
-const auto output = controller.compute(input);
-swerve_mppi::CommandEnvelope envelope{session_id, ++sequence, clock_now_s, output};
-const auto guarded = executor.update(envelope, input.vehicle, clock_now_s);
-// Apply guarded.execution targets and map its ModeFeedback as in the cycle above.
-// A watchdog tick without a new command uses update(std::nullopt, measured, now).
+swerve_mppi::Controller controller(config, validator);
+swerve_mppi::TimedExecutor executor(config, session_id, initial_actual_mode, {}, validator);
+// planning_input is the actual observation used to compute this plan.
+const auto output = controller.compute(planning_input);
+swerve_mppi::CommandEnvelope envelope{
+    session_id, ++sequence, issued_at_s, output,
+    planning_input.vehicle.stamp_s, application_time_s, valid_until_s};
+// latest_input describes the application instant and current obstacles/constraints.
+const auto guarded = executor.update(envelope, latest_input, application_time_s);
+if (guarded.actuation) {
+  const auto targets = guarded.actuation->sample(elapsed_since_application_s);
+  // Apply targets at the actuator rate; convert wheel m/s to joint rad/s.
+  // An absent sample is an expired/invalid interval, never a held Drive.
+}
+// Map guarded.execution.feedback to the next state observation.
+// A missing-command watchdog tick calls update(std::nullopt, latest_input, now_s).
 ```
 
-TimingLimits defaults are max_feedback_age_s=0.15, max_command_age_s=0.15 and
-period_tolerance_ratio=0.25. Receiving tick intervals and measurement stamp intervals
-must match dt_s within that relative tolerance. Ages at the limit are accepted.
-Future/invalid timestamps, clock regressions, duplicate feedback, missed periods,
-expired/replayed/missing commands and wrong sessions latch a distinct TimingError
-and force SafeStop. The guard never repeats the last Drive. TimingGuard is also
-available to reject feedback before planning; check_feedback then check_command
-use the same current tick time.
+TimingLimits defaults remain max_feedback_age_s=0.15, max_command_age_s=0.15 and
+period_tolerance_ratio=0.25. Tick and measurement stamp intervals must match dt_s
+within that ratio. Observation, source-observation and command ages are bounded;
+source age uses max_feedback_age_s. Inclusive boundaries use the shared numerical
+time tolerance. Invalid source/schedule ordering reports InvalidPlanTime; an old
+source reports SourceTimeout; early application reports NotYetExecutable; application
+after valid_until_s reports ExecutionExpired. Existing clock, session, replay and
+missing-command checks still latch SafeStop. The guard never repeats a previous Drive.
 
-Measurement, command and now timestamps must use one clock domain. The adapter
-supplies the clock, ticks even when a command is missing, and maps feedback. A
-paused simulation clock does not replace an independent actuator watchdog. The
-core cannot enforce stopping if its process is not called.
+Freshness is not execution-state alignment. TimedExecutor additionally requires
+latest_input.vehicle.stamp_s == now_s within numerical tolerance. A merely recent raw
+observation reports ExecutionSafetyError::StateNotCurrent and latches SafeStop.
+For stepped validation, take the snapshot at the application boundary. A real-time
+adapter must supply a genuinely time-aligned state and account for prediction/measurement
+uncertainty; rewriting a stale timestamp is not alignment. This stage implements no
+latency predictor or uncertainty model. Current obstacles/constraints must also be
+coherent with that snapshot; dynamic obstacle prediction is not implemented.
 
-Timing recovery requires independently verified stopped/confirmed feedback,
-draining pending commands, executor.reset(recovered, new_session_id) with a strictly
-larger session ID, and controller.reset(). Clock and transport sequence can restart;
-mode request ID high-water marks remain intact. Old sessions are rejected even
-with fresh timestamps. Across process restarts the caller must persist/coordinate
-session identity and drain transport; this is not an automatic reconnect protocol.
+Before committing protocol state, TimedExecutor previews ModeExecutor and builds an
+ActuationPlan for its actual result. RolloutEngine::generate_execution validates the
+exact wheel/steering interval followed by a complete stop, using the latest context
+and the same stopping_horizon_steps budget. It does not treat body_command as a new
+ideal control and rerun DriveModel, which could change the checked joint targets.
+A valid preview commits once. A rejected well-formed interval/continuation tries a
+separate checked stopping preview. Success returns CommandRejected, the rejected
+TrajectoryStatus and a healthy actuator profile; a later safe command may recover
+without reset. A failed complete stop returns UnsafeStoppingTrajectory and latches
+SafeStop. Invalid context/actuation also latches SafeStop. Protocol faults remain
+faults; they are not turned into healthy braking. Rejected new mode requests do not
+consume their request IDs or commit their transition. Report execution rejection using TimedExecutionResult; do not
+announce completion from an obsolete planner Output after a rejection. Already committed transitions
+retain their original deadline and identity during a healthy stopping fallback.
+
+ActuationPlan is generated by ActuationModel and cannot be constructed with unchecked
+public endpoint fields. sample(t) returns linear rolling wheel speeds and mechanical
+steering angles for finite 0 <= t <= dt_s; it never extrapolates. Drive samples are
+affine from measured joints to both endpoint arrays over the full tick. Brake keeps
+measured steering and scales all wheel speeds proportionally. Its full braking time is
+max(hypot(vx,vy)/max_linear_decel_mps2, abs(wz)/max_angular_decel_radps2,
+max_i(abs(wheel_speed_i))/max_wheel_accel_mps2), with encoder-derived body velocity.
+Hold/RequestMode may align only after this entire brake completes and only when the
+initial handover threshold allows alignment. Steering then advances at the configured
+rate during remaining stopped time. Plan/rollout actuator-model parameters must match.
+
+These deceleration values define the required nominal actuator reference, not a
+minimum guaranteed physical braking capability. Sending zero wheel speed immediately,
+independent wheel ramps, early endpoint holds, or another mode-inference supervisor
+implements a different plant. Calibrate servo tracking, achievable braking, delay and
+slip against an independent plant before claiming physical stopping safety. This
+stage supplies the exact reference profile, not that calibration or a robust
+physical stopping envelope. SafeStop disables drive and has no certified normal
+braking profile; physical emergency behavior belongs to the independent watchdog.
+
+The adapter supplies the clock, serial ticks, feedback mapping and exclusive wheel
+command ownership. A paused simulation clock does not replace an actuator watchdog;
+the core cannot enforce stopping when its process is not called. A sampled profile
+must start at its validated application instant and cannot be reused after the tick.
+
+Recovery requires independently verified stopped/confirmed feedback, draining pending
+commands, executor.reset(recovered, new_session_id) with a strictly larger session ID,
+and controller.reset(). Clock/sequence may restart; request ID high-water marks remain.
+Across process restarts the caller must persist/coordinate session identity and drain
+transport. Planning/context snapshots and model validity remain the caller's contract.
 
 ## Regression boundaries
 
@@ -306,3 +366,4 @@ same-mode alignment state, while an active RequestMode retains its ID, complete
 payload and original deadline. Completion requires stopped body/wheels and a
 confirmed mode over a settling dwell; afterward Controller holds the task stopped.
 See [NAVIGATION.md](NAVIGATION.md) for path identity, heading policy and diagnostics.
+

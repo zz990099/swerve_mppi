@@ -29,7 +29,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.13 CONFIG REQUIRED)
+find_package(swerve_mppi 0.14 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -81,9 +81,22 @@ period ratios are not supported yet.
 - Every healthy Brake, Hold and pending RequestMode also passes the stopping
   validator against fresh constraints. Normal terminal braking keeps its navigation
   status; rejection reports UnsafeStoppingTrajectory and cancels the request.
-- Use TimedExecutor for queued commands. CommandEnvelope checks session, sequence,
-  issue time, feedback freshness and model-period cadence. Clock resets require
-  verified stopped recovery, a strictly newer session and controller.reset().
+- Use TimedExecutor for queued commands. Pass the current ControllerInput, not just
+  VehicleState. It rechecks the exact joint interval and full stopping continuation
+  against current obstacles and injected hard constraints before committing execution.
+- CommandEnvelope requires source_stamp_s, execute_at_s and valid_until_s in addition
+  to session, sequence and issue time. A fresh issue time cannot disguise an old
+  planning observation. Execution-start state must be aligned to now_s; merely recent
+  raw feedback is insufficient. TimingGuard checks transport age; the adapter owns
+  time alignment and any model/measurement uncertainty.
+- A rejected well-formed command returns checked braking with CommandRejected only
+  if a complete stop remains feasible. Unsafe stopping latches SafeStop. Timing or
+  protocol faults also latch SafeStop. Clock recovery requires a verified stopped
+  state, a strictly newer session and controller.reset().
+- Healthy TimedExecutionResult::actuation is a checked ActuationPlan. Sample it at
+  the actuator rate; Drive ramps both joint arrays over the whole model tick, while
+  Hold/RequestMode finish proportional braking before steering. Expired samples
+  return no target. SafeStop has no certified normal-braking profile.
 
 See [docs/EXECUTION_CONTRACT.md](docs/EXECUTION_CONTRACT.md) for the transport-free
 ModeExecutor API, feedback mapping, cancellation and timing contract.
@@ -96,6 +109,18 @@ See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for commands and measurement limi
 The optional allocation regression runs in CI; wall-clock timing is not a CI gate.
 
 ## Current status
+
+Version 0.14 adds execution-time safety validation and a checked actuator profile.
+TimedExecutor now requires a current ControllerInput and complete scheduling/source
+metadata; the old state-only update API is removed. It validates the actual joint
+endpoint interval, rather than reconstructing a new control from body_command.
+Unsafe delayed/context-changed commands fall back only to a separately validated
+complete stop. Protocol preview is transactional, so rejecting a new mode request
+cannot consume its ID or commit an unexecuted transition. ActuationPlan exposes
+bounded high-rate target samples and its swept-motion endpoint. Rebuild consumers
+against 0.14. See [docs/EXECUTION_CONTRACT.md](docs/EXECUTION_CONTRACT.md) and
+[docs/EXECUTION_SAFETY_VALIDATION.md](docs/EXECUTION_SAFETY_VALIDATION.md).
+
 
 Version 0.13 fixes marginal noise weighting across inactive alignment ticks and
 rejects trajectories whose initial pose differs from current vehicle feedback.
@@ -210,3 +235,4 @@ future work. Path tracking and completion are implemented for ordered task paths
 localization jumps and unrestricted global-path reacquisition are not supported. The typed
 mode contract and standalone execution supervisor are implemented and tested.
 These core tests do not establish agreement with physical or Gazebo dynamics.
+

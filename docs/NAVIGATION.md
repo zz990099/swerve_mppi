@@ -116,7 +116,7 @@ no active execution/alignment, and a continuous goal_settle_time_s dwell. Being
 near the endpoint of a closed loop at startup cannot complete it. Position capture
 uses hysteresis while correcting yaw; completion always uses strict tolerances.
 Repeated/nonincreasing samples or a gap greater than 1.5 * dt_s restart the
-stopped dwell. TimedExecutor enforces configured cadence and freshness before
+stopped dwell. TimedExecutor enforces configured cadence, freshness and execution-time safety before
 transported commands reach execution. GoalManager alone cannot verify feedback
 age relative to an independent current clock.
 
@@ -184,3 +184,4 @@ points. Zero-length segments do not reset the last nonzero geometric segment;
 yaw-only endpoint intent still belongs to navigation. Use
 find_package(swerve_mppi 0.12 CONFIG REQUIRED) and the phased Hold/RequestMode
 actuation contract in ACTUATION_BOUNDARY_VALIDATION.md.
+
