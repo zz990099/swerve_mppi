@@ -36,9 +36,10 @@ bool ProfileRunner::install(const TimedExecutionResult &result, double applicati
                        result.safety_error == ExecutionSafetyError::TaskMismatch;
   if (!result.actuation || result.timing_error != TimingError::None || !allowed ||
       (result.safety_error != ExecutionSafetyError::None &&
-       result.execution.action != Action::Brake && result.execution.action != Action::Hold) ||
+       result.execution.action != Action::Brake && result.execution.action != Action::Hold &&
+       result.execution.action != Action::RequestMode) ||
       result.execution.feedback.fault || !result.actuation->compatible_with(config_) ||
-      check_feedback(result.actuation->start(), config_).status != FeedbackStatus::Valid ||
+      check_model_feedback(result.actuation->start(), config_).status != FeedbackStatus::Valid ||
       result.actuation->action() != result.execution.action ||
       std::abs(result.actuation->start().stamp_s - application_s) >
           detail::time_tolerance(result.actuation->start().stamp_s, application_s) ||
@@ -80,8 +81,8 @@ std::optional<JointTargets> ProfileRunner::sample(double now_s, double wall_s) {
   return out;
 }
 void ProfileRunner::reset(const VehicleState &recovered) {
-  if (check_feedback(recovered, config_).status != FeedbackStatus::Valid || recovered.mode_fault ||
-      !recovered.mode_confirmed || !is_stopped(recovered, config_))
+  if (check_model_feedback(recovered, config_).status != FeedbackStatus::Valid ||
+      recovered.mode_fault || !recovered.mode_confirmed || !is_stopped(recovered, config_))
     throw std::invalid_argument("profile recovery requires verified stopped/confirmed feedback");
   plan_.reset();
   application_s_ = installed_wall_s_ = last_now_s_ = last_wall_s_ = -1;

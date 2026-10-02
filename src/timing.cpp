@@ -122,7 +122,7 @@ TimedExecutionResult TimedExecutor::update(const std::optional<CommandEnvelope> 
     return {executor_.update(stop, measured), error, ExecutionSafetyError::None,
             TrajectoryStatus::Invalid, std::nullopt};
   if (detail::valid_vehicle(measured, config_) &&
-      check_feedback(measured, config_).status == FeedbackStatus::Inconsistent)
+      check_model_feedback(measured, config_).status == FeedbackStatus::Inconsistent)
     return {executor_.update(stop, measured), error, ExecutionSafetyError::InconsistentFeedback,
             TrajectoryStatus::Invalid, std::nullopt};
   if (!detail::valid_input(latest, config_))
@@ -161,8 +161,8 @@ TimedExecutionResult TimedExecutor::update(const std::optional<CommandEnvelope> 
   return reject_command(latest, ExecutionSafetyError::CommandRejected, status);
 }
 TimedExecutionResult TimedExecutor::reject_command(const ControllerInput &latest,
-                                                  ExecutionSafetyError reason,
-                                                  TrajectoryStatus status) {
+                                                   ExecutionSafetyError reason,
+                                                   TrajectoryStatus status) {
   const auto &measured = latest.vehicle;
   // The command belongs to an obsolete task or its actual interval/stop is unsafe.
   // Only a freshly checked complete stop authorizes a non-latching fallback.

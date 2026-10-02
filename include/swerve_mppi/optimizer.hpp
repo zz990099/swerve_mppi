@@ -14,6 +14,9 @@ public:
                     const PlanningBudget *budget = nullptr);
   // Advance a warm start only after the controller actually issues its drive action.
   void accept(const Solution &solution, DriveMode mode);
+  // Discard a stale proposal without replaying previously sampled noise.
+  void clear_warm_start();
+  // Explicit deterministic restart, including the configured random seed.
   void reset();
   CriticManager &critics() { return critics_; }
 

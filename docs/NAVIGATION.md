@@ -8,7 +8,11 @@ while following that task. PathManager performs local pruning internally. Do not
 send a newly cropped path each tick: exact geometry changes are treated as replans.
 
 A change to any waypoint position/yaw, heading_policy or path_id restarts progress,
-clears the optimizer warm start and resets goal/stall state. Increment path_id to
+clears the optimizer warm start and resets goal/stall state, preserving the random
+stream. Failed planning, deadline expiry, capture and alignment also clear warm
+starts without reseeding. `Optimizer::clear_warm_start` provides this operation;
+explicit `Optimizer::reset` and `Controller::reset` additionally restart the
+configured random seed for deterministic replay. Increment path_id to
 restart an identical completed task. Controller::reset also clears navigation
 state, while preserving the execution request ID high-water mark. The controller
 expects finite, strictly increasing timestamps and one call per dt_s; an adapter

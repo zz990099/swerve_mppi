@@ -1,4 +1,4 @@
-# Standalone execution protocol (0.15)
+# Standalone execution protocol (0.16)
 
 This contract is independent of ROS, Nav2 and Gazebo. TimedExecutor is the guarded
 integration entry point; execute only its returned ActuationPlan, sampled at the
@@ -102,13 +102,21 @@ renewing the TimedExecutor session and resetting Controller. None of these helpe
 detect total process silence without callbacks: the actuator endpoint needs an
 independent watchdog/emergency stop. No normal braking profile certifies SafeStop.
 
-Before planning or certifying a stop, version 0.15 compares measured body-frame
-twist with encoder forward kinematics. Defaults admit at most 0.05 m/s linear
-vector error and 0.10 rad/s angular error. InconsistentFeedback cancels execution
-without a checked normal-stop fallback. These are admission tolerances, not slip
-or localization uncertainty bounds; calibration and conservative uncertainty
-modelling remain adapter/plant work. Encoder-derived odometry agrees by construction
-and cannot independently validate physical slip.
+Before planning or certifying a stop, `check_model_feedback` compares measured
+body-frame twist with encoder forward kinematics and requires agreement within
+1e-9 numerical precision. `check_feedback` retains configurable diagnostic defaults
+of 0.05 m/s linear vector error and 0.10 rad/s angular error, but diagnostic admission
+alone does not authorize nominal modelling. Even a diagnostic-valid discrepancy
+returns InconsistentFeedback and cancels execution without a checked normal-stop
+fallback. The model has no slip, localization or delayed-observation uncertainty
+bounds. Never overwrite body measurements to pass admission. Encoder-derived
+odometry agrees by construction and cannot independently validate physical slip.
+
+A checked CommandRejected/TaskMismatch fallback may be Brake, Hold or RequestMode.
+When a transition is already pending, Brake input continues its frozen stopped
+alignment; ProfileRunner consumes that checked non-driving profile. Rejection does
+not cancel the original request, change its ID/entry geometry or renew its deadline.
+Faulted, unchecked, expired and rejected Drive profiles remain inadmissible.
 
 Initialize the executor with verified actual mode; this does not measure or
 automatically discover the chassis configuration.

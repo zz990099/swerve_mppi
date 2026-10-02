@@ -1,5 +1,5 @@
-#include "swerve_mppi/model.hpp"
 #include "swerve_mppi/feedback.hpp"
+#include "swerve_mppi/model.hpp"
 
 #include "motion_profile.hpp"
 #include "stopping_motion.hpp"
@@ -16,7 +16,7 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
                                 double *position_error_m) const {
   double local_error = 0;
   double &error = position_error_m ? *position_error_m : local_error;
-  if (check_feedback(state, config_).status != FeedbackStatus::Valid || steps >= maximum ||
+  if (check_model_feedback(state, config_).status != FeedbackStatus::Valid || steps >= maximum ||
       (target_mode != DriveMode::DualAckermann && target_mode != DriveMode::Spin &&
        target_mode != DriveMode::Crab) ||
       !std::isfinite(entry_intent.vx) || !std::isfinite(entry_intent.vy) ||

@@ -10,7 +10,8 @@ TrajectoryValidator::TrajectoryValidator(const Config &config) : config_(config)
 }
 void TrajectoryValidator::require_compatible(const Config &config) const {
   validate(config);
-  if (config.robot_radius_m != config_.robot_radius_m ||
+  if (config.wheelbase_m != config_.wheelbase_m || config.track_m != config_.track_m ||
+      config.robot_radius_m != config_.robot_radius_m ||
       config.collision_margin_m != config_.collision_margin_m ||
       config.steering_limit_rad != config_.steering_limit_rad ||
       config.max_wheel_speed_mps != config_.max_wheel_speed_mps ||

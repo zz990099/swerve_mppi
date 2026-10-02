@@ -29,7 +29,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.15 CONFIG REQUIRED)
+find_package(swerve_mppi 0.16 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -114,14 +114,17 @@ The optional allocation regression runs in CI; wall-clock timing is not a CI gat
 
 ## Current status
 
-Version 0.15 adds body/joint feedback consistency admission, bounded input and
-workspace sizes, and a shared steady-clock planning budget (default 80% of dt_s).
-Inconsistent feedback cannot certify a normal stop. Oversize inputs are rejected
-without truncation; expired solves emit SafeStop and cannot publish partial Drive.
-The budget is cooperative, not a hard real-time guarantee. ProfileRunner samples
-checked TimedExecutor profiles, converts wheel m/s to joint rad/s, and latches
-missed profile boundaries, clock rollback and wall-watchdog expiry. Rebuild all
-consumers against 0.15 because public layouts and constructor symbols changed.
+Version 0.16 separates configurable feedback diagnostics from nominal model
+admission. `check_feedback` retains inclusive 0.05 m/s / 0.10 rad/s defaults;
+`check_model_feedback` requires body/encoder agreement within numerical precision
+(1e-9), so even smaller unmodelled residual motion cannot certify a normal stop.
+Ordinary failed planning, deadline expiry, replan and alignment discard warm starts
+without reseeding noise; explicit Controller/Optimizer reset reproduces the search.
+Injected validators require matching wheelbase and track as well as safety settings.
+ProfileRunner accepts checked non-driving pending-alignment rejection fallbacks,
+retaining the frozen request and deadline. Drive rejection remains fail-closed.
+Bounded inputs and shared cooperative planning budgets remain enabled. Rebuild
+consumers against 0.16 to use the new admission and warm-start APIs.
 See [docs/ADMISSION_VALIDATION.md](docs/ADMISSION_VALIDATION.md) for limits and tests.
 The Gazebo repository has an external joint command mode; a complete ROS adapter,
 measurement time alignment and physical braking/slip/latency calibration remain

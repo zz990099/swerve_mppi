@@ -121,7 +121,7 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
   StepResult out;
   out.state = start;
   if (!std::isfinite(dt) || dt <= 0.0 ||
-      check_feedback(start, config_).status != FeedbackStatus::Valid ||
+      check_model_feedback(start, config_).status != FeedbackStatus::Valid ||
       !feasible(u, start.actual_mode)) {
     out.valid = false;
     return out;

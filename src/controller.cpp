@@ -14,9 +14,8 @@ Controller::Controller(const Config &config, std::shared_ptr<const TrajectoryVal
                        PlanningBudget::Now now)
     : validator_(validator ? std::move(validator) : std::make_shared<TrajectoryValidator>(config)),
       safety_rollout_(config), safety_actuation_(config), config_(config), now_(std::move(now)),
-      model_(config),
-      optimizer_(config, validator_),
-      scheduler_(config), mode_manager_(config), path_manager_(config), goal_manager_(config) {
+      model_(config), optimizer_(config, validator_), scheduler_(config), mode_manager_(config),
+      path_manager_(config), goal_manager_(config) {
   validator_->require_compatible(config_);
 }
 
@@ -26,7 +25,7 @@ Output Controller::compute(const ControllerInput &input) {
   // A slow bounded rollout or user critic can cross the cooperative deadline.
   // Never publish a late Drive/request, even if it was feasible before timeout.
   if (out.planning_stats.budget_exhausted || budget.expired()) {
-    optimizer_.reset();
+    optimizer_.clear_warm_start();
     alignment_control_.reset();
     out.action = Action::SafeStop;
     out.failure_reason = FailureReason::ComputeTimeout;
@@ -55,7 +54,7 @@ Output Controller::compute_impl(const ControllerInput &input, const PlanningBudg
     return stop;
   }
   if (detail::valid_vehicle(input.vehicle, config_) &&
-      check_feedback(input.vehicle, config_).status == FeedbackStatus::Inconsistent) {
+      check_model_feedback(input.vehicle, config_).status == FeedbackStatus::Inconsistent) {
     stop.steering_targets = input.vehicle.steering_angles;
     stop.failure_reason = FailureReason::InconsistentFeedback;
     return stop;
@@ -78,7 +77,7 @@ Output Controller::compute_impl(const ControllerInput &input, const PlanningBudg
     return stop;
   }
   if (path.changed) {
-    optimizer_.reset();
+    optimizer_.clear_warm_start();
     goal_manager_.reset();
     alignment_control_.reset();
   }
@@ -118,12 +117,12 @@ Output Controller::compute_impl(const ControllerInput &input, const PlanningBudg
              (path.goal_eligible &&
               (goal.position_acquired || (path.remaining_m < config_.goal_docking_distance_m &&
                                           distance < config_.goal_docking_distance_m)))) {
-    optimizer_.reset();
+    optimizer_.clear_warm_start();
     out = compute_goal(prepared, goal);
     out.control_policy = goal.complete ? ControlPolicy::Stopped : ControlPolicy::Capture;
   } else if (path.target_kind == PathTargetKind::Corner &&
              distance < config_.goal_docking_distance_m) {
-    optimizer_.reset();
+    optimizer_.clear_warm_start();
     GoalState approach;
     out = compute_goal(prepared, approach);
     out.control_policy = ControlPolicy::Capture;
@@ -217,7 +216,7 @@ Output Controller::request_mode(const ControllerInput &input, DriveMode mode,
     stop.failure_reason = FailureReason::TransitionFault;
     return stop;
   }
-  optimizer_.reset();
+  optimizer_.clear_warm_start();
   alignment_control_ = intent;
   alignment_mode_ = mode;
   alignment_start_s_ = input.vehicle.stamp_s;
@@ -293,7 +292,7 @@ Output Controller::apply_control(const ControllerInput &input, Control control) 
   // Preserve the executor's braking semantics instead of declaring a Drive.
   if (std::hypot(control.vx, control.vy) < 1e-9 && std::abs(control.wz) < 1e-9) {
     alignment_control_.reset();
-    optimizer_.reset();
+    optimizer_.clear_warm_start();
     out.action = is_stopped(input.vehicle, config_) ? Action::Hold : Action::Brake;
     return out;
   }
@@ -318,7 +317,7 @@ Output Controller::apply_control(const ControllerInput &input, Control control) 
       alignment_control_ = control;
       alignment_mode_ = input.vehicle.actual_mode;
       alignment_start_s_ = input.vehicle.stamp_s;
-      optimizer_.reset();
+      optimizer_.clear_warm_start();
       return continue_alignment(input);
     }
     out.action = is_stopped(input.vehicle, config_) ? Action::Hold : Action::Brake;
@@ -345,7 +344,7 @@ std::optional<Control> Controller::safe_reduction(const ControllerInput &input,
       break;
     ++safety_reductions_;
     if (safe_control(input, branch, control)) {
-      optimizer_.reset();
+      optimizer_.clear_warm_start();
       return control;
     }
   }
@@ -358,7 +357,7 @@ bool Controller::safe_control(const ControllerInput &input, const Branch &branch
          is_stopped(safety_trace_.final_state, config_);
 }
 Output Controller::planning_stop(const ControllerInput &input) {
-  optimizer_.reset();
+  optimizer_.clear_warm_start();
   alignment_control_.reset();
   Output out;
   out.requested_mode = input.vehicle.actual_mode;
@@ -368,15 +367,15 @@ Output Controller::planning_stop(const ControllerInput &input) {
   return out;
 }
 Output Controller::check_stopping(const ControllerInput &input, Output out) {
-  const auto plan = safety_actuation_.plan_stopping(input.vehicle, out.action,
-                                                   out.steering_targets);
+  const auto plan =
+      safety_actuation_.plan_stopping(input.vehicle, out.action, out.steering_targets);
   if (plan) {
     safety_rollout_.generate_execution(*plan, safety_trace_);
     if (validator_->check(input, safety_trace_) == TrajectoryStatus::Valid &&
         is_stopped(safety_trace_.final_state, config_))
       return out;
   }
-  optimizer_.reset();
+  optimizer_.clear_warm_start();
   alignment_control_.reset();
   out.action = Action::SafeStop;
   out.failure_reason = FailureReason::UnsafeStoppingTrajectory;

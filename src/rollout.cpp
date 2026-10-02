@@ -20,14 +20,15 @@ void RolloutEngine::generate_execution(const ActuationPlan &plan, Trajectory &ou
   out.position_error_m = 0;
   out.branch = {plan.start().actual_mode, 0, false};
   out.final_state = plan.start();
-  if (!plan.compatible_with(config_) || !detail::valid_vehicle(plan.start(), config_) ||
-      !detail::valid_vehicle(plan.endpoint().state, config_))
+  if (!plan.compatible_with(config_) ||
+      check_model_feedback(plan.start(), config_).status != FeedbackStatus::Valid ||
+      check_model_feedback(plan.endpoint().state, config_).status != FeedbackStatus::Valid)
     return;
   out.poses.push_back(plan.start().pose);
   detail::append_motion(plan.endpoint(), &out.poses, &out.sweep_margins_m, out.position_error_m);
   out.final_state = plan.endpoint().state;
-  out.controls.push_back({out.final_state.velocity.vx, out.final_state.velocity.vy,
-                          out.final_state.velocity.wz});
+  out.controls.push_back(
+      {out.final_state.velocity.vx, out.final_state.velocity.vy, out.final_state.velocity.wz});
   out.active_controls.push_back(plan.action() == Action::Drive);
   std::size_t steps = 1;
   auto at_rest = [&]() {
@@ -64,7 +65,7 @@ void RolloutEngine::stopping_rollout(const VehicleState &initial, const Branch &
   out.active_controls.clear();
   out.branch = branch;
   out.final_state = initial;
-  if (!detail::valid_vehicle(initial, config_) ||
+  if (check_model_feedback(initial, config_).status != FeedbackStatus::Valid ||
       (first_control &&
        (!initial.mode_confirmed || initial.mode_fault || !std::isfinite(first_control->vx) ||
         !std::isfinite(first_control->vy) || !std::isfinite(first_control->wz))) ||
@@ -127,8 +128,8 @@ void RolloutEngine::generate(const VehicleState &initial, const Branch &branch,
   out.active_controls.clear();
   out.branch = branch;
   out.final_state = initial;
-  if (!detail::valid_vehicle(initial, config_) || !initial.mode_confirmed || initial.mode_fault ||
-      controls.size() != config_.horizon_steps ||
+  if (check_model_feedback(initial, config_).status != FeedbackStatus::Valid ||
+      !initial.mode_confirmed || initial.mode_fault || controls.size() != config_.horizon_steps ||
       (branch.switches &&
        (branch.mode == initial.actual_mode || branch.switch_step >= config_.horizon_steps ||
         !detail::elapsed_at_least(initial.time_in_mode_s + branch.switch_step * config_.dt_s, 0,

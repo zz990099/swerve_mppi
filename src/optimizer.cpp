@@ -64,11 +64,11 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch,
   result.branch = branch;
   if (active_budget.expired()) {
     result.planning_stats.budget_exhausted = true;
-    reset();
+    clear_warm_start();
     return result;
   }
   if (!detail::valid_input(input, config_) ||
-      check_feedback(input.vehicle, config_).status != FeedbackStatus::Valid)
+      check_model_feedback(input.vehicle, config_).status != FeedbackStatus::Valid)
     return result;
   // Anticipate the yaw-rate budget of the ordered local curve. A horizon with
   // limited steering cannot track a tight bend at the straight-line speed cap.
@@ -117,7 +117,7 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch,
     result.trajectory.valid = false;
     stats.budget_exhausted = true;
     result.planning_stats = stats;
-    reset();
+    clear_warm_start();
     return result;
   };
   auto evaluate = [&](const std::vector<Control> &controls) {
@@ -232,8 +232,9 @@ void Optimizer::accept(const Solution &solution, DriveMode mode) {
   std::rotate(warm_start_.begin(), warm_start_.begin() + 1, warm_start_.end());
   warm_start_.back() = solution.controls.back();
 }
+void Optimizer::clear_warm_start() { warm_start_.clear(); }
 void Optimizer::reset() {
-  warm_start_.clear();
+  clear_warm_start();
   noise_.reset();
 }
 } // namespace swerve_mppi

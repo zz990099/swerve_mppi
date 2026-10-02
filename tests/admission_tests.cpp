@@ -2,6 +2,7 @@
 #include "swerve_mppi/controller.hpp"
 #include "swerve_mppi/feedback.hpp"
 #include "swerve_mppi/profile_runner.hpp"
+#include <algorithm>
 #include <iostream>
 
 using namespace swerve_mppi;
@@ -21,7 +22,7 @@ CommandEnvelope envelope(const ControllerInput &in, const Output &out, std::uint
 }
 void test_inconsistent_feedback_cannot_certify_stopping() {
   Config c;
-  for (int kind = 0; kind < 4; ++kind) {
+  for (int kind = 0; kind < 9; ++kind) {
     auto in = input();
     if (kind == 0)
       in.vehicle.velocity.vx = .8; // Reviewed odometry-moving/encoders-zero case.
@@ -35,8 +36,30 @@ void test_inconsistent_feedback_cannot_certify_stopping() {
       in.vehicle.wheel_speeds.fill(.2);
       in.vehicle.velocity.vx = .2; // Wrong body-frame direction.
     }
-    check(check_feedback(in.vehicle, c).status == FeedbackStatus::Inconsistent,
-          "body/joint disagreement must fail admission");
+    if (kind == 4) {
+      in.vehicle.velocity.vx = .04; // Within diagnostics, above stopped threshold.
+      c.collision_margin_m = 0;
+      in.obstacles = {{c.robot_radius_m + .0005, 0, 0}};
+    }
+    if (kind == 5) {
+      in.vehicle.wheel_speeds.fill(.2);
+      in.vehicle.velocity.vx = .24; // Moving encoders do not cover extra body motion.
+    }
+    if (kind == 6)
+      in.vehicle.velocity.wz = .09;
+    if (kind == 7) {
+      in.vehicle.actual_mode = DriveMode::Crab;
+      in.vehicle.steering_angles.fill(std::acos(-1.0) / 2);
+      in.vehicle.wheel_speeds.fill(.02);
+      in.vehicle.velocity.vx = .02;
+    }
+    if (kind == 8)
+      in.vehicle.velocity.vx = .001; // Also below all stopped thresholds.
+    check(check_feedback(in.vehicle, c).status ==
+              (kind < 4 ? FeedbackStatus::Inconsistent : FeedbackStatus::Valid),
+          "diagnostics must retain configurable disagreement tolerances");
+    check(check_model_feedback(in.vehicle, c).status == FeedbackStatus::Inconsistent,
+          "nominal admission must reject even diagnostic-tolerance disagreement");
     const auto out = Controller(c).compute(in);
     check(ModeManager(c).update(in.vehicle).action == Action::SafeStop,
           "idle mode supervision must also reject inconsistent feedback");
@@ -66,14 +89,37 @@ void test_inconsistent_feedback_cannot_certify_stopping() {
     check(TrajectoryValidator(c).check(in, supplied) == TrajectoryStatus::Invalid,
           "a caller-supplied trace cannot bypass state admission");
   }
+  auto residual = input().vehicle;
+  residual.velocity.vx = .001;
+  check(is_stopped(residual, c), "recovery case must be below stopped thresholds");
+  bool rejected = false;
+  try {
+    ProfileRunner(c).reset(residual);
+  } catch (const std::invalid_argument &) {
+    rejected = true;
+  }
+  check(rejected, "diagnostic-valid residual must not authorize stopped profile recovery");
+  rejected = false;
+  try {
+    ModeExecutor(c).reset(residual);
+  } catch (const std::invalid_argument &) {
+    rejected = true;
+  }
+  check(rejected, "diagnostic-valid residual must not authorize stopped executor recovery");
   auto state = input().vehicle;
   state.wheel_speeds.fill(.2);
   state.velocity = {.2 + c.feedback_linear_tolerance_mps, 0, c.feedback_angular_tolerance_radps};
   check(check_feedback(state, c).status == FeedbackStatus::Valid,
         "finite disagreement at configured inclusive tolerances must be admitted");
+  check(check_model_feedback(state, c).status == FeedbackStatus::Inconsistent,
+        "diagnostic admission must not authorize a nominal trajectory");
   state.velocity.vy = .01;
   check(check_feedback(state, c).status == FeedbackStatus::Inconsistent,
         "linear tolerance is a vector norm, not independent component allowances");
+  state.velocity = Kinematics(c).forward(state.wheel_speeds, state.steering_angles);
+  state.velocity.vx += 1e-10;
+  check(check_model_feedback(state, c).status == FeedbackStatus::Valid,
+        "nominal admission must allow numerical roundoff");
 }
 class AdvanceClock final : public TrajectoryConstraint {
 public:
@@ -244,6 +290,179 @@ void test_profile_sampling_watchdog_and_recovery() {
   check(late.actuation && !runner.install(late, 1.2, 90.2) && runner.fault(),
         "a fresh new result cannot conceal a missed profile boundary");
 }
+
+void test_pending_transition_fallback_profiles() {
+  Config c;
+  c.compute_budget_ratio = 0;
+  for (bool task_mismatch : {true, false}) {
+    auto in = input();
+    class RejectOnce final : public TrajectoryConstraint {
+    public:
+      mutable bool reject = false;
+      bool allows(const ControllerInput &, const Trajectory &) const override {
+        const bool allowed = !reject;
+        reject = false;
+        return allowed;
+      }
+    };
+    auto validator = std::make_shared<TrajectoryValidator>(c);
+    auto reject_once = std::make_shared<RejectOnce>();
+    if (!task_mismatch)
+      validator->add(reject_once);
+    TimedExecutor executor(c, 1, DriveMode::DualAckermann, {}, validator);
+    ProfileRunner runner(c);
+    Output request;
+    request.action = Action::RequestMode;
+    request.requested_mode = DriveMode::Crab;
+    request.mode_request = ModeRequest{
+        17, DriveMode::Crab, DriveModel(c).steering_for_entry(DriveMode::Crab, {0, .3, 0}, {})};
+    request.steering_targets = request.mode_request->steering_targets;
+    auto result = executor.update(envelope(in, request), in, in.vehicle.stamp_s);
+    check(result.actuation && runner.install(result, 1, 10), "start pending alignment");
+    // Reject one candidate preview; its independently rechecked fallback is safe.
+    reject_once->reject = !task_mismatch;
+    const auto frozen = request.mode_request->steering_targets;
+    bool confirmed = false;
+    for (std::uint64_t tick = 1; tick < 30; ++tick) {
+      in.vehicle = result.actuation->endpoint().state; // Nominal plant regression only.
+      in.vehicle.stamp_s = 1 + tick * c.dt_s;
+      auto latest = in;
+      if (task_mismatch)
+        latest.path_id = 2;
+      result = executor.update(envelope(in, request, tick + 1), latest, in.vehicle.stamp_s);
+      if (tick == 1)
+        check(result.safety_error == (task_mismatch ? ExecutionSafetyError::TaskMismatch
+                                                    : ExecutionSafetyError::CommandRejected) &&
+                  result.execution.action == Action::RequestMode,
+              "reviewed rejection must preserve the active alignment fallback");
+      check(result.actuation && !result.execution.feedback.fault &&
+                result.execution.feedback.request_id == 17 &&
+                result.execution.steering_targets == frozen &&
+                result.execution.wheel_speed_targets == std::array<double, 4>{} &&
+                runner.install(result, in.vehicle.stamp_s, 10 + tick * c.dt_s) &&
+                runner.sample(in.vehicle.stamp_s + .05, 10 + tick * c.dt_s + .05),
+            "checked pending fallback must sample with frozen identity/geometry and zero drive");
+      if (result.execution.feedback.confirmed) {
+        check(result.execution.action == Action::Hold &&
+                  result.execution.feedback.actual_mode == DriveMode::Crab,
+              "original request must complete a stopped handover");
+        confirmed = true;
+        break;
+      }
+    }
+    check(confirmed, "checked fallback must permit original mode confirmation");
+    check(!runner.sample(in.vehicle.stamp_s + c.dt_s + .001, 20) && runner.fault(),
+          "fallback permission must not weaken expiry");
+  }
+  // A task mismatch may not extend a pending request's fixed deadline.
+  auto in = input();
+  TimedExecutor executor(c, 2);
+  Output request;
+  request.action = Action::RequestMode;
+  request.requested_mode = DriveMode::Crab;
+  request.mode_request = ModeRequest{1, DriveMode::Crab, {1, 1, 1, 1}};
+  auto result = executor.update(envelope(in, request, 1, 2), in, 1);
+  for (std::uint64_t tick = 1; tick < 40 && !result.execution.feedback.fault; ++tick) {
+    in.vehicle.stamp_s = 1 + tick * c.dt_s; // Deliberately stalled steering.
+    auto latest = in;
+    latest.path_id = 2;
+    result = executor.update(envelope(in, request, tick + 1, 2), latest, in.vehicle.stamp_s);
+  }
+  check(result.execution.feedback.fault && !result.actuation,
+        "task rejection retries cannot renew the original alignment deadline");
+}
+void test_injected_validator_geometry() {
+  Config c;
+  c.compute_budget_ratio = 0;
+  c.wheelbase_m = 1.2;
+  c.track_m = 1;
+  for (int dimension = 0; dimension < 2; ++dimension) {
+    auto foreign = c;
+    if (dimension == 0)
+      foreign.wheelbase_m /= 2;
+    else
+      foreign.track_m /= 2;
+    auto validator = std::make_shared<TrajectoryValidator>(foreign);
+    for (int consumer = 0; consumer < 4; ++consumer) {
+      bool rejected = false;
+      try {
+        if (consumer == 0)
+          Controller controller(c, validator);
+        if (consumer == 1)
+          Optimizer optimizer(c, validator);
+        if (consumer == 2)
+          CriticManager critics(c, validator);
+        if (consumer == 3)
+          TimedExecutor executor(c, 1, DriveMode::Spin, {}, validator);
+      } catch (const std::invalid_argument &) {
+        rejected = true;
+      }
+      check(rejected, "each validator consumer must reject foreign FK geometry at construction");
+    }
+  }
+  auto in = input();
+  in.vehicle.actual_mode = DriveMode::Spin;
+  const auto wheels = Kinematics(c).inverse({0, 0, .6}, {});
+  in.vehicle.wheel_speeds = wheels.speeds;
+  in.vehicle.steering_angles = wheels.angles;
+  in.vehicle.velocity = Kinematics(c).forward(wheels.speeds, wheels.angles);
+  auto validator = std::make_shared<TrajectoryValidator>(c);
+  Output brake;
+  brake.action = Action::Brake;
+  TimedExecutor executor(c, 1, DriveMode::Spin, {}, validator);
+  const auto result = executor.update(envelope(in, brake), in, 1);
+  check(result.actuation && !result.execution.feedback.fault,
+        "matching custom geometry must admit and validate a spinning stop");
+}
+class NarrowFirstYaw final : public TrajectoryConstraint {
+public:
+  bool allows(const ControllerInput &, const Trajectory &trace) const override {
+    if (trace.poses.size() < 2)
+      return false;
+    const bool stationary = std::all_of(trace.poses.begin(), trace.poses.end(), [&](const auto &p) {
+      return p.x == trace.poses.front().x && p.y == trace.poses.front().y &&
+             p.yaw == trace.poses.front().yaw;
+    });
+    return stationary || std::abs(trace.poses[1].yaw - 1e-5) < 5e-6;
+  }
+};
+void test_retry_exploration_and_explicit_reset() {
+  Config c;
+  c.compute_budget_ratio = 0;
+  c.random_seed = 42;
+  c.minimum_mode_dwell_s = 1000;
+  auto validator = std::make_shared<TrajectoryValidator>(c);
+  validator->add(std::make_shared<NarrowFirstYaw>());
+  Controller controller(c, validator);
+  auto in = input();
+  in.reference_path = {{0, 0, 0}, {3, 0, 0}};
+  const auto first = controller.compute(in);
+  check(first.action == Action::Hold && first.failure_reason == FailureReason::NoFeasiblePlan,
+        "fixed seed must initially miss the narrow feasible band");
+  auto recover = [&]() {
+    for (int tick = 1; tick <= 100; ++tick) {
+      in.vehicle.stamp_s = 1 + tick * c.dt_s;
+      const auto out = controller.compute(in);
+      if (out.action == Action::Drive)
+        return std::make_pair(tick, out);
+      check(out.action == Action::Hold && out.failure_reason == FailureReason::NoFeasiblePlan,
+            "failed retries must remain checked stops");
+    }
+    throw std::runtime_error("retry exploration repeated the failed noise sequence");
+  };
+  const auto recovered = recover();
+  controller.reset();
+  in.vehicle.stamp_s = 1;
+  const auto replay = controller.compute(in);
+  check(replay.action == first.action && replay.failure_reason == first.failure_reason &&
+            replay.planning_stats.evaluated_rollouts == first.planning_stats.evaluated_rollouts,
+        "explicit controller reset must reproduce the initial failed search");
+  const auto repeated = recover();
+  check(repeated.first == recovered.first &&
+            repeated.second.wheel_speed_targets == recovered.second.wheel_speed_targets &&
+            repeated.second.steering_targets == recovered.second.steering_targets,
+        "explicit reset must reproduce the entire subsequent recovery sequence");
+}
 } // namespace
 int main() {
   try {
@@ -251,6 +470,9 @@ int main() {
     test_shared_budget_and_late_result_rejection();
     test_workload_admission_and_configuration_caps();
     test_profile_sampling_watchdog_and_recovery();
+    test_pending_transition_fallback_profiles();
+    test_injected_validator_geometry();
+    test_retry_exploration_and_explicit_reset();
     std::cout << "Admission, compute-budget and profile-runner regressions passed\n";
     return 0;
   } catch (const std::exception &error) {

@@ -119,10 +119,12 @@ void test_stale_ack_and_measured_alignment() {
         "acknowledgement without measured alignment must wait");
   s.steering_angles = out.steering_targets;
   s.wheel_speeds.fill(.01);
+  s.velocity = Kinematics(c).forward(s.wheel_speeds, s.steering_angles);
   s.stamp_s += .1;
   check(m.update(s).action == Action::RequestMode,
         "matching acknowledgement with moving wheels must wait");
   s.wheel_speeds.fill(0);
+  s.velocity = {};
   s.stamp_s += .1;
   check(m.update(s).action == Action::Hold, "matching stopped aligned feedback must complete");
   m.reset();
@@ -1025,4 +1027,3 @@ int main() {
     return 1;
   }
 }
-

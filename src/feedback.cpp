@@ -19,4 +19,11 @@ FeedbackCheck check_feedback(const VehicleState &state, const Config &config) {
                    : FeedbackStatus::Inconsistent;
   return out;
 }
+FeedbackCheck check_model_feedback(const VehicleState &state, const Config &config) {
+  auto out = check_feedback(state, config);
+  if (out.status == FeedbackStatus::Valid &&
+      (out.linear_error_mps > 1e-9 || out.angular_error_radps > 1e-9))
+    out.status = FeedbackStatus::Inconsistent;
+  return out;
+}
 } // namespace swerve_mppi

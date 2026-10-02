@@ -366,6 +366,31 @@ void test_reusable_rollouts_and_planning_stats() {
             blocked.planning_stats.fallback_updates > 0,
         "blocked paths must report work and infeasibility without stale counters");
 }
+void test_warm_start_clear_preserves_sampling() {
+  Config c;
+  c.compute_budget_ratio = 0;
+  Optimizer cleared(c), continuing(c);
+  const auto in = input();
+  const auto first = cleared.optimize(in, {});
+  const auto independent = continuing.optimize(in, {});
+  check(std::isfinite(first.cost) && first.cost == independent.cost,
+        "equal configured seeds must start with the same search");
+  cleared.accept(first, in.vehicle.actual_mode);
+  cleared.clear_warm_start();
+  const auto after_clear = cleared.optimize(in, {});
+  const auto next = continuing.optimize(in, {});
+  check(after_clear.cost == next.cost &&
+            after_clear.controls.front().vx == next.controls.front().vx &&
+            after_clear.controls.front().wz == next.controls.front().wz &&
+            (after_clear.cost != first.cost ||
+             after_clear.controls.front().wz != first.controls.front().wz),
+        "clearing an accepted warm start must preserve the next random proposal sequence");
+  cleared.reset();
+  const auto replay = cleared.optimize(in, {});
+  check(replay.cost == first.cost && replay.controls.front().vx == first.controls.front().vx &&
+            replay.controls.front().wz == first.controls.front().wz,
+        "explicit optimizer reset must restore seeded nonzero-noise sampling");
+}
 void test_tracking_speed_limit() {
   Config c;
   c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
@@ -465,6 +490,7 @@ int main() {
     test_optimizer_reset_and_closed_loop();
     test_extension_and_invalid_inputs();
     test_tracking_speed_limit();
+    test_warm_start_clear_preserves_sampling();
     test_curve_yaw_budget();
     test_reusable_rollouts_and_planning_stats();
     std::cout << "Optimizer regressions passed\n";
@@ -474,4 +500,3 @@ int main() {
     return 1;
   }
 }
-

@@ -1,7 +1,7 @@
 #pragma once
 #include "swerve_mppi/config.hpp"
-#include "swerve_mppi/types.hpp"
 #include "swerve_mppi/feedback.hpp"
+#include "swerve_mppi/types.hpp"
 #include <cmath>
 namespace swerve_mppi::detail {
 inline bool valid_action(Action action) {
@@ -60,7 +60,7 @@ inline bool valid_input(const ControllerInput &input, const Config &config) {
       return false;
   }
   if (input.reference_path.empty() ||
-      check_feedback(input.vehicle, config).status != FeedbackStatus::Valid)
+      check_model_feedback(input.vehicle, config).status != FeedbackStatus::Valid)
     return false;
   for (const auto &waypoint : input.reference_path) {
     if (!std::isfinite(waypoint.x) || !std::isfinite(waypoint.y) || !std::isfinite(waypoint.yaw))

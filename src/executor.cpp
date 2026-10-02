@@ -51,7 +51,7 @@ ExecutionResult ModeExecutor::update(const Output &command, const VehicleState &
   ExecutionResult out;
   out.steering_targets = last_steering_;
   const bool numeric_valid = detail::valid_vehicle(measured, config_);
-  const bool valid = check_feedback(measured, config_).status == FeedbackStatus::Valid;
+  const bool valid = check_model_feedback(measured, config_).status == FeedbackStatus::Valid;
   if (numeric_valid) {
     last_steering_ = measured.steering_angles;
     out.steering_targets = last_steering_;
@@ -145,7 +145,7 @@ ExecutionResult ModeExecutor::update(const Output &command, const VehicleState &
         !detail::valid_steering(command.steering_targets, config_))
       return fault();
     if (!detail::drive_targets_admissible(measured, command.steering_targets,
-                                         command.wheel_speed_targets, config_))
+                                          command.wheel_speed_targets, config_))
       return fault();
     const auto implied =
         Kinematics(config_).forward(command.wheel_speed_targets, command.steering_targets);
@@ -175,9 +175,8 @@ ExecutionResult ModeExecutor::update(const Output &command, const VehicleState &
 }
 
 void ModeExecutor::reset(const VehicleState &recovered) {
-  if (check_feedback(recovered, config_).status != FeedbackStatus::Valid ||
-      !is_stopped(recovered, config_) ||
-      !recovered.mode_confirmed || recovered.mode_fault)
+  if (check_model_feedback(recovered, config_).status != FeedbackStatus::Valid ||
+      !is_stopped(recovered, config_) || !recovered.mode_confirmed || recovered.mode_fault)
     throw std::invalid_argument("executor recovery requires verified stopped state");
   actual_mode_ = recovered.actual_mode;
   last_request_id_ = std::max(last_request_id_, recovered.mode_request_id);
