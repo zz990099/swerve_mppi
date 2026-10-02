@@ -70,7 +70,8 @@ dead process without being called and is not a complete ROS node.
 Gazebo's external_joint_control option disables internal motion supervision,
 cmd_vel handling and both joint command publishers. It retains encoder odometry
 and feedback-health diagnostics, leaving mode feedback to the external executor.
-ros2_control forward command controllers still require an external watchdog.
+Gazebo package 0.2 replaces both forward controllers in external mode with a
+protected combined endpoint; see [SIMULATION_PREPARATION.md](SIMULATION_PREPARATION.md).
 
 ## Regression evidence
 

@@ -28,3 +28,12 @@ jobs:
         run: cmake --build build --parallel 2
       - name: Test core and installed consumer
         run: ctest --test-dir build --output-on-failure
+
+      - name: Record production integration budget (Release)
+        if: matrix.build_type == 'Release'
+        run: ./build/swerve_mppi_integration_budget 12 > build/integration-budget.csv
+      - uses: actions/upload-artifact@v4
+        if: matrix.build_type == 'Release'
+        with:
+          name: integration-budget
+          path: build/integration-budget.csv

@@ -29,7 +29,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.16 CONFIG REQUIRED)
+find_package(swerve_mppi 0.17 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -114,6 +114,15 @@ The optional allocation regression runs in CI; wall-clock timing is not a CI gat
 
 ## Current status
 
+Version 0.17 adds a named, timestamp-strict FeedbackAdapter, actual ProfileRunner
+closed-loop tests for 14 scenarios and five seeds, a production-budget pipeline
+probe, and PIC builds for downstream ROS plugins. Gazebo package 0.2 supplies an
+exclusive independent guarded joint endpoint. See
+[docs/SIMULATION_PREPARATION.md](docs/SIMULATION_PREPARATION.md) for scheduling,
+wire ownership, recovery and the remaining physical acceptance work.
+A complete ROS MPPI planning node and measured Gazebo profile tracking remain next-stage work.
+
+
 Version 0.16 separates configurable feedback diagnostics from nominal model
 admission. `check_feedback` retains inclusive 0.05 m/s / 0.10 rad/s defaults;
 `check_model_feedback` requires body/encoder agreement within numerical precision
@@ -126,7 +135,7 @@ retaining the frozen request and deadline. Drive rejection remains fail-closed.
 Bounded inputs and shared cooperative planning budgets remain enabled. Rebuild
 consumers against 0.16 to use the new admission and warm-start APIs.
 See [docs/ADMISSION_VALIDATION.md](docs/ADMISSION_VALIDATION.md) for limits and tests.
-The Gazebo repository has an external joint command mode; a complete ROS adapter,
+The Gazebo repository has a protected external joint command mode; a complete ROS planning adapter,
 measurement time alignment and physical braking/slip/latency calibration remain
 integration work. Core regression success does not certify the physical plant.
 

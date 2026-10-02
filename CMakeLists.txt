@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.16.0 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.17.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -11,6 +11,7 @@ add_library(swerve_mppi_core
   src/navigation.cpp
   src/config.cpp
   src/feedback.cpp
+  src/feedback_adapter.cpp
   src/profile_runner.cpp
   src/kinematics.cpp
   src/model.cpp
@@ -28,7 +29,7 @@ add_library(swerve_mppi_core
   src/controller.cpp
 )
 add_library(swerve_mppi::core ALIAS swerve_mppi_core)
-set_target_properties(swerve_mppi_core PROPERTIES EXPORT_NAME core)
+set_target_properties(swerve_mppi_core PROPERTIES EXPORT_NAME core POSITION_INDEPENDENT_CODE ON)
 target_include_directories(swerve_mppi_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -43,7 +44,7 @@ if(SWERVE_MPPI_BUILD_TESTS)
   add_executable(swerve_mppi_tests tests/core_tests.cpp)
   target_link_libraries(swerve_mppi_tests PRIVATE swerve_mppi_core)
   add_test(NAME swerve_mppi_tests COMMAND swerve_mppi_tests)
-  foreach(suite model optimizer execution navigation safety timing actuation admission)
+  foreach(suite model optimizer execution navigation safety timing actuation admission integration)
     add_executable(swerve_mppi_${suite}_tests tests/${suite}_tests.cpp)
     target_link_libraries(swerve_mppi_${suite}_tests PRIVATE swerve_mppi_core)
     add_test(NAME ${suite}_regressions COMMAND swerve_mppi_${suite}_tests)
@@ -53,6 +54,8 @@ if(SWERVE_MPPI_BUILD_TESTS)
   foreach(scenario straight lateral curve spin reverse final_yaw scurve scurve_duplicates cusp loop short_cusp short_loop short_corner near_obstacles)
     add_test(NAME behavior_${scenario} COMMAND swerve_mppi_behavior_tests ${scenario})
     add_test(NAME timed_behavior_${scenario} COMMAND swerve_mppi_behavior_tests ${scenario} --timed)
+    add_test(NAME profile_behavior_${scenario} COMMAND swerve_mppi_behavior_tests ${scenario} --profile)
+    set_tests_properties(profile_behavior_${scenario} PROPERTIES TIMEOUT 180)
     set_tests_properties(behavior_${scenario} PROPERTIES TIMEOUT 180)
     set_tests_properties(timed_behavior_${scenario} PROPERTIES TIMEOUT 180)
   endforeach()
@@ -66,10 +69,13 @@ if(SWERVE_MPPI_BUILD_TESTS)
       -DTEST_COMPILER=${CMAKE_CXX_COMPILER}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_test.cmake)
   set_tests_properties(swerve_mppi_tests model_regressions optimizer_regressions execution_regressions navigation_regressions safety_regressions timing_regressions actuation_regressions
-    admission_regressions installed_consumer PROPERTIES TIMEOUT 60)
+    admission_regressions integration_regressions installed_consumer PROPERTIES TIMEOUT 60)
 endif()
 
 if(SWERVE_MPPI_BUILD_BENCHMARKS)
+  add_executable(swerve_mppi_integration_budget benchmarks/integration_budget.cpp)
+  target_include_directories(swerve_mppi_integration_budget PRIVATE tests)
+  target_link_libraries(swerve_mppi_integration_budget PRIVATE swerve_mppi_core)
   add_executable(swerve_mppi_benchmark benchmarks/core_benchmark.cpp)
   target_include_directories(swerve_mppi_benchmark PRIVATE tests)
   target_link_libraries(swerve_mppi_benchmark PRIVATE swerve_mppi_core)
