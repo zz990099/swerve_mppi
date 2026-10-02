@@ -8,6 +8,10 @@ and regressions. No ROS/Gazebo adapter or physical calibration is included.
 
 - Command envelopes require the planning observation timestamp, scheduled application
   and execution-start expiry. Republishing cannot disguise an old observation.
+- Review correction: envelopes also require an owned CommandTask snapshot of the
+  originating path ID, heading policy and complete ordered path geometry. Mismatch
+  or missing metadata rejects the queued Output before any mode-state preview, using
+  checked braking or latching SafeStop if a safe stop cannot be established.
 - TimedExecutor takes current ControllerInput and checks the exact execution-start
   state, actual joint interval and full stopping continuation against current
   circular obstacles and injected hard constraints.
@@ -34,6 +38,14 @@ Other regressions cover new obstacles, unsafe-stop latching, stopping-budget
 exhaustion, injected constraints, transactional request IDs, incompatible validators
 and actuator-model parameters, missing/nonfinite/source-expired/scheduled/expired
 metadata, and recent raw feedback that is not aligned to the application instant.
+
+Task regressions cover identical geometry with a new ID, reversed goals with the same
+ID, interior x/y/yaw changes, goal yaw, heading policy, waypoint deletion/reordering,
+missing snapshots, recovery on a freshly bound command and unsafe-stop failure.
+Every stale-task Drive remains mechanically and collision valid, isolating the task
+identity defect. Captured paths own their geometry; mutating the source cannot rebind
+the queued command. A rejected obsolete mode request leaves ID 7 available for a
+fresh request bound to the latest task.
 
 An independent 4096-substep encoder integration checks actuator samples in all three
 modes. Intermediate physical curves stay within the certified swept enclosure;
@@ -72,7 +84,9 @@ uncalibrated plant, tire slip or real-time transport uncertainty.
 
 Rebuild against `find_package(swerve_mppi 0.14 CONFIG REQUIRED)`. Replace state-only
 TimedExecutor calls with current ControllerInput, provide all envelope timestamps,
-and consume the returned ActuationPlan at the actuator rate. State time alignment
+include CommandTask::capture(planning_input) from the same full task that produced
+the Output, and consume the returned ActuationPlan at the actuator rate. Do not
+reconstruct task binding from later feedback. State time alignment
 must be real; changing an old timestamp does not compensate motion. Pass the shared
 planning validator if extra hard constraints are used.
 

@@ -10,7 +10,9 @@ namespace {
 CommandEnvelope command(double now, std::uint64_t sequence = 1, std::uint64_t session = 10) {
   Output output;
   output.action = Action::Hold;
-  return {session, sequence, now, output, now, now, now + .15};
+  ControllerInput source;
+  source.reference_path = {{0, 0, 0}};
+  return {session, sequence, now, output, now, now, now + .15, CommandTask::capture(source)};
 }
 VehicleState measured(double stamp) {
   VehicleState state;
@@ -202,9 +204,12 @@ void test_guarded_closed_loop_and_idempotent_requests() {
             "mode retries retain payload while transport sequence advances");
     }
     CommandEnvelope envelope{10, static_cast<std::uint64_t>(tick + 1), in.vehicle.stamp_s, output,
-                             in.vehicle.stamp_s, in.vehicle.stamp_s, in.vehicle.stamp_s + .025};
-    const auto result = execute(executor, envelope, in.vehicle, in.vehicle.stamp_s);
-    check(result.timing_error == TimingError::None && !result.execution.feedback.fault,
+                             in.vehicle.stamp_s, in.vehicle.stamp_s, in.vehicle.stamp_s + .025,
+                             CommandTask::capture(in)};
+    const auto result = executor.update(envelope, in, in.vehicle.stamp_s);
+    check(result.timing_error == TimingError::None &&
+              result.safety_error == ExecutionSafetyError::None && result.actuation &&
+              !result.execution.feedback.fault,
           "guarded controller/executor loop must preserve mode handshake and capture");
     if (output.goal_reached) {
       complete = true;

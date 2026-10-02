@@ -84,6 +84,10 @@ period ratios are not supported yet.
 - Use TimedExecutor for queued commands. Pass the current ControllerInput, not just
   VehicleState. It rechecks the exact joint interval and full stopping continuation
   against current obstacles and injected hard constraints before committing execution.
+- Bind every envelope with CommandTask::capture(planning_input). A changed path ID,
+  full ordered path geometry or heading policy rejects an old queued command before
+  mode preview. Missing task metadata also rejects it; TaskMismatch returns checked
+  stopping when feasible, otherwise SafeStop latches.
 - CommandEnvelope requires source_stamp_s, execute_at_s and valid_until_s in addition
   to session, sequence and issue time. A fresh issue time cannot disguise an old
   planning observation. Execution-start state must be aligned to now_s; merely recent
@@ -112,7 +116,8 @@ The optional allocation regression runs in CI; wall-clock timing is not a CI gat
 
 Version 0.14 adds execution-time safety validation and a checked actuator profile.
 TimedExecutor now requires a current ControllerInput and complete scheduling/source
-metadata; the old state-only update API is removed. It validates the actual joint
+metadata plus the originating task snapshot; the old state-only update API is removed.
+It validates the actual joint
 endpoint interval, rather than reconstructing a new control from body_command.
 Unsafe delayed/context-changed commands fall back only to a separately validated
 complete stop. Protocol preview is transactional, so rejecting a new mode request
@@ -235,4 +240,3 @@ future work. Path tracking and completion are implemented for ordered task paths
 localization jumps and unrestricted global-path reacquisition are not supported. The typed
 mode contract and standalone execution supervisor are implemented and tested.
 These core tests do not establish agreement with physical or Gazebo dynamics.
-

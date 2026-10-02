@@ -8,6 +8,21 @@ namespace swerve_mppi {
 namespace {
 bool valid_time(double stamp) { return std::isfinite(stamp) && stamp >= 0; }
 } // namespace
+CommandTask CommandTask::capture(const ControllerInput &source) {
+  return {source.path_id, source.heading_policy, source.reference_path};
+}
+bool CommandTask::matches(const ControllerInput &latest) const {
+  if (path_id != latest.path_id || heading_policy != latest.heading_policy ||
+      reference_path.size() != latest.reference_path.size())
+    return false;
+  for (std::size_t i = 0; i < reference_path.size(); ++i) {
+    const auto &a = reference_path[i];
+    const auto &b = latest.reference_path[i];
+    if (a.x != b.x || a.y != b.y || a.yaw != b.yaw)
+      return false;
+  }
+  return true;
+}
 TimingGuard::TimingGuard(const Config &config, std::uint64_t session_id, const TimingLimits &limits)
     : dt_s_(config.dt_s), limits_(limits), session_id_(session_id) {
   validate(config);
@@ -115,6 +130,11 @@ TimedExecutionResult TimedExecutor::update(const std::optional<CommandEnvelope> 
     return {executor_.update(stop, measured), error, ExecutionSafetyError::StateNotCurrent,
             TrajectoryStatus::Invalid, std::nullopt};
 
+  // Collision validity alone does not authorize a command for a replaced task.
+  // Check the source snapshot before any protocol preview can consume a request.
+  if (!command->source_task || !command->source_task->matches(latest))
+    return reject_command(latest, ExecutionSafetyError::TaskMismatch, TrajectoryStatus::Invalid);
+
   // Preview protocol state transactionally. A rejected request must not consume
   // its ID or leave an unexecuted transition committed in the supervisor.
   auto candidate_executor = executor_;
@@ -133,19 +153,27 @@ TimedExecutionResult TimedExecutor::update(const std::optional<CommandEnvelope> 
     return {execution, error, ExecutionSafetyError::None, status, std::move(plan)};
   }
 
-  // The command was well formed but its actual interval/stop is unsafe now.
+  return reject_command(latest, ExecutionSafetyError::CommandRejected, status);
+}
+TimedExecutionResult TimedExecutor::reject_command(const ControllerInput &latest,
+                                                  ExecutionSafetyError reason,
+                                                  TrajectoryStatus status) {
+  const auto &measured = latest.vehicle;
+  // The command belongs to an obsolete task or its actual interval/stop is unsafe.
   // Only a freshly checked complete stop authorizes a non-latching fallback.
   Output brake;
   brake.action = Action::Brake;
   brake.requested_mode = measured.actual_mode;
   auto braking_executor = executor_;
-  execution = braking_executor.update(brake, measured);
-  plan = actuation_.plan(measured, execution);
+  const auto execution = braking_executor.update(brake, measured);
+  auto plan = actuation_.plan(measured, execution);
   if (plan && check(latest, *plan) == TrajectoryStatus::Valid) {
     executor_ = std::move(braking_executor);
-    return {execution, error, ExecutionSafetyError::CommandRejected, status, std::move(plan)};
+    return {execution, TimingError::None, reason, status, std::move(plan)};
   }
-  return {executor_.update(stop, measured), error,
+  Output stop;
+  stop.requested_mode = measured.actual_mode;
+  return {executor_.update(stop, measured), TimingError::None,
           ExecutionSafetyError::UnsafeStoppingTrajectory, status, std::nullopt};
 }
 void TimedExecutor::reset(const VehicleState &recovered, std::uint64_t new_session_id) {

@@ -311,6 +311,11 @@ must be revalidated at execution: the robot or obstacles may have changed during
 computation/transport even when all timestamps remain within their age limits.
 TimedExecutor takes current ControllerInput and a source/scheduled/expiry-stamped
 CommandEnvelope. TimingGuard remains separately usable for transport checks.
+The envelope owns its originating task ID, heading policy and full ordered path.
+TimedExecutor rejects a missing/mismatched snapshot before any supervisor preview,
+even if the old command remains mechanically and collision valid. TaskMismatch uses
+the same independently checked stopping fallback; a fresh command for the latest
+task can recover without resetting healthy execution.
 
 The supervisor is copied for a transactional preview. ActuationModel converts that
 ExecutionResult and the execution-start state into a checked ActuationPlan.

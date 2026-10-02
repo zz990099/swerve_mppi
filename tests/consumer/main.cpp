@@ -10,7 +10,8 @@ int main() {
   swerve_mppi::TimedExecutor timed(swerve_mppi::Config{}, 1);
   swerve_mppi::ControllerInput current;
   current.reference_path = {{0, 0, 0}};
-  const auto guarded = timed.update(swerve_mppi::CommandEnvelope{1, 1, 0, hold, 0, 0, .025}, current, 0);
+  const auto guarded = timed.update(swerve_mppi::CommandEnvelope{
+      1, 1, 0, hold, 0, 0, .025, swerve_mppi::CommandTask::capture(current)}, current, 0);
   const auto midpoint = guarded.actuation ? guarded.actuation->sample(.05) : std::nullopt;
   swerve_mppi::TrajectoryValidator validator(swerve_mppi::Config{});
   validator.require_compatible(swerve_mppi::Config{});

@@ -28,9 +28,11 @@ Output drive(const VehicleState &state, const Config &c, const Control &intent) 
   out.wheel_speed_targets = step.wheel_speed_targets;
   return out;
 }
-CommandEnvelope envelope(const Output &out, double source, double issued, double application,
+CommandEnvelope envelope(const ControllerInput &origin, const Output &out, double source,
+                         double issued, double application,
                          std::uint64_t sequence = 1) {
-  return {10, sequence, issued, out, source, application, application + .025};
+  return {10, sequence, issued, out, source, application, application + .025,
+          CommandTask::capture(origin)};
 }
 // Independent encoder field, not Kinematics::forward or DriveModel integration.
 Twist2d encoder(const ActuatorTargets &joints, const Config &c) {
@@ -180,7 +182,7 @@ void test_delayed_drive_revalidated_at_latest_pose() {
   old.obstacles = {{1.01, 0, .05}};
   const auto command = drive(old.vehicle, c, {.8, 0, 0});
   TimedExecutor executor(c, 10);
-  const auto first = executor.update(envelope(command, 1, 1, 1), old, 1);
+  const auto first = executor.update(envelope(old, command, 1, 1, 1), old, 1);
   check(first.actuation && first.execution.action == Action::Drive,
         "old position must authorize the independently safe first Drive");
   Trajectory trace;
@@ -190,7 +192,7 @@ void test_delayed_drive_revalidated_at_latest_pose() {
   auto latest = old;
   latest.vehicle.pose.x = .08;
   latest.vehicle.stamp_s = 1.1;
-  const auto rejected = executor.update(envelope(command, 1, 1.03, 1.1, 2), latest, 1.1);
+  const auto rejected = executor.update(envelope(old, command, 1, 1.03, 1.1, 2), latest, 1.1);
   check(rejected.timing_error == TimingError::None &&
             rejected.safety_error == ExecutionSafetyError::CommandRejected &&
             rejected.rejected_status == TrajectoryStatus::Collision &&
@@ -204,7 +206,7 @@ void test_delayed_drive_revalidated_at_latest_pose() {
   latest.obstacles.clear();
   const auto next = drive(latest.vehicle, c, {.7, 0, 0});
   const double now = latest.vehicle.stamp_s;
-  const auto recovered = executor.update(envelope(next, now, now, now, 3), latest, now);
+  const auto recovered = executor.update(envelope(latest, next, now, now, now, 3), latest, now);
   check(recovered.execution.action == Action::Drive && recovered.actuation &&
             recovered.safety_error == ExecutionSafetyError::None,
         "a blocked command with safe braking must allow recovery on fresh context");
@@ -213,9 +215,10 @@ void test_latest_obstacles_and_unsafe_stop_latch() {
   Config c;
   auto in = input();
   const auto command = drive(in.vehicle, c, {.2, 0, 0});
+  const auto queued = envelope(in, command, 1, 1, 1);
   in.obstacles = {{.606, 0, .05}};
   TimedExecutor executor(c, 10);
-  const auto blocked = executor.update(envelope(command, 1, 1, 1), in, 1);
+  const auto blocked = executor.update(queued, in, 1);
   check(blocked.safety_error == ExecutionSafetyError::CommandRejected && blocked.actuation &&
             blocked.execution.action == Action::Brake,
         "new obstacles must reject a previously clear Drive while preserving a safe stop");
@@ -225,20 +228,20 @@ void test_latest_obstacles_and_unsafe_stop_latch() {
   in.vehicle.pose.x = .12;
   in.obstacles = {{1.01, 0, .05}};
   TimedExecutor unsafe(c, 10);
-  const auto fault = unsafe.update(envelope(drive(in.vehicle, c, {.8, 0, 0}), 1, 1, 1), in, 1);
+  const auto fault = unsafe.update(envelope(in, drive(in.vehicle, c, {.8, 0, 0}), 1, 1, 1), in, 1);
   check(fault.safety_error == ExecutionSafetyError::UnsafeStoppingTrajectory &&
             fault.execution.action == Action::SafeStop && fault.execution.feedback.fault &&
             !fault.actuation,
         "an unsafe current stop must latch SafeStop without a certified actuator profile");
   in.obstacles.clear();
   in.vehicle.stamp_s = 1.1;
-  const auto later = unsafe.update(envelope(command, 1.1, 1.1, 1.1, 2), in, 1.1);
+  const auto later = unsafe.update(envelope(in, command, 1.1, 1.1, 1.1, 2), in, 1.1);
   check(later.execution.feedback.fault && !later.actuation,
         "fresh obstacles or commands must not clear an unsafe-stop fault");
   c.stopping_horizon_steps = 2;
   TimedExecutor bounded(c, 10);
   const auto exhausted = bounded.update(
-      envelope(drive(in.vehicle, c, {.8, 0, 0}), 1.1, 1.1, 1.1), in, 1.1);
+      envelope(in, drive(in.vehicle, c, {.8, 0, 0}), 1.1, 1.1, 1.1), in, 1.1);
   check(exhausted.safety_error == ExecutionSafetyError::UnsafeStoppingTrajectory,
         "execution stopping-budget exhaustion must fail closed");
 }
@@ -248,6 +251,112 @@ public:
     return in.path_id == 9 || trajectory.final_state.steering_angles == in.vehicle.steering_angles;
   }
 };
+void test_commands_bound_to_originating_task() {
+  Config c;
+  for (int change = 0; change < 10; ++change) {
+    auto origin = input();
+    origin.reference_path.insert(origin.reference_path.begin() + 1, {2, 0, 0});
+    origin.vehicle.velocity.vx = .2;
+    origin.vehicle.wheel_speeds.fill(.2);
+    const auto output = drive(origin.vehicle, c, {.2, 0, 0});
+    auto queued = envelope(origin, output, 1, 1.03, 1.1);
+    // Mutate the original input after capture: the queued snapshot must own its
+    // geometry, not alias a path that an adapter can overwrite during replanning.
+    origin.vehicle.stamp_s = 1.1;
+    origin.vehicle.pose.x = .02;
+    if (change == 0)
+      ++origin.path_id;
+    else if (change == 1)
+      origin.reference_path.back().x = -5;
+    else if (change == 2)
+      origin.reference_path[1].x += .1;
+    else if (change == 3)
+      origin.reference_path[1].y += .1;
+    else if (change == 4)
+      origin.reference_path.back().yaw += .1;
+    else if (change == 5)
+      origin.reference_path[1].yaw += .1;
+    else if (change == 6)
+      origin.heading_policy = PathHeadingPolicy::GoalOnly;
+    else if (change == 7)
+      origin.reference_path.erase(origin.reference_path.begin() + 1);
+    else if (change == 8)
+      std::swap(origin.reference_path[0], origin.reference_path[1]);
+    else
+      queued.source_task.reset();
+
+    // Every obsolete command remains mechanically and collision valid. The
+    // rejection must come from task identity, not an incidental safety failure.
+    ModeExecutor preview(c);
+    const auto plan = ActuationModel(c).plan(origin.vehicle, preview.update(output, origin.vehicle));
+    check(plan.has_value(), "stale task reproduction must have valid Drive targets");
+    Trajectory trace;
+    RolloutEngine(c).generate_execution(*plan, trace);
+    check(TrajectoryValidator(c).check(origin, trace) == TrajectoryStatus::Valid,
+          "collision checks alone must permit the stale task reproduction");
+    const double obsolete_stop_x = trace.final_state.pose.x;
+    TimedExecutor executor(c, 10);
+    const auto rejected = executor.update(queued, origin, 1.1);
+    check(rejected.timing_error == TimingError::None &&
+              rejected.safety_error == ExecutionSafetyError::TaskMismatch &&
+              rejected.rejected_status == TrajectoryStatus::Invalid &&
+              rejected.execution.action == Action::Brake && rejected.actuation &&
+              !rejected.execution.feedback.fault,
+          "changed ID, full geometry, heading policy or missing snapshot must reject Drive");
+    RolloutEngine(c).generate_execution(*rejected.actuation, trace);
+    check(trace.valid && trace.final_state.wheel_speeds[0] == 0 &&
+              TrajectoryValidator(c).check(origin, trace) == TrajectoryStatus::Valid &&
+              trace.final_state.pose.x < obsolete_stop_x,
+          "a replaced task may execute only its separately checked stopping fallback");
+    origin.vehicle = rejected.actuation->endpoint().state;
+    Output hold;
+    hold.action = Action::Hold;
+    const double now = origin.vehicle.stamp_s;
+    const auto fresh = executor.update(envelope(origin, hold, now, now, now, 2), origin, now);
+    check(fresh.safety_error == ExecutionSafetyError::None && fresh.actuation &&
+              !fresh.execution.feedback.fault,
+          "a fresh command bound to the current task must recover without reset");
+  }
+}
+void test_stale_task_request_does_not_commit() {
+  Config c;
+  auto old = input();
+  Output request;
+  request.action = Action::RequestMode;
+  request.requested_mode = DriveMode::Crab;
+  request.mode_request = ModeRequest{7, DriveMode::Crab,
+      DriveModel(c).steering_for_entry(DriveMode::Crab, {0, .2, 0}, {})};
+  const auto queued = envelope(old, request, 1, 1.03, 1.1);
+  auto latest = old;
+  latest.vehicle.stamp_s = 1.1;
+  ++latest.path_id;
+  TimedExecutor executor(c, 10);
+  const auto rejected = executor.update(queued, latest, 1.1);
+  check(rejected.safety_error == ExecutionSafetyError::TaskMismatch && rejected.actuation &&
+            rejected.execution.feedback.request_id == 0 &&
+            rejected.execution.phase == TransitionPhase::Stable,
+        "task rejection must precede mode-request preview or state commitment");
+  latest.vehicle = rejected.actuation->endpoint().state;
+  const double now = latest.vehicle.stamp_s;
+  const auto fresh = executor.update(envelope(latest, request, now, now, now, 2), latest, now);
+  check(fresh.safety_error == ExecutionSafetyError::None && fresh.actuation &&
+            fresh.execution.feedback.request_id == 7,
+        "the same request ID must remain usable by a new command for the current task");
+
+  old.vehicle.velocity.vx = .8;
+  old.vehicle.wheel_speeds.fill(.8);
+  auto unsafe = old;
+  ++unsafe.path_id;
+  unsafe.vehicle.stamp_s = 1.15;
+  unsafe.vehicle.pose.x = .12;
+  unsafe.obstacles = {{1.01, 0, .05}};
+  TimedExecutor fail_closed(c, 10);
+  const auto fault = fail_closed.update(
+      envelope(old, drive(old.vehicle, c, {.8, 0, 0}), 1, 1.1, 1.15), unsafe, 1.15);
+  check(fault.safety_error == ExecutionSafetyError::UnsafeStoppingTrajectory &&
+            fault.execution.feedback.fault && !fault.actuation,
+        "task mismatch must not bypass validation of an unsafe current stopping trajectory");
+}
 void test_request_rejection_is_transactional() {
   Config c;
   auto validator = std::make_shared<TrajectoryValidator>(c);
@@ -259,14 +368,14 @@ void test_request_rejection_is_transactional() {
   request.requested_mode = DriveMode::Crab;
   request.mode_request = ModeRequest{7, DriveMode::Crab,
       DriveModel(c).steering_for_entry(DriveMode::Crab, {0, .2, 0}, {})};
-  const auto blocked = executor.update(envelope(request, 1, 1, 1), in, 1);
+  const auto blocked = executor.update(envelope(in, request, 1, 1, 1), in, 1);
   check(blocked.safety_error == ExecutionSafetyError::CommandRejected &&
             blocked.execution.feedback.request_id == 0 &&
             blocked.execution.phase == TransitionPhase::Stable,
         "rejecting a new request must not consume its ID or commit its transition");
   in.path_id = 9;
   in.vehicle.stamp_s = 1.1;
-  const auto accepted = executor.update(envelope(request, 1.1, 1.1, 1.1, 2), in, 1.1);
+  const auto accepted = executor.update(envelope(in, request, 1.1, 1.1, 1.1, 2), in, 1.1);
   check(accepted.actuation && !accepted.execution.feedback.fault &&
             accepted.execution.feedback.request_id == 7,
         "the same mode request ID remains eligible after a transactional safety rejection");
@@ -287,7 +396,7 @@ void test_scheduling_metadata_and_current_state() {
   hold.action = Action::Hold;
   for (auto expected : {TimingError::InvalidPlanTime, TimingError::SourceTimeout,
                         TimingError::NotYetExecutable, TimingError::ExecutionExpired}) {
-    auto queued = envelope(hold, .99, .99, 1);
+    auto queued = envelope(input(), hold, .99, .99, 1);
     if (expected == TimingError::InvalidPlanTime)
       queued.source_stamp_s = 1;
     if (expected == TimingError::SourceTimeout)
@@ -306,7 +415,7 @@ void test_scheduling_metadata_and_current_state() {
           "invalid scheduling/source timestamps must fail closed with a distinct reason");
   }
   for (int field = 0; field < 3; ++field) {
-    auto queued = envelope(hold, 1, 1, 1);
+    auto queued = envelope(input(), hold, 1, 1, 1);
     (field == 0 ? queued.source_stamp_s : field == 1 ? queued.execute_at_s : queued.valid_until_s) =
         std::numeric_limits<double>::quiet_NaN();
     TimedExecutor executor(c, 10);
@@ -318,7 +427,7 @@ void test_scheduling_metadata_and_current_state() {
             TimingError::InvalidPlanTime,
         "legacy envelopes without source/scheduling metadata must not authorize motion");
   TimedExecutor stale(c, 10);
-  const auto raw = stale.update(envelope(hold, .99, 1, 1), input(.99), 1);
+  const auto raw = stale.update(envelope(input(.99), hold, .99, 1, 1), input(.99), 1);
   check(raw.timing_error == TimingError::None &&
             raw.safety_error == ExecutionSafetyError::StateNotCurrent &&
             raw.execution.feedback.fault,
@@ -326,7 +435,7 @@ void test_scheduling_metadata_and_current_state() {
   TimedExecutor invalid(c, 10);
   auto bad = input();
   bad.obstacles.push_back({0, 0, -1});
-  check(invalid.update(envelope(hold, 1, 1, 1), bad, 1).safety_error ==
+  check(invalid.update(envelope(bad, hold, 1, 1, 1), bad, 1).safety_error ==
             ExecutionSafetyError::InvalidContext,
         "invalid current obstacle data must fail closed");
 }
@@ -337,6 +446,8 @@ int main() {
     test_proportional_brake_and_phased_alignment();
     test_delayed_drive_revalidated_at_latest_pose();
     test_latest_obstacles_and_unsafe_stop_latch();
+    test_commands_bound_to_originating_task();
+    test_stale_task_request_does_not_commit();
     test_request_rejection_is_transactional();
     test_scheduling_metadata_and_current_state();
     std::cout << "Actuation and execution-safety regressions passed\n";

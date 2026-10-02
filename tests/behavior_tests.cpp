@@ -57,7 +57,7 @@ void run(const std::string &scenario, unsigned seed, bool timed) {
     if (timed) {
       const double now = input.vehicle.stamp_s;
       CommandEnvelope envelope{1, static_cast<std::uint64_t>(tick + 1), now, command,
-                               now, now, now + .025};
+                               now, now, now + .025, CommandTask::capture(input)};
       const auto guarded = timed_executor.update(envelope, input, now);
       check(guarded.timing_error == TimingError::None &&
                 guarded.safety_error == ExecutionSafetyError::None && guarded.actuation,

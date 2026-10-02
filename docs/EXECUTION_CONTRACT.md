@@ -236,7 +236,8 @@ VehicleState alone. Its validator may be the same shared const validator supplie
 to Controller. The validator must have compatible safety limits.
 
 CommandEnvelope requires a nonzero session_id, strictly increasing nonzero sequence,
-strictly increasing issued_at_s, Output, source_stamp_s, execute_at_s and valid_until_s.
+strictly increasing issued_at_s, Output, source_stamp_s, execute_at_s, valid_until_s
+and source_task captured from the same planning input.
 The last three fields have invalid defaults: legacy envelopes fail closed.
 source_stamp_s is the observation used to compute the plan; rewrapping/republishing
 must not refresh it. execute_at_s is the earliest scheduled application instant;
@@ -244,6 +245,13 @@ valid_until_s is the final admissible start instant. Required ordering is
 source_stamp_s <= issued_at_s <= execute_at_s <= valid_until_s. All times are finite,
 nonnegative and in one clock domain. Request retries preserve their mode request
 payload but use a new envelope sequence/issue time and truthful source metadata.
+CommandTask::capture(planning_input) owns a value snapshot of path_id, heading_policy
+and every ordered reference_path pose (x, y, yaw). These are the same exact task
+identity fields used by PathManager. Geometry changes are detected even when path_id
+is reused; an identical path with a new ID is a new task. Vehicle motion, obstacles
+and Controller-generated tracking context do not change task identity.
+Capture before queueing and preserve the snapshot during transport. Do not bind an
+old Output to the latest task merely to make it pass: recompute for the new task.
 
 ```cpp
 #include <swerve_mppi/controller.hpp>
@@ -255,7 +263,8 @@ swerve_mppi::TimedExecutor executor(config, session_id, initial_actual_mode, {},
 const auto output = controller.compute(planning_input);
 swerve_mppi::CommandEnvelope envelope{
     session_id, ++sequence, issued_at_s, output,
-    planning_input.vehicle.stamp_s, application_time_s, valid_until_s};
+    planning_input.vehicle.stamp_s, application_time_s, valid_until_s,
+    swerve_mppi::CommandTask::capture(planning_input)};
 // latest_input describes the application instant and current obstacles/constraints.
 const auto guarded = executor.update(envelope, latest_input, application_time_s);
 if (guarded.actuation) {
@@ -285,7 +294,18 @@ uncertainty; rewriting a stale timestamp is not alignment. This stage implements
 latency predictor or uncertainty model. Current obstacles/constraints must also be
 coherent with that snapshot; dynamic obstacle prediction is not implemented.
 
-Before committing protocol state, TimedExecutor previews ModeExecutor and builds an
+Before any protocol preview, TimedExecutor compares the required source_task with
+the latest task. A missing snapshot or mismatch discards the queued Output and tries
+the same independently checked stopping fallback described below. A healthy fallback
+reports ExecutionSafetyError::TaskMismatch and rejected_status=Invalid; it never
+authorizes the obsolete Drive or consumes an obsolete new mode request ID. The next
+fresh command for the current task can recover without reset. If stopping is unsafe,
+UnsafeStoppingTrajectory takes priority and SafeStop latches. Already committed
+mode transitions retain their original protocol identity/deadline; task mismatch does
+not introduce a cancellation operation. TimingGuard alone remains a transport guard
+and cannot check task identity without current ControllerInput.
+
+For a matching task, TimedExecutor previews ModeExecutor and builds an
 ActuationPlan for its actual result. RolloutEngine::generate_execution validates the
 exact wheel/steering interval followed by a complete stop, using the latest context
 and the same stopping_horizon_steps budget. It does not treat body_command as a new
@@ -366,4 +386,3 @@ same-mode alignment state, while an active RequestMode retains its ID, complete
 payload and original deadline. Completion requires stopped body/wheels and a
 confirmed mode over a settling dwell; afterward Controller holds the task stopped.
 See [NAVIGATION.md](NAVIGATION.md) for path identity, heading policy and diagnostics.
-

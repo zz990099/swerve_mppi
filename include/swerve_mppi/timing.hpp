@@ -24,6 +24,15 @@ enum class TimingError {
   NotYetExecutable,
   ExecutionExpired
 };
+// Value snapshot of the full originating task, using PathManager's exact
+// identity semantics. Capture from the planning input, never the later feedback.
+struct CommandTask {
+  std::uint64_t path_id = 0;
+  PathHeadingPolicy heading_policy = PathHeadingPolicy::FollowPath;
+  std::vector<Pose2d> reference_path;
+  static CommandTask capture(const ControllerInput &source);
+  bool matches(const ControllerInput &latest) const;
+};
 struct CommandEnvelope {
   std::uint64_t session_id = 0;
   std::uint64_t sequence = 0;
@@ -34,6 +43,8 @@ struct CommandEnvelope {
   double source_stamp_s = -1;
   double execute_at_s = -1;
   double valid_until_s = -1;
+  // Required for guarded execution; absence cannot authorize the queued command.
+  std::optional<CommandTask> source_task;
 };
 
 // All timestamps use one clock. Call check_feedback once per model tick,
@@ -65,7 +76,8 @@ enum class ExecutionSafetyError {
   StateNotCurrent,
   InvalidActuation,
   CommandRejected,
-  UnsafeStoppingTrajectory
+  UnsafeStoppingTrajectory,
+  TaskMismatch
 };
 struct TimedExecutionResult {
   ExecutionResult execution;
@@ -91,6 +103,8 @@ public:
 
 private:
   TrajectoryStatus check(const ControllerInput &latest, const ActuationPlan &plan);
+  TimedExecutionResult reject_command(const ControllerInput &latest,
+                                     ExecutionSafetyError reason, TrajectoryStatus status);
   Config config_;
   std::shared_ptr<const TrajectoryValidator> validator_;
   ActuationModel actuation_;
