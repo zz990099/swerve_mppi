@@ -2,6 +2,7 @@
 
 #include "drive_interpolation.hpp"
 #include "motion_profile.hpp"
+#include "stopping_motion.hpp"
 #include "validation.hpp"
 #include <algorithm>
 #include <cmath>
@@ -142,34 +143,33 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
   out.steering_targets =
       ready || is_stopped(start, config_) ? wheels.angles : start.steering_angles;
   out.aligning = !ready;
-  auto &state = out.state;
-  if (!ready && is_stopped(start, config_)) {
-    for (std::size_t i = 0; i < 4; ++i) {
-      state.steering_angles[i] +=
-          std::clamp(wheels.angles[i] - start.steering_angles[i],
-                     -config_.max_steer_rate_radps * dt, config_.max_steer_rate_radps * dt);
-    }
-  }
-  const std::array<double, 4> target = ready ? wheels.speeds : std::array<double, 4>{};
   const bool driving = ready && (std::hypot(u.vx, u.vy) >= kEpsilon || std::abs(u.wz) >= kEpsilon);
+  if (!driving) {
+    auto stopped = detail::stopping_step(start, out.steering_targets, config_, dt);
+    stopped.aligning = !ready;
+    return stopped;
+  }
+  auto &state = out.state;
+  auto target = wheels.speeds;
   const Twist2d initial = kinematics_.forward(start.wheel_speeds, start.steering_angles);
-  const Twist2d desired =
-      kinematics_.forward(target, ready ? wheels.angles : state.steering_angles);
-  double fraction =
-      std::min(velocity_fraction(initial.vx, initial.vy, desired.vx, desired.vy,
-                                 config_.max_linear_accel_mps2, config_.max_linear_decel_mps2, dt),
-               velocity_fraction(initial.wz, 0.0, desired.wz, 0.0, config_.max_angular_accel_radps2,
-                                 config_.max_angular_decel_radps2, dt));
-  for (std::size_t i = 0; i < 4; ++i) {
-    const double delta = std::abs(target[i] - start.wheel_speeds[i]);
-    if (delta > kEpsilon)
-      fraction = std::min(fraction, config_.max_wheel_accel_mps2 * dt / delta);
-    if (ready) {
+  auto target_fraction = [&]() {
+    const auto desired = kinematics_.forward(target, wheels.angles);
+    double fraction = std::min(
+        velocity_fraction(initial.vx, initial.vy, desired.vx, desired.vy,
+                          config_.max_linear_accel_mps2, config_.max_linear_decel_mps2, dt),
+        velocity_fraction(initial.wz, 0.0, desired.wz, 0.0, config_.max_angular_accel_radps2,
+                          config_.max_angular_decel_radps2, dt));
+    for (std::size_t i = 0; i < 4; ++i) {
+      const double delta = std::abs(target[i] - start.wheel_speeds[i]);
+      if (delta > kEpsilon)
+        fraction = std::min(fraction, config_.max_wheel_accel_mps2 * dt / delta);
       const double steering_delta = std::abs(wheels.angles[i] - start.steering_angles[i]);
       if (steering_delta > kEpsilon)
         fraction = std::min(fraction, config_.max_steer_rate_radps * dt / steering_delta);
     }
-  }
+    return fraction;
+  };
+  double fraction = target_fraction();
   // Steering changes the encoder-derived twist too. Limit the joint step as a
   // whole, rather than checking acceleration at fixed steering angles only.
   detail::MotionProfile profile;
@@ -177,19 +177,17 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
     for (std::size_t i = 0; i < 4; ++i) {
       state.wheel_speeds[i] =
           start.wheel_speeds[i] + fraction * (target[i] - start.wheel_speeds[i]);
-      if (ready)
-        state.steering_angles[i] =
-            start.steering_angles[i] + fraction * (wheels.angles[i] - start.steering_angles[i]);
+      state.steering_angles[i] =
+          start.steering_angles[i] + fraction * (wheels.angles[i] - start.steering_angles[i]);
     }
     state.velocity = kinematics_.forward(state.wheel_speeds, state.steering_angles);
     profile = detail::motion_profile(initial, state, start, config_);
-    const bool module_consistent =
-        !ready || (std::hypot(u.vx, u.vy) < kEpsilon && std::abs(u.wz) < kEpsilon) ||
-        kinematics_.max_module_residual(state.wheel_speeds, state.steering_angles,
-                                        state.velocity) <=
-            config_.drive_kinematic_tolerance_mps + 1e-9;
-    if (module_consistent &&
-        (!driving || detail::drive_interpolation_admissible(start, state, config_, dt)) &&
+    const bool module_consistent = kinematics_.max_module_residual(
+                                       state.wheel_speeds, state.steering_angles, state.velocity) <=
+                                   config_.drive_kinematic_tolerance_mps + 1e-9;
+    const bool speed_ok = detail::drive_speed_admissible(start, state, config_);
+    if (module_consistent && speed_ok &&
+        detail::drive_rates_admissible(start, state, config_, dt) &&
         profile.duration <= dt + 1e-12 &&
         velocity_change_time(initial.vx, initial.vy, state.velocity.vx, state.velocity.vy,
                              config_.max_linear_accel_mps2,
@@ -202,15 +200,18 @@ StepResult DriveModel::step(const VehicleState &start, const Control &u, double 
       out.valid = false;
       return out;
     }
-    fraction *= 0.5;
+    if (!speed_ok) {
+      // Reducing steering alone can stall a turn at an exact speed cap. Reserve
+      // a small rolling-speed margin while retaining the intended geometry.
+      for (double &speed : target)
+        speed *= .99;
+      fraction = target_fraction();
+    } else
+      fraction *= 0.5;
   }
-  if (ready)
-    out.steering_targets = state.steering_angles;
+  out.steering_targets = state.steering_angles;
   out.wheel_speed_targets = state.wheel_speeds;
-  if (driving)
-    detail::integrate_drive(out, start, initial, config_, dt);
-  else
-    detail::integrate_profile(out, initial, profile, dt);
+  detail::integrate_drive(out, start, initial, config_, dt);
   state.stamp_s += dt;
   state.time_in_mode_s += dt;
   return out;

@@ -136,9 +136,10 @@ int main(int argc, char **argv) {
                  "planning_calls,planning_p95_ms,planning_mean_allocations,evaluated_rollouts,"
                  "feasible_rollouts,fallback_updates,waiting_calls,safety_reductions,min_measured_"
                  "clearance_m\n";
-    for (const auto &name : {"straight", "lateral", "curve", "spin", "reverse", "final_yaw",
-                             "scurve", "cusp", "loop", "short_cusp", "short_loop", "short_corner",
-                             "near_obstacles", "dense_curve", "obstacles"}) {
+    for (const auto &name :
+         {"straight", "lateral", "curve", "spin", "reverse", "final_yaw", "scurve",
+          "scurve_duplicates", "cusp", "loop", "short_cusp", "short_loop", "short_corner",
+          "near_obstacles", "dense_curve", "obstacles"}) {
       if (scenario == "all" &&
           (std::string(name) == "dense_curve" || std::string(name) == "obstacles"))
         continue;
@@ -152,10 +153,10 @@ int main(int argc, char **argv) {
     }
     check(scenario == "all" || scenario == "straight" || scenario == "lateral" ||
               scenario == "curve" || scenario == "spin" || scenario == "reverse" ||
-              scenario == "final_yaw" || scenario == "scurve" || scenario == "cusp" ||
-              scenario == "loop" || scenario == "short_cusp" || scenario == "short_loop" ||
-              scenario == "short_corner" || scenario == "near_obstacles" ||
-              scenario == "dense_curve" || scenario == "obstacles",
+              scenario == "final_yaw" || scenario == "scurve" || scenario == "scurve_duplicates" ||
+              scenario == "cusp" || scenario == "loop" || scenario == "short_cusp" ||
+              scenario == "short_loop" || scenario == "short_corner" ||
+              scenario == "near_obstacles" || scenario == "dense_curve" || scenario == "obstacles",
           "unknown scenario");
   } catch (const std::exception &e) {
     counting = false;

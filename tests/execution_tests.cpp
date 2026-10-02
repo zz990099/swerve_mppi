@@ -31,28 +31,8 @@ void feedback(VehicleState &s, const ModeFeedback &f) {
   s.mode_request_id = f.request_id;
   s.time_in_mode_s = f.time_in_mode_s;
 }
-// A simple independent actuator fixture: no DriveModel/TransitionModel stepping.
-// It limits encoder acceleration and steering rate, then derives measured twist.
-void actuate(VehicleState &s, const ExecutionResult &r, const Config &c) {
-  const bool stopped = is_stopped(s, c);
-  for (std::size_t i = 0; i < 4; ++i) {
-    if (stopped || r.action == Action::Drive)
-      s.steering_angles[i] +=
-          std::clamp(r.steering_targets[i] - s.steering_angles[i], -c.max_steer_rate_radps * c.dt_s,
-                     c.max_steer_rate_radps * c.dt_s);
-    s.wheel_speeds[i] +=
-        std::clamp(r.wheel_speed_targets[i] - s.wheel_speeds[i], -c.max_wheel_accel_mps2 * c.dt_s,
-                   c.max_wheel_accel_mps2 * c.dt_s);
-  }
-  s.velocity = Kinematics(c).forward(s.wheel_speeds, s.steering_angles);
-  s.pose.x +=
-      (std::cos(s.pose.yaw) * s.velocity.vx - std::sin(s.pose.yaw) * s.velocity.vy) * c.dt_s;
-  s.pose.y +=
-      (std::sin(s.pose.yaw) * s.velocity.vx + std::cos(s.pose.yaw) * s.velocity.vy) * c.dt_s;
-  s.pose.yaw = wrap_angle(s.pose.yaw + s.velocity.wz * c.dt_s);
-  feedback(s, r.feedback);
-  s.stamp_s += c.dt_s;
-}
+void actuate(VehicleState &s, const ExecutionResult &r, const Config &c) { test::actuate(s, r, c); }
+
 Output request(std::uint64_t id, DriveMode mode, const Config &c) {
   Output out;
   out.action = Action::RequestMode;
@@ -864,9 +844,132 @@ void test_capture_alignment_commitment() {
             std::abs(drive.body_command.vx) < 1e-9,
         "capture cannot overwrite agreed mode-entry intent before its first Drive");
 }
+
+void test_stable_feedback_and_interior_speed() {
+  Config c;
+  for (auto mode : {DriveMode::DualAckermann, DriveMode::Crab, DriveMode::Spin}) {
+    for (bool lost_confirmation : {false, true}) {
+      VehicleState s;
+      s.actual_mode = mode;
+      s.stamp_s = 1;
+      s.time_in_mode_s = 2;
+      const Control u = mode == DriveMode::Spin ? Control{0, 0, .05} : Control{.05, 0, 0};
+      const auto wheels = Kinematics(c).inverse(u, {});
+      s.steering_angles = wheels.angles;
+      ModeExecutor executor(c, mode);
+      Output hold;
+      hold.action = Action::Hold;
+      hold.steering_targets = s.steering_angles;
+      check(!executor.update(hold, s).feedback.fault,
+            "startup Hold must establish Stable execution");
+      s.stamp_s += c.dt_s;
+      if (lost_confirmation)
+        s.mode_confirmed = false;
+      else
+        s.actual_mode = mode == DriveMode::Spin ? DriveMode::Crab : DriveMode::Spin;
+      Output drive;
+      drive.action = Action::Drive;
+      drive.requested_mode = mode;
+      drive.body_command = {u.vx, u.vy, u.wz};
+      drive.steering_targets = wheels.angles;
+      drive.wheel_speed_targets = wheels.speeds;
+      const auto rejected = executor.update(drive, s);
+      check(rejected.feedback.fault && rejected.action == Action::SafeStop,
+            "fresh unconfirmed or mismatched Stable feedback must latch a Drive fault");
+    }
+  }
+  for (int geometry = 0; geometry < 4; ++geometry) {
+    VehicleState s;
+    s.stamp_s = 1;
+    s.time_in_mode_s = 2;
+    WheelCommand target;
+    Control intent;
+    if (geometry == 0) {
+      s.steering_angles.fill(.1);
+      s.wheel_speeds.fill(c.max_vx_mps / std::cos(.1));
+      intent = {c.max_vx_mps, 0, 0};
+      target = Kinematics(c).inverse(intent, s.steering_angles);
+    } else if (geometry == 1) {
+      auto initial = Kinematics(c).inverse({c.max_vx_mps, 0, .2}, {});
+      s.steering_angles = initial.angles;
+      s.wheel_speeds = initial.speeds;
+      intent = {c.max_vx_mps, 0, .3};
+      target = Kinematics(c).inverse(intent, s.steering_angles);
+    } else if (geometry == 3) {
+      s.actual_mode = DriveMode::Spin;
+      const auto initial = Kinematics(c).inverse({0, 0, c.max_spin_radps}, {});
+      for (std::size_t i = 0; i < 4; ++i) {
+        s.steering_angles[i] = initial.angles[i] - .03;
+        s.wheel_speeds[i] = initial.speeds[i] / std::cos(.03);
+        target.angles[i] = initial.angles[i] + .03;
+        target.speeds[i] = s.wheel_speeds[i];
+      }
+      intent = {0, 0, c.max_spin_radps};
+    } else {
+      s.actual_mode = DriveMode::Crab;
+      for (std::size_t i = 0; i < 4; ++i) {
+        s.steering_angles[i] = (i % 2 == 0 ? .03 : -.03);
+        s.wheel_speeds[i] = c.max_crab_speed_mps / std::cos(.03);
+        target.angles[i] = -s.steering_angles[i];
+        target.speeds[i] = s.wheel_speeds[i];
+      }
+      intent = {c.max_crab_speed_mps, 0, 0};
+    }
+    s.velocity = Kinematics(c).forward(s.wheel_speeds, s.steering_angles);
+    Output drive;
+    drive.action = Action::Drive;
+    drive.requested_mode = s.actual_mode;
+    drive.steering_targets = target.angles;
+    drive.wheel_speed_targets = target.speeds;
+    drive.body_command = Kinematics(c).forward(target.speeds, target.angles);
+    const double limit = geometry == 2   ? c.max_crab_speed_mps
+                         : geometry == 3 ? c.max_spin_radps
+                                         : c.max_vx_mps;
+    auto peak = [&](const std::array<double, 4> &speeds, const std::array<double, 4> &angles) {
+      double maximum = 0;
+      for (int step = 0; step <= 10000; ++step) {
+        const double f = step / 10000.0;
+        double vx = 0, vy = 0, wz = 0;
+        const double x[] = {c.wheelbase_m / 2, c.wheelbase_m / 2, -c.wheelbase_m / 2,
+                            -c.wheelbase_m / 2};
+        const double y[] = {c.track_m / 2, -c.track_m / 2, c.track_m / 2, -c.track_m / 2};
+        for (std::size_t i = 0; i < 4; ++i) {
+          const double v = s.wheel_speeds[i] + f * (speeds[i] - s.wheel_speeds[i]);
+          const double a = s.steering_angles[i] + f * (angles[i] - s.steering_angles[i]);
+          vx += v * std::cos(a) / 4;
+          vy += v * std::sin(a) / 4;
+          wz += (x[i] * v * std::sin(a) - y[i] * v * std::cos(a)) /
+                (c.wheelbase_m * c.wheelbase_m + c.track_m * c.track_m);
+        }
+        maximum = std::max(maximum, geometry == 2   ? std::hypot(vx, vy)
+                                    : geometry == 3 ? std::abs(wz)
+                                                    : std::abs(vx));
+      }
+      return maximum;
+    };
+    check(peak(target.speeds, target.angles) > limit + 1e-5,
+          "independent dense encoder oracle must expose the endpoint-only overspeed");
+    check(ModeExecutor(c, s.actual_mode).update(drive, s).feedback.fault,
+          "executor must reject an interior absolute-speed peak despite valid endpoints");
+    const auto bounded = DriveModel(c).step(s, intent, c.dt_s);
+    check(bounded.valid &&
+              peak(bounded.wheel_speed_targets, bounded.steering_targets) <= limit + 1e-9,
+          "model Drive must satisfy absolute speeds throughout its complete joint interpolation");
+    if (geometry != 2)
+      check(bounded.steering_targets != s.steering_angles,
+            "speed limiting must preserve progress toward the requested steering geometry");
+    drive.body_command = bounded.state.velocity;
+    drive.steering_targets = bounded.steering_targets;
+    drive.wheel_speed_targets = bounded.wheel_speed_targets;
+    check(!ModeExecutor(c, s.actual_mode).update(drive, s).feedback.fault,
+          "executor must accept the model's bounded complete-period target");
+  }
+}
+
 } // namespace
 int main() {
   try {
+    test_stable_feedback_and_interior_speed();
     test_all_directed_transitions();
     test_stale_ack_and_measured_alignment();
     test_executor_idempotency_and_timeout();

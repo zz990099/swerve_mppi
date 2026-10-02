@@ -7,6 +7,7 @@ namespace swerve_mppi {
 
 double wrap_angle(double angle);
 double angle_distance(double a, double b);
+// Handover threshold only; residual wheel speeds still require complete braking.
 bool is_stopped(const VehicleState &state, const Config &config);
 
 struct WheelCommand {

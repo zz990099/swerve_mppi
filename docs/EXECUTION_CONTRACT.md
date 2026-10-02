@@ -1,4 +1,4 @@
-# Standalone execution protocol (0.11)
+# Standalone execution protocol (0.12)
 
 This contract is independent of ROS, Nav2 and Gazebo. ModeExecutor is a reference
 supervisor that can be used behind any transport or directly in core tests.
@@ -83,8 +83,14 @@ to own physical rate enforcement.
 The transport must preserve command order and have one serialized command writer.
 
 During braking, all drive targets are zero and steering retains measured angles.
-Both body velocity and every measured wheel speed must be stopped. Once stopped,
-the executor applies the frozen entry steering. Confirmation requires measured
+Both body velocity and every measured wheel speed must be within their stopped
+thresholds before the executor supplies the frozen entry steering. These thresholds
+permit protocol handover, but do not erase residual rolling motion. In 0.12 the
+actuator must finish the complete proportional brake at retained measured angles,
+then align using only the remaining stopped time within that tick. Brake always
+retains measured angles. Hold/RequestMode never steer while residual wheel speeds
+are nonzero. The model accounts for this residual braking in alignment and
+confirmation ticks, even when the initial geometry is already aligned. Confirmation requires measured
 angles within steering_tolerance_rad and at least alignment_min_s since entering
 alignment. If wheels/body move again, it returns to braking and restarts the
 alignment minimum, while retaining the original overall deadline. The reported
@@ -95,7 +101,7 @@ ID, stopped measurements and steering, and emits one stopped handover cycle.
 
 | Action | Stable execution | During a committed transition |
 | --- | --- | --- |
-| Drive | Require matching actual mode, finite twist/wheel targets, bounded moving-steering steps and consistency of the complete joint target step within mode limits. | Mask drive and continue the committed stop/alignment. |
+| Drive | Require fresh confirmed measured feedback matching the executor actual mode, finite twist/wheel targets, bounded moving-steering steps and consistency of the complete joint target step within mode limits. | Mask drive and continue the committed stop/alignment. |
 | Brake | Zero drive targets, retain measured steering. | Continue the committed transition. |
 | Hold | Zero drive; apply steering only when stopped, otherwise brake. | Continue the committed transition. |
 | RequestMode | Start/retry the explicit request. | Retry the same request; reject replacement. |
@@ -183,11 +189,21 @@ fastest common body/joint braking rate, holding zero for any remaining time.
 The adapter must implement and calibrate these profiles; the bounds do not cover
 unspecified servo dynamics or tire slip.
 
+In 0.12 Stable Drive also rejects fresh `mode_confirmed=false` feedback and a
+measured actual mode different from the executor's stable mode. A pending mode
+handshake still masks Drive and continues its committed transition.
+
 The executor independently rejects absolute DualAckermann vx/yaw-rate, Crab
 translation-speed and Spin yaw-rate violations. Transient manifold projection
 tolerance cannot enlarge these limits. Drive interpolation must also obey
 pointwise linear/angular and joint rates, including both sides of a reversal.
-Measured overspeed may recover through the checked Brake path.
+Absolute speed caps are certified over the whole joint interpolation, rather than
+only at its endpoints. Analytic triangle bounds, adaptive chord enclosures and
+derivative-sign bounds cover unsampled peaks. Certification is bounded to 4096
+intervals and depth 14; exhaustion rejects the target. The model can reserve a
+rolling-speed margin in 1% increments while preserving desired steering geometry,
+with at most 60 target refinements. Measured overspeed may recover through the
+checked Brake path.
 
 Every first Drive and its complete stopping continuation still passes the shared
 validator. A rejected candidate retries up to safety_reduction_attempts amplitude

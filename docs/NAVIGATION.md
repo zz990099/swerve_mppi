@@ -1,4 +1,4 @@
-# Navigation lifecycle (0.11)
+# Navigation lifecycle (0.12)
 
 ## Input and task identity
 
@@ -176,5 +176,11 @@ Version 0.8 adds explicit navigation targets and goal eligibility, and validates
 all controlled stops. Rebuild consumers with find_package(swerve_mppi 0.8 CONFIG REQUIRED).
 
 Version 0.11 retains this navigation lifecycle and adds bounded first-Drive intent
-reductions with complete stopping validation. All consumers must now rebuild with
+reductions with complete stopping validation. That release required consumers to rebuild with
 find_package(swerve_mppi 0.11 CONFIG REQUIRED); see DRIVE_EXECUTION_VALIDATION.md.
+
+Version 0.12 preserves curvature anticipation across consecutive duplicate path
+points. Zero-length segments do not reset the last nonzero geometric segment;
+yaw-only endpoint intent still belongs to navigation. Use
+find_package(swerve_mppi 0.12 CONFIG REQUIRED) and the phased Hold/RequestMode
+actuation contract in ACTUATION_BOUNDARY_VALIDATION.md.

@@ -63,14 +63,22 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch)
   // Anticipate the yaw-rate budget of the ordered local curve. A horizon with
   // limited steering cannot track a tight bend at the straight-line speed cap.
   double curvature = 0;
-  for (std::size_t i = 1; i + 1 < input.reference_path.size(); ++i) {
-    const auto &a = input.reference_path[i - 1], &b = input.reference_path[i],
-               &d = input.reference_path[i + 1];
-    const double ax = b.x - a.x, ay = b.y - a.y, bx = d.x - b.x, by = d.y - b.y;
-    const double first = std::hypot(ax, ay), second = std::hypot(bx, by);
-    if (first > 1e-9 && second > 1e-9)
+  Pose2d a = input.reference_path.front(), b = a;
+  bool have_segment = false;
+  for (std::size_t i = 1; i < input.reference_path.size(); ++i) {
+    const auto &d = input.reference_path[i];
+    const double bx = d.x - b.x, by = d.y - b.y;
+    const double second = std::hypot(bx, by);
+    if (second <= 1e-9)
+      continue;
+    if (have_segment) {
+      const double ax = b.x - a.x, ay = b.y - a.y;
       curvature = std::max(curvature, std::abs(std::atan2(ax * by - ay * bx, ax * bx + ay * by)) /
-                                          ((first + second) / 2));
+                                          ((std::hypot(ax, ay) + second) / 2));
+    }
+    a = b;
+    b = d;
+    have_segment = true;
   }
   const auto constrain = [&](Control u, std::size_t t) {
     const auto mode =

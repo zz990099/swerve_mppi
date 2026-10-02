@@ -203,9 +203,27 @@ void test_guarded_closed_loop_and_idempotent_requests() {
   }
   check(complete && request.has_value(), "guarded lateral task must switch, drive and settle");
 }
+
+void test_fresh_unconfirmed_feedback() {
+  Config c;
+  TimedExecutor executor(c, 10);
+  executor.update(command(1), measured(1), 1);
+  auto state = measured(1.1);
+  state.mode_confirmed = false;
+  auto drive = command(1.1, 2);
+  drive.command.action = Action::Drive;
+  drive.command.body_command.vx = .05;
+  drive.command.wheel_speed_targets.fill(.05);
+  const auto rejected = executor.update(drive, state, 1.1);
+  check(rejected.timing_error == TimingError::None && rejected.execution.feedback.fault &&
+            rejected.execution.action == Action::SafeStop,
+        "fresh timing cannot authorize Drive when Stable mode confirmation disappears");
+}
+
 } // namespace
 int main() {
   try {
+    test_fresh_unconfirmed_feedback();
     test_regular_and_jittered_ticks();
     test_feedback_and_clock_failures();
     test_command_expiry_replay_and_loss();

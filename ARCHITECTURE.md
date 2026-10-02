@@ -237,6 +237,15 @@ Shared inclusive time comparisons use a 1 ns floor or four times double precisio
 the timestamp magnitude, whichever is larger. Duration-to-ticks rounding uses the
 same tolerance. Timestamp order and replay protection remain strictly increasing.
 
+Version 0.12 requires fresh confirmed/matching mode feedback for Stable Drive.
+Whole-period absolute speed certification shares analytic encoder derivatives
+between prediction and execution, with bounded adaptive enclosures and fail-closed
+exhaustion. When needed, the model reduces rolling targets to preserve steering
+progress at a speed cap. Hold/RequestMode complete retained-angle proportional
+braking before steering in the remaining tick time. Transition prediction retains
+this residual displacement during alignment and confirmation. Local Ackermann
+curvature walks nonzero geometric segments, preserving caps across duplicate points.
+
 ## Boundaries for simulation integration
 
 The geometry and actuator defaults are standalone configuration assumptions.
@@ -280,7 +289,7 @@ stage must compare predicted trajectories against independent Gazebo truth and
 measure solve-time distributions, tracking error, mode-switch counts, stalls and
 faults.
 
-Default-noise behavior regressions cover thirteen scenarios and five fixed seeds,
+Default-noise behavior regressions cover fourteen scenarios and five fixed seeds,
 including reverse travel, terminal yaw, S-curves, reversals and a closed square.
 An independent encoder fixture with 64 substeps per tick checks completion,
 measured stopping, one second of post-completion Hold, path error, mode changes

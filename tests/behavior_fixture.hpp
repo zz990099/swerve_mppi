@@ -43,25 +43,32 @@ inline void actuate(VehicleState &s, const ExecutionResult &command, const Confi
   double braking_time = std::max(std::hypot(s.velocity.vx, s.velocity.vy) / c.max_linear_decel_mps2,
                                  std::abs(s.velocity.wz) / c.max_angular_decel_radps2);
   for (std::size_t i = 0; i < 4; ++i) {
-    if (stopped || moving_steering)
-      end_angles[i] +=
-          std::clamp(command.steering_targets[i] - s.steering_angles[i],
-                     -c.max_steer_rate_radps * c.dt_s, c.max_steer_rate_radps * c.dt_s);
     end_speeds[i] += std::clamp(command.wheel_speed_targets[i] - s.wheel_speeds[i],
                                 -c.max_wheel_accel_mps2 * c.dt_s, c.max_wheel_accel_mps2 * c.dt_s);
     braking_time = std::max(braking_time, std::abs(s.wheel_speeds[i]) / c.max_wheel_accel_mps2);
     check(std::abs(end_angles[i]) <= c.steering_limit_rad + 1e-9, "steering stop violated");
     check(std::abs(end_speeds[i]) <= c.max_wheel_speed_mps + 1e-9, "wheel speed violated");
   }
+  const double steering_time = moving_steering ? c.dt_s
+                               : stopped       ? std::max(0.0, c.dt_s - braking_time)
+                                               : 0;
+  for (std::size_t i = 0; i < 4; ++i)
+    end_angles[i] +=
+        std::clamp(command.steering_targets[i] - before.steering_angles[i],
+                   -c.max_steer_rate_radps * steering_time, c.max_steer_rate_radps * steering_time);
   // Drive joint targets ramp over the control period. Stopping actions use a
-  // rate-limited braking ramp, then hold zero if braking ends before the tick.
+  // proportional braking ramp, then align only during the remaining stopped time.
   // Derive each intermediate body twist independently from the encoder vectors.
   auto twist_at = [&](double t) {
     Twist2d v;
     double moment = 0;
     for (std::size_t i = 0; i < 4; ++i) {
-      const double angle =
-          before.steering_angles[i] + (end_angles[i] - before.steering_angles[i]) * t / c.dt_s;
+      const double steering_fraction =
+          moving_steering     ? t / c.dt_s
+          : steering_time > 0 ? std::clamp((t - braking_time) / steering_time, 0.0, 1.0)
+                              : 0;
+      const double angle = before.steering_angles[i] +
+                           (end_angles[i] - before.steering_angles[i]) * steering_fraction;
       const double speed =
           moving_steering
               ? before.wheel_speeds[i] + (end_speeds[i] - before.wheel_speeds[i]) * t / c.dt_s
@@ -77,7 +84,7 @@ inline void actuate(VehicleState &s, const ExecutionResult &command, const Confi
     return v;
   };
   constexpr int substeps = 64;
-  const double h = c.dt_s / substeps;
+  const double h = (moving_steering ? c.dt_s : std::min(c.dt_s, braking_time)) / substeps;
   for (int step = 0; step < substeps; ++step) {
     const auto v = twist_at((step + .5) * h);
     const double yaw = s.pose.yaw + v.wz * h / 2;
@@ -125,12 +132,14 @@ inline ControllerInput scenario_input(const std::string &scenario) {
   else if (scenario == "final_yaw") {
     input.reference_path = {{0, 0, 0}, {1, 0, 1.2}};
     input.heading_policy = PathHeadingPolicy::GoalOnly;
-  } else if (scenario == "scurve") {
+  } else if (scenario == "scurve" || scenario == "scurve_duplicates") {
     for (int i = 0; i <= 60; ++i) {
       const double x = 3.0 * i / 60;
       input.reference_path.push_back(
           {x, .35 * std::sin(2 * std::acos(-1.0) * x / 3),
            std::atan(.35 * 2 * std::acos(-1.0) / 3 * std::cos(2 * std::acos(-1.0) * x / 3))});
+      if (scenario == "scurve_duplicates")
+        input.reference_path.push_back(input.reference_path.back());
     }
   } else if (scenario == "curve" || scenario == "near_obstacles") {
     for (int i = 0; i <= 40; ++i) {

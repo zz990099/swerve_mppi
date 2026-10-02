@@ -1,11 +1,12 @@
-# Core workspaces, diagnostics and measurement (0.11)
+# Core workspaces, diagnostics and measurement (0.12)
 
 Stage 3 covers standalone core performance and observability. No simulator,
 ROS adapter, transport protocol or hardware integration was added. Tracking
 parameters, completion tolerances and execution interlocks retain their 0.5 defaults.
-Version 0.11 adds full-period encoder Drive dynamics, bounded safety-intent
-reductions and local curve speed limits. Current measurement evidence is in
-DRIVE_EXECUTION_VALIDATION.md and benchmarks/*v0.11_release.csv. The 0.8 CSVs
+Version 0.12 adds whole-period absolute speed certification, phased residual
+braking/alignment and duplicate-point curvature handling. Current measurement
+evidence is in ACTUATION_BOUNDARY_VALIDATION.md and benchmarks/*v0.12_release.csv.
+The 0.11 DRIVE_EXECUTION_VALIDATION.md and CSVs remain historical evidence. The 0.8 CSVs
 and stage 3 tuning conclusions remain historical evidence; their timings and
 completion ticks do not describe the current source.
 
@@ -23,8 +24,9 @@ cmake --build build-release --parallel 2
 ./build-release/swerve_mppi_benchmark near_obstacles 42 > near.csv
 ```
 
-`all` runs thirteen behavior scenarios with seeds 1, 7, 42, 73 and 101: the original
-nine, three short ordered paths and near_obstacles. A named
+`all` runs fourteen behavior scenarios with seeds 1, 7, 42, 73 and 101: the original
+nine, three short ordered paths, near_obstacles and scurve_duplicates. The duplicate
+S-curve repeats every geometric point and uses the same acceptance thresholds. A named
 scenario may use one seed or all five. The dense_curve case increases the same
 2 m radius arc from 41 to 401 points; the legacy obstacles name adds forty distant
 circles to the regular arc. These stress computational scaling and remain separate
@@ -136,7 +138,7 @@ are covered by the optimizer regressions.
 
 ## Measurement evidence and tuning decisions
 
-See DRIVE_EXECUTION_VALIDATION.md and benchmarks/*v0.11_release.csv for the current
+See ACTUATION_BOUNDARY_VALIDATION.md and benchmarks/*v0.12_release.csv for the current
 measurement, source commit, environment and acceptance results. CORE_REVIEW_VALIDATION.md
 records the historical 0.8 matrix; VALIDATION.md records stage 3 tuning probes.
 Allocation peaks are a repeatable structural comparison. Timing on a shared host

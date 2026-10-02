@@ -29,7 +29,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.11 CONFIG REQUIRED)
+find_package(swerve_mppi 0.12 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -61,7 +61,8 @@ period ratios are not supported yet.
   executor brakes, aligns and echoes the ID before confirming. A zero velocity
   message cannot encode this action.
 - Brake requests controlled stopping while retaining steering.
-  Hold keeps drive stopped while applying its steering targets.
+  Hold completes proportional braking with measured steering, then aligns using
+  only the remaining stopped time in that tick.
   SafeStop disables drive; its numeric targets must not be interpreted as a
   mode change or a recovery request.
 - SafeStop cancels execution and latches a fault in ModeExecutor. After deliberate
@@ -96,7 +97,19 @@ The optional allocation regression runs in CI; wall-clock timing is not a CI gat
 
 ## Current status
 
-Version 0.11 makes Drive prediction and execution use affine wheel-speed and
+Version 0.12 closes the residual-motion and full-period execution review findings.
+Hold/RequestMode finish proportional braking before steering, including rolling
+speeds below handover thresholds. Stable Drive requires freshly confirmed,
+matching measured mode feedback. Absolute body speed limits apply throughout the
+Drive interpolation, with bounded certification that fails closed. Duplicate
+path points preserve Ackermann curvature speed limits. Rebuild against 0.12 and
+update actuator adapters to the phased stopping/alignment contract; public layouts
+are unchanged from 0.11. See
+[docs/ACTUATION_BOUNDARY_VALIDATION.md](docs/ACTUATION_BOUNDARY_VALIDATION.md)
+for regressions and current measurement evidence.
+
+
+Version 0.11 made Drive prediction and execution use affine wheel-speed and
 steering interpolation over the entire control period. The model integrates the
 encoder velocity field with analytic yaw and conservative translation/sweep
 bounds; the executor checks absolute mode speed limits and pointwise body rates
@@ -105,7 +118,7 @@ through the checked Brake path. A rejected first-Drive stopping continuation can
 retry bounded reductions of the same intent, preserving entry geometry and
 clearing the warm start after a successful reduction. Tight local Ackermann
 curves also anticipate the yaw-rate speed budget.
-Rebuild downstream consumers against 0.11: Config and Output layouts changed.
+The 0.11 release changed Config and Output layouts.
 See [docs/DRIVE_EXECUTION_VALIDATION.md](docs/DRIVE_EXECUTION_VALIDATION.md) for the
 contract, independent oracles and verification evidence. The
 [0.10 stopping review](docs/STOPPING_REVIEW_VALIDATION.md) remains historical evidence.

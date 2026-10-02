@@ -272,19 +272,26 @@ void test_curve_yaw_budget() {
   in.reference_path = {{0, 0, 0},
                        {.4330127018922193, .25, 1.0471975511965976},
                        {.4330127018922193, .75, 2.0943951023931953}};
-  for (auto mode : {DriveMode::DualAckermann, DriveMode::Crab}) {
-    in.vehicle.actual_mode = mode;
-    Optimizer optimizer(c);
-    auto observer = std::make_shared<ObserveCurveSpeed>();
-    optimizer.critics().add(observer);
-    const auto result = optimizer.optimize(in, {mode, 0, false});
-    check(std::isfinite(result.cost), "curved proposals must remain feasible");
-    if (mode == DriveMode::DualAckermann)
-      check(observer->maximum <= .5 * c.max_yaw_rate_radps + 1e-9,
-            "all nominal, sampled and weighted curve proposals must anticipate the yaw budget");
-    else
-      check(observer->maximum > .5 * c.max_yaw_rate_radps,
-            "crab translation must retain its speed budget on a curved reference");
+  const auto original_path = in.reference_path;
+  for (int repetitions : {1, 2, 5}) {
+    in.reference_path.clear();
+    for (const auto &point : original_path)
+      for (int n = 0; n < repetitions; ++n)
+        in.reference_path.push_back(point);
+    for (auto mode : {DriveMode::DualAckermann, DriveMode::Crab}) {
+      in.vehicle.actual_mode = mode;
+      Optimizer optimizer(c);
+      auto observer = std::make_shared<ObserveCurveSpeed>();
+      optimizer.critics().add(observer);
+      const auto result = optimizer.optimize(in, {mode, 0, false});
+      check(std::isfinite(result.cost), "curved proposals must remain feasible");
+      if (mode == DriveMode::DualAckermann)
+        check(observer->maximum <= .5 * c.max_yaw_rate_radps + 1e-9,
+              "all nominal, sampled and weighted curve proposals must anticipate the yaw budget");
+      else
+        check(observer->maximum > .5 * c.max_yaw_rate_radps,
+              "crab translation must retain its speed budget on a curved reference");
+    }
   }
 }
 class RejectAll final : public Critic {

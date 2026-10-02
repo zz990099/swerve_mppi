@@ -427,9 +427,41 @@ void test_shared_hard_constraints() {
   check(validator->check(in, trajectory) == TrajectoryStatus::Collision,
         "current footprint collision must remain a hard rejection");
 }
+
+void test_residual_hold_obstacle() {
+  Config c;
+  c.dt_s = .5;
+  c.stopped_linear_mps = .25;
+  c.stopped_wheel_speed_mps = .21;
+  ControllerInput in;
+  in.vehicle.actual_mode = DriveMode::Crab;
+  in.vehicle.stamp_s = 1;
+  in.vehicle.time_in_mode_s = 2;
+  in.vehicle.velocity.vx = .2;
+  in.vehicle.wheel_speeds.fill(.2);
+  in.reference_path = {{0, 0, 0}, {0, .2, 0}};
+  // Independent old simultaneous-brake/steer integral placed this footprint
+  // 0.2 mm inside the obstacle; the phased brake ends at (0.02, 0).
+  const double radius = c.robot_radius_m + c.collision_margin_m + .05 - .0002;
+  in.obstacles = {{.0195821866951 - .1 * radius, .00329207621933 + std::sqrt(.99) * radius, .05}};
+  const auto predicted = DriveModel(c).step(in.vehicle, {0, .3, 0}, c.dt_s);
+  check(predicted.valid && std::abs(predicted.state.pose.x - .02) < 1e-9 &&
+            std::abs(predicted.state.pose.y) < 1e-9,
+        "Hold prediction must retain the complete residual braking distance without rolling "
+        "steering");
+  const auto output = Controller(c).compute(in);
+  ModeExecutor executor(c, DriveMode::Crab);
+  const auto execution = executor.update(output, in.vehicle);
+  auto actual = in.vehicle;
+  test::actuate(actual, execution, c);
+  check(test::measured_clearance(in.vehicle.pose, actual.pose, in.obstacles, c) > 0,
+        "the reviewed residual-Hold obstacle must remain clear under independent execution");
+}
+
 } // namespace
 int main() {
   try {
+    test_residual_hold_obstacle();
     test_drive_requires_complete_stopping_continuation();
     test_first_drive_deceleration_matches_execution();
     test_stopping_budget_reduction_restores_progress();

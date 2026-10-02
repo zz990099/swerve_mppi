@@ -425,9 +425,48 @@ void test_configuration_ownership() {
   }
   check(rejected, "unsupported steering travel must be rejected");
 }
+
+void test_residual_alignment_order() {
+  for (double dt : {.1, .5}) {
+    for (double speed : {.003, .1, .2}) {
+      Config c;
+      c.dt_s = dt;
+      c.stopped_linear_mps = .25;
+      c.stopped_wheel_speed_mps = .21;
+      VehicleState s;
+      s.actual_mode = DriveMode::Crab;
+      s.velocity.vx = speed;
+      s.wheel_speeds.fill(speed);
+      s.stamp_s = 1;
+      const auto predicted = DriveModel(c).step(s, {0, .3, 0}, dt);
+      const double duration =
+          std::max(speed / c.max_linear_decel_mps2, speed / c.max_wheel_accel_mps2);
+      const double t = std::min(dt, duration);
+      const double distance = speed * (t - t * t / (2 * duration));
+      const double angle =
+          std::min(std::acos(-1.0) / 2, c.max_steer_rate_radps * std::max(0.0, dt - duration));
+      check(predicted.valid && predicted.aligning && close(predicted.state.pose.x, distance) &&
+                close(predicted.state.pose.y, 0) &&
+                close(predicted.state.steering_angles[0], angle),
+            "residual rolling must finish braking before alignment consumes the remaining tick");
+      ExecutionResult command;
+      command.action = Action::Hold;
+      command.steering_targets = predicted.steering_targets;
+      command.feedback.actual_mode = s.actual_mode;
+      auto actual = s;
+      test::actuate(actual, command, c);
+      check(std::hypot(actual.pose.x - predicted.state.pose.x,
+                       actual.pose.y - predicted.state.pose.y) < 1e-8 &&
+                close(actual.steering_angles[0], angle),
+            "independent phased actuator must agree with the analytic stopping/alignment oracle");
+    }
+  }
+}
+
 } // namespace
 int main() {
   try {
+    test_residual_alignment_order();
     test_bounded_kinematics();
     test_braking_and_wheel_consistency();
     test_reversal_time_budget();

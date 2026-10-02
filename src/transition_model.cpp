@@ -1,6 +1,7 @@
 #include "swerve_mppi/model.hpp"
 
 #include "motion_profile.hpp"
+#include "stopping_motion.hpp"
 #include "time_comparison.hpp"
 #include "validation.hpp"
 #include <algorithm>
@@ -21,9 +22,7 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
       !std::isfinite(entry_intent.wz))
     return -1.0;
   const std::size_t begin = steps;
-  while (state.velocity.vx != 0 || state.velocity.vy != 0 || state.velocity.wz != 0 ||
-         std::any_of(state.wheel_speeds.begin(), state.wheel_speeds.end(),
-                     [](double speed) { return speed != 0; })) {
+  while (!is_stopped(state, config_)) {
     if (steps >= maximum)
       return -1.0;
     auto next = model_.step(state, {}, config_.dt_s);
@@ -33,8 +32,6 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
     ++steps;
     detail::append_motion(next, trace, sweep_margins, error);
   }
-  state.velocity = {};
-  state.wheel_speeds.fill(0.0);
   const auto angles = model_.steering_for_entry(target_mode, entry_intent, state.steering_angles);
   const auto minimum =
       detail::duration_ticks(config_.alignment_min_s, config_.dt_s, maximum - steps);
@@ -50,18 +47,11 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
       break;
     if (steps >= maximum)
       return -1.0;
-    for (std::size_t i = 0; i < 4; ++i) {
-      const double delta = angles[i] - state.steering_angles[i];
-      const double limit = config_.max_steer_rate_radps * config_.dt_s;
-      state.steering_angles[i] += std::clamp(delta, -limit, limit);
-    }
-    state.stamp_s += config_.dt_s;
+    const auto next = detail::stopping_step(state, angles, config_, config_.dt_s);
+    state = next.state;
     ++steps;
     ++aligned_steps;
-    if (trace)
-      trace->push_back(state.pose);
-    if (sweep_margins)
-      sweep_margins->push_back(error);
+    detail::append_motion(next, trace, sweep_margins, error);
   }
   const auto confirmation =
       detail::duration_ticks(config_.confirmation_prediction_s, config_.dt_s, maximum - steps);
@@ -78,13 +68,11 @@ double TransitionModel::rollout(VehicleState &state, DriveMode target_mode, std:
   if (detail::duration_exceeded((steps + wait - 1 - begin) * config_.dt_s,
                                 config_.confirmation_timeout_s))
     return -1.0;
-  state.stamp_s += wait * config_.dt_s;
   steps += wait;
   for (std::size_t i = 0; i < wait; ++i) {
-    if (trace)
-      trace->push_back(state.pose);
-    if (sweep_margins)
-      sweep_margins->push_back(error);
+    const auto next = detail::stopping_step(state, angles, config_, config_.dt_s);
+    state = next.state;
+    detail::append_motion(next, trace, sweep_margins, error);
   }
   state.actual_mode = target_mode;
   state.mode_confirmed = true;

@@ -18,11 +18,103 @@ inline bool within_body_limits(const Twist2d &v, DriveMode mode, const Config &c
   }
   return false;
 }
+struct EncoderSample {
+  Twist2d velocity;
+  Twist2d derivative; // Derivative with respect to the tick fraction.
+};
+inline EncoderSample encoder_sample(const VehicleState &start, const VehicleState &end,
+                                    const Config &c, double f) {
+  EncoderSample out;
+  const double x[] = {c.wheelbase_m / 2, c.wheelbase_m / 2, -c.wheelbase_m / 2, -c.wheelbase_m / 2};
+  const double y[] = {c.track_m / 2, -c.track_m / 2, c.track_m / 2, -c.track_m / 2};
+  const double moment = c.wheelbase_m * c.wheelbase_m + c.track_m * c.track_m;
+  for (std::size_t i = 0; i < 4; ++i) {
+    const double ds = end.wheel_speeds[i] - start.wheel_speeds[i];
+    const double da = end.steering_angles[i] - start.steering_angles[i];
+    const double angle = start.steering_angles[i] + f * da;
+    const double speed = start.wheel_speeds[i] + f * ds;
+    const double cosine = std::cos(angle), sine = std::sin(angle);
+    const double vx = speed * cosine, vy = speed * sine;
+    const double dx = ds * cosine - speed * da * sine;
+    const double dy = ds * sine + speed * da * cosine;
+    out.velocity.vx += vx / 4;
+    out.velocity.vy += vy / 4;
+    out.velocity.wz += (x[i] * vy - y[i] * vx) / moment;
+    out.derivative.vx += dx / 4;
+    out.derivative.vy += dy / 4;
+    out.derivative.wz += (x[i] * dy - y[i] * dx) / moment;
+  }
+  return out;
+}
+// Certify absolute speeds over the entire affine joint interval. Triangle bounds
+// handle ordinary capped Crab/Spin motion cheaply. Adaptive chord enclosures and
+// derivative-sign certificates cover cancellation near a cap. A finite sampling
+// grid alone cannot certify unsampled peaks; bounded exhaustion fails closed.
+inline bool drive_speed_admissible(const VehicleState &start, const VehicleState &end,
+                                   const Config &c) {
+  const auto first = encoder_sample(start, end, c, 0);
+  const auto last = encoder_sample(start, end, c, 1);
+  if (!within_body_limits(first.velocity, start.actual_mode, c) ||
+      !within_body_limits(last.velocity, start.actual_mode, c))
+    return false;
+  if (start.steering_angles == end.steering_angles)
+    return true; // The body twist is affine; each mode's speed set is convex.
+  double second = 0, rolling = 0;
+  for (std::size_t i = 0; i < 4; ++i) {
+    const double ds = end.wheel_speeds[i] - start.wheel_speeds[i];
+    const double da = end.steering_angles[i] - start.steering_angles[i];
+    const double speed = std::max(std::abs(start.wheel_speeds[i]), std::abs(end.wheel_speeds[i]));
+    second += std::hypot(2 * ds * da, speed * da * da) / 4;
+    rolling += speed / 4;
+  }
+  constexpr double tolerance = 1e-9;
+  const double radius = std::hypot(c.wheelbase_m / 2, c.track_m / 2);
+  const auto mode = start.actual_mode;
+  const double linear_limit = mode == DriveMode::Crab ? c.max_crab_speed_mps : c.max_vx_mps;
+  const double angular_limit = mode == DriveMode::Spin ? c.max_spin_radps : c.max_yaw_rate_radps;
+  const bool linear_triangle = mode == DriveMode::Spin || rolling <= linear_limit + tolerance;
+  const bool angular_triangle =
+      mode == DriveMode::Crab || rolling / radius <= angular_limit + tolerance;
+  if (linear_triangle && angular_triangle)
+    return true;
+  std::size_t budget = 4096;
+  auto certify = [&](auto &&self, double a, const EncoderSample &va, double b,
+                     const EncoderSample &vb, std::size_t depth) -> bool {
+    if (budget == 0)
+      return false;
+    --budget;
+    const double middle = (a + b) / 2, h = b - a;
+    const auto vm = encoder_sample(start, end, c, middle);
+    if (!within_body_limits(vm.velocity, mode, c))
+      return false;
+    auto scalar = [&](double from, double to, double derivative, double bound, double limit) {
+      const double peak = std::max(std::abs(from), std::abs(to));
+      const bool monotonic = std::abs(derivative) >= bound * h / 2;
+      return peak + (monotonic ? 0 : bound * h * h / 8) <= limit + tolerance;
+    };
+    const bool linear =
+        linear_triangle ||
+        (mode == DriveMode::Crab
+             ? std::max(std::hypot(va.velocity.vx, va.velocity.vy),
+                        std::hypot(vb.velocity.vx, vb.velocity.vy)) +
+                       second * h * h / 8 <=
+                   linear_limit + tolerance
+             : scalar(va.velocity.vx, vb.velocity.vx, vm.derivative.vx, second, linear_limit));
+    const bool angular =
+        angular_triangle ||
+        scalar(va.velocity.wz, vb.velocity.wz, vm.derivative.wz, second / radius, angular_limit);
+    if (linear && angular)
+      return true;
+    return depth < 14 && self(self, a, va, middle, vm, depth + 1) &&
+           self(self, middle, vm, b, vb, depth + 1);
+  };
+  return certify(certify, 0, first, 1, last, 0);
+}
 // Affine joint targets reach their endpoint at the end of the whole Drive tick.
 // Check pointwise rates, including both sides of a signed reversal. Moving
 // steering uses a conservative derivative bound for the encoder velocity field.
-inline bool drive_interpolation_admissible(const VehicleState &start, const VehicleState &end,
-                                           const Config &c, double dt) {
+inline bool drive_rates_admissible(const VehicleState &start, const VehicleState &end,
+                                   const Config &c, double dt) {
   const auto before = Kinematics(c).forward(start.wheel_speeds, start.steering_angles);
   bool fixed = true;
   double second = 0;
@@ -39,24 +131,10 @@ inline bool drive_interpolation_admissible(const VehicleState &start, const Vehi
   if (!fixed) {
     const double radius = std::hypot(c.wheelbase_m / 2, c.track_m / 2);
     double linear = 0, angular = 0;
-    const double x[] = {c.wheelbase_m / 2, c.wheelbase_m / 2, -c.wheelbase_m / 2,
-                        -c.wheelbase_m / 2};
-    const double y[] = {c.track_m / 2, -c.track_m / 2, c.track_m / 2, -c.track_m / 2};
     for (double f : {0.0, .5, 1.0}) {
-      double vx = 0, vy = 0, wz = 0;
-      for (std::size_t i = 0; i < 4; ++i) {
-        const double ds = end.wheel_speeds[i] - start.wheel_speeds[i];
-        const double da = end.steering_angles[i] - start.steering_angles[i];
-        const double angle = start.steering_angles[i] + f * da;
-        const double speed = start.wheel_speeds[i] + f * ds;
-        const double wx = (ds * std::cos(angle) - speed * da * std::sin(angle)) / dt;
-        const double wy = (ds * std::sin(angle) + speed * da * std::cos(angle)) / dt;
-        vx += wx / 4;
-        vy += wy / 4;
-        wz += (x[i] * wy - y[i] * wx) / (4 * radius * radius);
-      }
-      linear = std::max(linear, std::hypot(vx, vy));
-      angular = std::max(angular, std::abs(wz));
+      const auto sample = encoder_sample(start, end, c, f);
+      linear = std::max(linear, std::hypot(sample.derivative.vx, sample.derivative.vy) / dt);
+      angular = std::max(angular, std::abs(sample.derivative.wz) / dt);
     }
     // Every point is at most dt/4 from a derivative sample. This analytic
     // second-derivative bound encloses all unsampled rates, including cancellations.
@@ -79,5 +157,9 @@ inline bool drive_interpolation_admissible(const VehicleState &start, const Vehi
                                                             c.max_angular_accel_radps2,
                                                             c.max_angular_decel_radps2) +
                                                       1e-9;
+}
+inline bool drive_interpolation_admissible(const VehicleState &start, const VehicleState &end,
+                                           const Config &c, double dt) {
+  return drive_speed_admissible(start, end, c) && drive_rates_admissible(start, end, c, dt);
 }
 } // namespace swerve_mppi::detail
