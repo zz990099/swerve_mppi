@@ -44,6 +44,12 @@ public:
   // deliberately has no certified plan. Use an independent actuator watchdog.
   std::optional<ActuationPlan> plan(const VehicleState &measured,
                                   const ExecutionResult &execution) const;
+  // Nominal non-driving interval for planning-side safety checks. Preserves
+  // measured protocol feedback; it neither confirms a mode nor authorizes an
+  // executor request. Validate the returned interval/stop against constraints.
+  std::optional<ActuationPlan> plan_stopping(
+      const VehicleState &measured, Action action,
+      const std::array<double, 4> &steering_targets) const;
 
 private:
   Config config_;

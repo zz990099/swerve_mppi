@@ -11,7 +11,8 @@
 namespace swerve_mppi {
 Controller::Controller(const Config &config, std::shared_ptr<const TrajectoryValidator> validator)
     : validator_(validator ? std::move(validator) : std::make_shared<TrajectoryValidator>(config)),
-      safety_rollout_(config), config_(config), model_(config), optimizer_(config, validator_),
+      safety_rollout_(config), safety_actuation_(config), config_(config), model_(config),
+      optimizer_(config, validator_),
       scheduler_(config), mode_manager_(config), path_manager_(config), goal_manager_(config) {
   validator_->require_compatible(config_);
 }
@@ -92,8 +93,8 @@ Output Controller::compute(const ControllerInput &input) {
     out = compute_tracking(prepared);
     out.control_policy = ControlPolicy::Tracking;
   }
-  // Every non-driving healthy action must admit a complete stop under the
-  // current constraints, including terminal early returns and pending requests.
+  // Check the actual non-driving interval, including stationary steering,
+  // followed by its full stop. A brake-only trace cannot authorize alignment.
   if (out.action == Action::Brake || out.action == Action::Hold ||
       out.action == Action::RequestMode)
     out = check_stopping(prepared, std::move(out));
@@ -322,10 +323,14 @@ Output Controller::planning_stop(const ControllerInput &input) {
   return out;
 }
 Output Controller::check_stopping(const ControllerInput &input, Output out) {
-  safety_rollout_.generate_stop(input.vehicle, safety_trace_);
-  if (validator_->check(input, safety_trace_) == TrajectoryStatus::Valid &&
-      is_stopped(safety_trace_.final_state, config_))
-    return out;
+  const auto plan = safety_actuation_.plan_stopping(input.vehicle, out.action,
+                                                   out.steering_targets);
+  if (plan) {
+    safety_rollout_.generate_execution(*plan, safety_trace_);
+    if (validator_->check(input, safety_trace_) == TrajectoryStatus::Valid &&
+        is_stopped(safety_trace_.final_state, config_))
+      return out;
+  }
   optimizer_.reset();
   alignment_control_.reset();
   out.action = Action::SafeStop;

@@ -142,13 +142,18 @@ wheels can produce recoverable Brake/Hold. Otherwise
 UnsafeStoppingTrajectory produces SafeStop. Waiting/Blocked describes a checked
 planning stop awaiting fresh input, not completed navigation.
 
-In 0.8 every healthy Brake/Hold/RequestMode passes the same final stopping check,
-including normal capture early returns and committed mode handshakes. A valid normal
-stop retains its original navigation status and request payload. Rejection clears
-the payload and emits UnsafeStoppingTrajectory/SafeStop. RolloutEngine::generate_stop
-predicts zero wheel drive at retained measured steering even while mode confirmation
-is pending, without modifying mode, request ID or confirmation. Ordinary driving
-rollouts still require confirmed feedback. Stopping checks do not optimize motion.
+Every healthy Brake/Hold/RequestMode passes a final non-driving safety check,
+including normal capture early returns and committed mode handshakes. In 0.14.1,
+ActuationModel::plan_stopping models the actual first interval: proportional braking
+with retained steering, then any permitted Hold/RequestMode alignment in remaining
+stopped time. RolloutEngine::generate_execution appends its complete stopping tail.
+A brake-only trace must not authorize steering against fresh hard constraints.
+A valid normal stop retains its navigation status and immutable request payload;
+rejection clears the payload and emits UnsafeStoppingTrajectory/SafeStop.
+The nominal plan preserves measured mode, request ID and confirmation; it does not
+preview or commit the executor protocol. TimedExecutor remains the final authority
+for actual execution-time state and protocol effects. Ordinary driving rollouts
+still require confirmed feedback. Stopping checks do not optimize motion.
 
 ## Workspaces and diagnostics
 

@@ -1,8 +1,10 @@
-# Standalone execution protocol (0.12)
+# Standalone execution protocol (0.14.1)
 
-This contract is independent of ROS, Nav2 and Gazebo. ModeExecutor is a reference
-supervisor that can be used behind any transport or directly in core tests.
-It issues actuator targets; it does not simulate actuators or certify tracking.
+This contract is independent of ROS, Nav2 and Gazebo. TimedExecutor is the guarded
+integration entry point; execute only its returned ActuationPlan, sampled at the
+actuator rate. ModeExecutor is a low-level protocol supervisor used by that entry
+point and by core tests. Its endpoint arrays alone are not a complete checked
+actuator reference. Neither class simulates actuators or certifies physical tracking.
 
 ## Request and feedback
 
@@ -31,31 +33,74 @@ before enabling control; this is not a cross-process UUID protocol.
 
 ```cpp
 #include <swerve_mppi/controller.hpp>
-#include <swerve_mppi/executor.hpp>
+#include <swerve_mppi/timing.hpp>
 
 swerve_mppi::Config config;
-swerve_mppi::Controller controller(config);
-swerve_mppi::ModeExecutor executor(config, initial_actual_mode);
+auto validator = std::make_shared<swerve_mppi::TrajectoryValidator>(config);
+// Add bounded const hard constraints before sharing the validator.
+swerve_mppi::Controller controller(config, validator);
+swerve_mppi::TimedExecutor executor(config, session_id, initial_actual_mode, {}, validator);
+std::uint64_t sequence = 0;
 
-// Once per config.dt_s, using fresh measurements and the last executor feedback:
-const auto command = controller.compute(input);
-const auto execution = executor.update(command, input.vehicle);
-// Send execution.steering_targets and execution.wheel_speed_targets to actuators.
-// After collecting the next measured pose/twist/encoders, map feedback:
-input.vehicle.actual_mode = execution.feedback.actual_mode;
-input.vehicle.mode_confirmed = execution.feedback.confirmed;
-input.vehicle.mode_fault = execution.feedback.fault;
-input.vehicle.mode_request_id = execution.feedback.request_id;
-input.vehicle.time_in_mode_s = execution.feedback.time_in_mode_s;
+// Once per config.dt_s. Capture the task from the actual planning observation.
+const auto command = controller.compute(planning_input);
+const swerve_mppi::CommandEnvelope envelope{
+    session_id, ++sequence, issued_at_s, command,
+    planning_input.vehicle.stamp_s, application_time_s, valid_until_s,
+    swerve_mppi::CommandTask::capture(planning_input)};
+// latest_input describes the application instant, including current constraints.
+const auto guarded = executor.update(envelope, latest_input, application_time_s);
+if (guarded.actuation) {
+  // Adapter retains a copy for its high-rate actuator callback. This can also
+  // be a checked stopping fallback when the queued command was rejected.
+  adapter.install_profile(*guarded.actuation, application_time_s);
+} else {
+  adapter.emergency_stop(); // Independent watchdog behavior, no certified profile.
+}
+// Map protocol feedback alongside the NEXT measured pose/twist/encoders:
+const auto &feedback = guarded.execution.feedback;
+next_input.vehicle.actual_mode = feedback.actual_mode;
+next_input.vehicle.mode_confirmed = feedback.confirmed;
+next_input.vehicle.mode_fault = feedback.fault;
+next_input.vehicle.mode_request_id = feedback.request_id;
+next_input.vehicle.time_in_mode_s = feedback.time_in_mode_s;
 // Advance stamp_s from the actual measurement clock, not wall-clock prediction.
 ```
 
-This is a mapping sketch: initial_actual_mode, input and the actuator/measurement
-functions belong to the caller. Initialize the executor with verified actual
-mode; this does not measure or automatically discover the chassis configuration.
+This is a mapping sketch: the input snapshots, truthful scheduling times, nonzero
+session_id, verified initial_actual_mode and adapter functions belong to the caller.
+The declarations are one-time setup; only the cycle repeats. All times use one
+clock and source_stamp <= issued_at <= application_time <= valid_until.
+latest_input.vehicle.stamp_s must describe application_time_s, not an old sample
+whose timestamp was rewritten. For stepped tests, observe at the application
+boundary; real-time integration requires explicit state time alignment.
+
+The adapter's actuator callback consumes the installed profile, not the raw
+execution endpoint arrays:
+
+```cpp
+const auto targets = active_plan.sample(now_s - profile_application_time_s);
+if (targets) {
+  // wheel_speeds are linear m/s; divide by config.wheel_radius_m for joint rad/s.
+  adapter.publish_joint_targets(*targets, config.wheel_radius_m);
+} else {
+  adapter.emergency_stop(); // Never extrapolate or hold an expired Drive.
+}
+```
+
+Run serial executor ticks and a missing-command watchdog update even if planning
+does not produce a result. Replace the profile at each validated application
+boundary; no previous profile authorizes the next tick. Treat diagnostics from
+guarded as authoritative: a rejected planner Output must not report completion.
+
+Initialize the executor with verified actual mode; this does not measure or
+automatically discover the chassis configuration.
 For a nondefault startup request ID, initialize it through reset(recovered) before
 normal updates. Do not run two supervisors against the same actuators. A hardware
-or simulator supervisor can implement the same protocol instead of ModeExecutor.
+or simulator supervisor can implement the same protocol instead of ModeExecutor,
+but must also implement execution-time trajectory checks, timing/task guards and
+the sampled actuator contract. Raw ModeExecutor is suitable for protocol tests;
+it does not independently check obstacles or injected TrajectoryConstraint objects.
 
 The first request is accepted only in Stable. A higher ID cannot replace an
 active transition. The same ID and identical payload is an idempotent retry;
@@ -161,14 +206,22 @@ Invalid inputs, model failures and handshake failures also remain SafeStop.
 These predictive checks do not establish braking safety for uncalibrated actuators
 or tire slip.
 
-Version 0.8 also checks every normal Brake/Hold/RequestMode against fresh stopping
+Every normal Brake/Hold/RequestMode is checked against fresh stopping
 constraints before publication. This includes goal settling, yaw/mode-dwell waits,
 external motion after completion and pending explicit handshakes. Successful normal
 stops keep their navigation state and immutable request; they do not become
 Waiting/Blocked. Rejection clears the request and emits UnsafeStoppingTrajectory,
-so ModeExecutor cancels the transition and latches fault. The stopping rollout
-retains measured steering, actual mode, request ID and unconfirmed feedback;
-checking a stop never grants drive permission or synthesizes an acknowledgement.
+so ModeExecutor cancels the transition and latches fault. Since 0.14.1 this check
+uses ActuationModel::plan_stopping and RolloutEngine::generate_execution: the actual
+first non-driving interval, including permitted stationary steering, followed by a
+complete braking tail. Brake retains measured steering; Hold/RequestMode may align
+only after complete proportional braking and only when initial feedback permits
+handover. A pure brake trace cannot authorize a pending alignment against newly
+changed hard constraints. The nominal check preserves actual mode, request ID and
+unconfirmed feedback; it never grants drive permission or synthesizes an
+acknowledgement. It does not preview protocol state; TimedExecutor still checks the
+actual supervisor result at execution. Use plan_stopping for nominal prediction,
+not as a substitute for the guarded execution entry point.
 
 Version 0.10 also gates every first Drive plus its complete stopping continuation
 through that validator. `stopping_horizon_steps` is an independent bounded budget

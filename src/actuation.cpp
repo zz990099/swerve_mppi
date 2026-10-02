@@ -21,6 +21,11 @@ bool valid_phase(TransitionPhase phase) {
   return phase == TransitionPhase::Stable || phase == TransitionPhase::Braking ||
          phase == TransitionPhase::Aligning || phase == TransitionPhase::AwaitingConfirmation;
 }
+bool valid_endpoint(const StepResult &endpoint, const Config &config) {
+  return detail::valid_vehicle(endpoint.state, config) &&
+         std::isfinite(endpoint.sweep_margin_m) && endpoint.sweep_margin_m >= 0 &&
+         std::isfinite(endpoint.integration_error_m) && endpoint.integration_error_m >= 0;
+}
 } // namespace
 bool ActuationPlan::compatible_with(const Config &config) const {
   return model_parameters_ == model_parameters(config);
@@ -53,6 +58,27 @@ std::optional<ActuatorTargets> ActuationPlan::sample(double elapsed_s) const {
 }
 
 ActuationModel::ActuationModel(const Config &config) : config_(config), kinematics_(config) {}
+std::optional<ActuationPlan> ActuationModel::plan_stopping(
+    const VehicleState &measured, Action action,
+    const std::array<double, 4> &steering_targets) const {
+  if (!detail::valid_vehicle(measured, config_) || measured.mode_fault ||
+      !detail::valid_steering(steering_targets, config_) ||
+      (action != Action::Brake && action != Action::Hold && action != Action::RequestMode))
+    return std::nullopt;
+  ActuationPlan out;
+  out.start_ = measured;
+  out.action_ = action;
+  out.duration_s_ = config_.dt_s;
+  out.steering_rate_radps_ = config_.max_steer_rate_radps;
+  out.model_parameters_ = model_parameters(config_);
+  const auto &targets = action == Action::Brake ? measured.steering_angles : steering_targets;
+  out.braking_duration_s_ = detail::braking_duration(measured, config_);
+  out.may_align_ = action != Action::Brake && is_stopped(measured, config_);
+  out.endpoint_ = detail::stopping_step(measured, targets, config_, config_.dt_s);
+  if (!valid_endpoint(out.endpoint_, config_))
+    return std::nullopt;
+  return out;
+}
 std::optional<ActuationPlan> ActuationModel::plan(const VehicleState &measured,
                                                const ExecutionResult &execution) const {
   if (!detail::valid_vehicle(measured, config_) || measured.mode_fault ||
@@ -90,11 +116,10 @@ std::optional<ActuationPlan> ActuationModel::plan(const VehicleState &measured,
     for (double speed : execution.wheel_speed_targets)
       if (speed != 0)
         return std::nullopt;
-    const auto &targets = execution.action == Action::Brake ? measured.steering_angles
-                                                            : execution.steering_targets;
-    out.braking_duration_s_ = detail::braking_duration(measured, config_);
-    out.may_align_ = execution.action != Action::Brake && is_stopped(measured, config_);
-    out.endpoint_ = detail::stopping_step(measured, targets, config_, config_.dt_s);
+    const auto stopping = plan_stopping(measured, execution.action, execution.steering_targets);
+    if (!stopping)
+      return std::nullopt;
+    out = *stopping;
   } else
     return std::nullopt;
   out.endpoint_.state.actual_mode = execution.feedback.actual_mode;
@@ -102,9 +127,7 @@ std::optional<ActuationPlan> ActuationModel::plan(const VehicleState &measured,
   out.endpoint_.state.mode_fault = execution.feedback.fault;
   out.endpoint_.state.mode_request_id = execution.feedback.request_id;
   out.endpoint_.state.time_in_mode_s = execution.feedback.time_in_mode_s + config_.dt_s;
-  if (!detail::valid_vehicle(out.endpoint_.state, config_) ||
-      !std::isfinite(out.endpoint_.sweep_margin_m) || out.endpoint_.sweep_margin_m < 0 ||
-      !std::isfinite(out.endpoint_.integration_error_m) || out.endpoint_.integration_error_m < 0)
+  if (!valid_endpoint(out.endpoint_, config_))
     return std::nullopt;
   return out;
 }

@@ -174,6 +174,52 @@ void test_proportional_brake_and_phased_alignment() {
   malformed.wheel_speed_targets[0] = std::numeric_limits<double>::quiet_NaN();
   check(!model.plan(input(1.1).vehicle, malformed), "nonfinite stopping targets must be rejected");
 }
+void test_planning_stop_preserves_feedback_and_full_braking() {
+  Config c;
+  ActuationModel model(c);
+  RolloutEngine rollout(c);
+  auto in = input();
+  in.vehicle.mode_confirmed = false;
+  in.vehicle.mode_request_id = 17;
+  const std::array<double, 4> targets{.4, .4, .4, .4};
+  for (double speed : {0.0, .004, .3}) {
+    in.vehicle.wheel_speeds.fill(speed);
+    in.vehicle.velocity = {speed, 0, 0};
+    for (auto action : {Action::Brake, Action::Hold, Action::RequestMode}) {
+      const auto plan = model.plan_stopping(in.vehicle, action, targets);
+      check(plan.has_value(), "unconfirmed feedback must permit nominal non-driving checks");
+      Trajectory trace;
+      rollout.generate_execution(*plan, trace);
+      const double expected_angle = action != Action::Brake && speed <= c.stopped_wheel_speed_mps
+          ? std::min(.4, c.max_steer_rate_radps * (c.dt_s - speed / c.max_linear_decel_mps2))
+          : 0;
+      const auto end = plan->sample(c.dt_s);
+      check(trace.valid && close(trace.final_state.pose.x, speed * speed /
+                                  (2 * c.max_linear_decel_mps2)) &&
+                trace.final_state.wheel_speeds == std::array<double, 4>{} &&
+                close(end->steering_angles[0], expected_angle) &&
+                close(trace.final_state.steering_angles[0], expected_angle) &&
+                !trace.final_state.mode_confirmed && !trace.final_state.mode_fault &&
+                trace.final_state.mode_request_id == 17 &&
+                trace.final_state.actual_mode == in.vehicle.actual_mode,
+            "planning checks must retain feedback, full braking distance and phased steering");
+    }
+  }
+  check(!model.plan_stopping(in.vehicle, Action::Drive, targets) &&
+            !model.plan_stopping(in.vehicle, Action::SafeStop, targets),
+        "a nominal stopping check cannot authorize Drive or certify emergency dynamics");
+  auto bad_targets = targets;
+  bad_targets[0] = std::numeric_limits<double>::quiet_NaN();
+  check(!model.plan_stopping(in.vehicle, Action::Hold, bad_targets),
+        "nonfinite steering cannot produce a nominal plan");
+  in.vehicle.mode_fault = true;
+  check(!model.plan_stopping(in.vehicle, Action::Hold, targets),
+        "faulted measured feedback cannot produce a normal stopping plan");
+  in.vehicle.mode_fault = false;
+  in.vehicle.stamp_s = -1;
+  check(!model.plan_stopping(in.vehicle, Action::Brake, targets),
+        "invalid measured feedback cannot produce a normal stopping plan");
+}
 void test_delayed_drive_revalidated_at_latest_pose() {
   Config c;
   auto old = input();
@@ -444,6 +490,7 @@ int main() {
   try {
     test_drive_profile_and_independent_motion();
     test_proportional_brake_and_phased_alignment();
+    test_planning_stop_preserves_feedback_and_full_braking();
     test_delayed_drive_revalidated_at_latest_pose();
     test_latest_obstacles_and_unsafe_stop_latch();
     test_commands_bound_to_originating_task();

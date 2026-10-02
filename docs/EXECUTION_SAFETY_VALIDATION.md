@@ -99,3 +99,48 @@ The configured decelerations specify a nominal commanded curve, not a minimum
 guaranteed physical capability. Braking/steering response, latency and slip still
 require independent simulation calibration. Latency prediction, uncertainty
 envelopes, solver deadlines and tighter tracking objectives remain later work.
+
+## 0.14.1 non-driving review correction
+
+Baseline: `4ce39be44dcbd2c690f61756912face153979f83`; verified 2026-10-02.
+The review reproduced a pending Spin retry that passed Controller's retained-angle
+braking check but continued steering against a fresh injected hard constraint.
+TimedExecutor already rejected the actual interval; the direct planning/protocol
+path did not. The constraint is const and activated by fresh input context, not
+by mutating the shared validator during a solve.
+
+Controller now builds the actual Brake/Hold/RequestMode first interval through
+ActuationModel::plan_stopping, then validates RolloutEngine::generate_execution's
+complete stopping continuation. Guarded execution uses the same non-driving model.
+The nominal helper preserves measured mode, confirmation and request ID; it never
+predicts an acknowledgement or commits a protocol state. Unsafe alignment produces
+UnsafeStoppingTrajectory/SafeStop with retained measured steering and no request.
+TimedExecutor remains responsible for the actual execution-time protocol result.
+
+Regressions cover direct and guarded Controller paths, safe immutable retries,
+freshly forbidden steering, zero and 0.004 m/s residual wheel motion, and a queued
+retry rejected independently at execution. Once committed, a Brake cannot cancel
+a transition; if its continued alignment is forbidden, the guarded fallback must
+latch fault. Nominal profile tests retain unconfirmed feedback/ID 17 and verify
+analytic full braking distance, phased steering and rejection of invalid inputs.
+
+Fresh local CMake builds (GNU 13.3.0, C++17, `-Werror`) passed:
+
+| Check | Result |
+| --- | --- |
+| Release CTest, including install and allocation checks | 38/38 |
+| Debug CTest, same matrix | 38/38 |
+| Behavior runs in each configuration, direct plus guarded | 140/140 |
+| ASan + UBSan core suites, non-PIE, `detect_leaks=0` | 8/8 |
+| Main documented guarded cycle and sampling callback with stub adapter | Compiled and passed |
+
+The new safety regression failed on the baseline before the fix. CMake/Ninja were
+installed into the temporary validation environment for this review, so the
+installed-consumer results above are local results as well as CI checks.
+LeakSanitizer cannot inspect this environment's `/proc` tasks; leak checking is
+not claimed. The primary integration example now installs/samples the guarded
+profile, handles checked fallback and emergency behavior, and never publishes raw
+endpoint arrays. Rebuild consumers because Controller's private layout changed.
+
+This correction does not add ROS/Gazebo transport, feedback-consistency admission,
+solver deadlines, slip/latency uncertainty or physical actuator calibration.

@@ -103,7 +103,7 @@ period ratios are not supported yet.
   return no target. SafeStop has no certified normal-braking profile.
 
 See [docs/EXECUTION_CONTRACT.md](docs/EXECUTION_CONTRACT.md) for the transport-free
-ModeExecutor API, feedback mapping, cancellation and timing contract.
+guarded execution cycle, feedback mapping, cancellation and timing contract.
 
 ## Measurement tools
 
@@ -113,6 +113,15 @@ See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for commands and measurement limi
 The optional allocation regression runs in CI; wall-clock timing is not a CI gate.
 
 ## Current status
+
+Version 0.14.1 validates the actual Brake/Hold/RequestMode interval and its full
+stopping tail before Controller publication, including alignment during pending
+mode retries. A stationary brake alone cannot authorize steering against newly
+changed hard constraints. Planning and guarded execution share ActuationModel's
+non-driving profile; nominal checks preserve measured mode feedback and never
+synthesize confirmation. Use the guarded cycle in the execution contract for
+integration, and sample its checked ActuationPlan at the actuator rate.
+Rebuild consumers against 0.14.1 because Controller's private layout changed.
 
 Version 0.14 adds execution-time safety validation and a checked actuator profile.
 TimedExecutor now requires a current ControllerInput and complete scheduling/source

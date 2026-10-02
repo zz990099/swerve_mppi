@@ -13,8 +13,10 @@ struct ExecutionResult {
 };
 
 // Transport-independent reference supervisor, not an actuator/dynamics simulator.
-// The caller supplies fresh measured body/joint state and applies the returned
-// targets through a rate-limited actuator layer. Zero drive never erases a mode.
+// The caller supplies fresh measured body/joint state. Use TimedExecutor for
+// integration-time trajectory/timing/task checks and sample its ActuationPlan;
+// raw endpoint targets do not encode the full actuator reference. Zero drive
+// never erases a mode.
 class ModeExecutor {
 public:
   explicit ModeExecutor(const Config &config, DriveMode initial_mode = DriveMode::DualAckermann);

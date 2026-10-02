@@ -25,6 +25,7 @@ private:
                                         Control control);
   std::shared_ptr<const TrajectoryValidator> validator_;
   RolloutEngine safety_rollout_;
+  ActuationModel safety_actuation_;
   Trajectory safety_trace_;
   Config config_;
   DriveModel model_;
