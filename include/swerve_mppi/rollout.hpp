@@ -1,6 +1,7 @@
 #pragma once
 
 #include "swerve_mppi/model.hpp"
+#include "swerve_mppi/actuation.hpp"
 
 namespace swerve_mppi {
 struct Branch {
@@ -33,6 +34,10 @@ public:
   // Zero drive with measured steering retained. Braking must remain checkable
   // during an unconfirmed mode transition; it never synthesizes confirmation.
   void generate_stop(const VehicleState &initial, Trajectory &out) const;
+
+  // Exact checked joint interval, followed by a complete proportional stop.
+  // Does not reconstruct an ideal control from the endpoint body twist.
+  void generate_execution(const ActuationPlan &plan, Trajectory &out) const;
 
   // Commit entry/alignment through the first Drive, then brake to zero. Uses
   // stopping_horizon_steps rather than the optimization horizon; fails closed.

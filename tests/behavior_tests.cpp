@@ -1,5 +1,6 @@
 #include "behavior_fixture.hpp"
 #include "swerve_mppi/controller.hpp"
+#include "swerve_mppi/timing.hpp"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -9,11 +10,12 @@
 using namespace swerve_mppi;
 namespace {
 using namespace swerve_mppi::test;
-void run(const std::string &scenario, unsigned seed) {
+void run(const std::string &scenario, unsigned seed, bool timed) {
   Config c;
   c.random_seed = seed;
   Controller controller(c);
   ModeExecutor executor(c);
+  TimedExecutor timed_executor(c, 1);
   auto input = scenario_input(scenario);
   const auto goal = input.reference_path.back();
   int hold = 0, stalled = 0, max_stalled = 0, switches = 0;
@@ -51,7 +53,18 @@ void run(const std::string &scenario, unsigned seed) {
         break;
     }
     check(command.action != Action::SafeStop, "controller unexpectedly stopped");
-    const auto result = executor.update(command, input.vehicle);
+    ExecutionResult result;
+    if (timed) {
+      const double now = input.vehicle.stamp_s;
+      CommandEnvelope envelope{1, static_cast<std::uint64_t>(tick + 1), now, command,
+                               now, now, now + .025};
+      const auto guarded = timed_executor.update(envelope, input, now);
+      check(guarded.timing_error == TimingError::None &&
+                guarded.safety_error == ExecutionSafetyError::None && guarded.actuation,
+            "default behavior must pass execution-time validation without a fallback");
+      result = guarded.execution;
+    } else
+      result = executor.update(command, input.vehicle);
     if (result.feedback.fault) {
       std::cerr << "fault scenario=" << scenario << " seed=" << seed << " tick=" << tick
                 << " mode=" << static_cast<int>(input.vehicle.actual_mode)
@@ -119,13 +132,15 @@ void run(const std::string &scenario, unsigned seed) {
 } // namespace
 int main(int argc, char **argv) {
   try {
-    check(argc == 2 || argc == 3, "a scenario and optional seed are required");
-    if (argc == 3) {
-      run(argv[1], std::stoul(argv[2]));
+    const bool timed = argc > 2 && std::string(argv[argc - 1]) == "--timed";
+    const int arguments = argc - (timed ? 1 : 0);
+    check(arguments == 2 || arguments == 3, "usage: behavior_tests scenario [seed] [--timed]");
+    if (arguments == 3) {
+      run(argv[1], std::stoul(argv[2]), timed);
       return 0;
     }
     for (unsigned seed : {1u, 7u, 42u, 73u, 101u})
-      run(argv[1], seed);
+      run(argv[1], seed, timed);
     return 0;
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';

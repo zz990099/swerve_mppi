@@ -8,7 +8,10 @@ int main() {
   hold.action = swerve_mppi::Action::Hold;
   auto result = executor.update(hold, {});
   swerve_mppi::TimedExecutor timed(swerve_mppi::Config{}, 1);
-  const auto guarded = timed.update(swerve_mppi::CommandEnvelope{1, 1, 0, hold}, {}, 0);
+  swerve_mppi::ControllerInput current;
+  current.reference_path = {{0, 0, 0}};
+  const auto guarded = timed.update(swerve_mppi::CommandEnvelope{1, 1, 0, hold, 0, 0, .025}, current, 0);
+  const auto midpoint = guarded.actuation ? guarded.actuation->sample(.05) : std::nullopt;
   swerve_mppi::TrajectoryValidator validator(swerve_mppi::Config{});
   validator.require_compatible(swerve_mppi::Config{});
   const auto residual =
@@ -28,7 +31,9 @@ int main() {
   const auto path = paths.update(input);
   return controller.compute({}).action == swerve_mppi::Action::SafeStop &&
                  result.feedback.confirmed &&
-                 guarded.timing_error == swerve_mppi::TimingError::None && residual == 0 &&
+                 guarded.timing_error == swerve_mppi::TimingError::None &&
+                 guarded.safety_error == swerve_mppi::ExecutionSafetyError::None && midpoint &&
+                 midpoint->wheel_speeds[0] == 0 && residual == 0 &&
                  correction == 0 && legacy_correction == 0 && stop.valid && continuation.valid &&
                  continuation.sweep_margins_m.size() + 1 == continuation.poses.size() &&
                  continuation.position_error_m >= 0 && step.sweep_margin_m >= 0 &&
