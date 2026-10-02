@@ -11,6 +11,45 @@ RolloutEngine::RolloutEngine(const Config &config)
 void RolloutEngine::generate_stop(const VehicleState &initial, Trajectory &out) const {
   stopping_rollout(initial, {initial.actual_mode, 0, false}, nullptr, out);
 }
+void RolloutEngine::generate_execution(const ActuationPlan &plan, Trajectory &out) const {
+  out.valid = false;
+  out.poses.clear();
+  out.sweep_margins_m.clear();
+  out.controls.clear();
+  out.active_controls.clear();
+  out.position_error_m = 0;
+  out.branch = {plan.start().actual_mode, 0, false};
+  out.final_state = plan.start();
+  if (!plan.compatible_with(config_) || !detail::valid_vehicle(plan.start(), config_) ||
+      !detail::valid_vehicle(plan.endpoint().state, config_))
+    return;
+  out.poses.push_back(plan.start().pose);
+  detail::append_motion(plan.endpoint(), &out.poses, &out.sweep_margins_m, out.position_error_m);
+  out.final_state = plan.endpoint().state;
+  out.controls.push_back({out.final_state.velocity.vx, out.final_state.velocity.vy,
+                          out.final_state.velocity.wz});
+  out.active_controls.push_back(plan.action() == Action::Drive);
+  std::size_t steps = 1;
+  auto at_rest = [&]() {
+    return out.final_state.velocity.vx == 0 && out.final_state.velocity.vy == 0 &&
+           out.final_state.velocity.wz == 0 &&
+           std::all_of(out.final_state.wheel_speeds.begin(), out.final_state.wheel_speeds.end(),
+                       [](double speed) { return speed == 0; });
+  };
+  while (!at_rest()) {
+    if (steps >= config_.stopping_horizon_steps)
+      return;
+    const auto next = model_.step(out.final_state, {}, config_.dt_s);
+    if (!next.valid)
+      return;
+    out.final_state = next.state;
+    detail::append_motion(next, &out.poses, &out.sweep_margins_m, out.position_error_m);
+    out.controls.push_back({});
+    out.active_controls.push_back(false);
+    ++steps;
+  }
+  out.valid = true;
+}
 void RolloutEngine::generate_continuation(const VehicleState &initial, const Branch &branch,
                                           const Control &first_control, Trajectory &out) const {
   stopping_rollout(initial, branch, &first_control, out);

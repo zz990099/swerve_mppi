@@ -3,6 +3,16 @@
 #include "motion_profile.hpp"
 
 namespace swerve_mppi::detail {
+inline double braking_duration(const VehicleState &start, const Twist2d &before, const Config &c) {
+  double duration = std::max(std::hypot(before.vx, before.vy) / c.max_linear_decel_mps2,
+                             std::abs(before.wz) / c.max_angular_decel_radps2);
+  for (double speed : start.wheel_speeds)
+    duration = std::max(duration, std::abs(speed) / c.max_wheel_accel_mps2);
+  return duration;
+}
+inline double braking_duration(const VehicleState &start, const Config &c) {
+  return braking_duration(start, Kinematics(c).forward(start.wheel_speeds, start.steering_angles), c);
+}
 // Hold/RequestMode may align after the complete proportional brake, using only
 // the remaining tick time. A stopped threshold never authorizes rolling steering.
 inline StepResult stopping_step(const VehicleState &start,
@@ -12,10 +22,7 @@ inline StepResult stopping_step(const VehicleState &start,
   out.state = start;
   out.steering_targets = steering_targets;
   const auto before = Kinematics(c).forward(start.wheel_speeds, start.steering_angles);
-  double duration = std::max(std::hypot(before.vx, before.vy) / c.max_linear_decel_mps2,
-                             std::abs(before.wz) / c.max_angular_decel_radps2);
-  for (double speed : start.wheel_speeds)
-    duration = std::max(duration, std::abs(speed) / c.max_wheel_accel_mps2);
+  const double duration = braking_duration(start, before, c);
   const double scale = duration > 0 ? std::max(0.0, 1 - dt / duration) : 0;
   for (std::size_t i = 0; i < 4; ++i)
     out.state.wheel_speeds[i] = start.wheel_speeds[i] * scale;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "swerve_mppi/model.hpp"
+#include "validation.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -161,5 +162,37 @@ inline bool drive_rates_admissible(const VehicleState &start, const VehicleState
 inline bool drive_interpolation_admissible(const VehicleState &start, const VehicleState &end,
                                            const Config &c, double dt) {
   return drive_speed_admissible(start, end, c) && drive_rates_admissible(start, end, c, dt);
+}
+// Shared by the protocol supervisor and the checked actuator reference.
+inline bool drive_targets_admissible(const VehicleState &start,
+                                    const std::array<double, 4> &angles,
+                                    const std::array<double, 4> &speeds, const Config &c) {
+  if (!valid_vehicle(start, c) || !valid_steering(angles, c))
+    return false;
+  for (std::size_t i = 0; i < 4; ++i) {
+    const double delta = std::abs(angles[i] - start.steering_angles[i]);
+    if (!std::isfinite(speeds[i]) || std::abs(speeds[i]) > c.max_wheel_speed_mps + 1e-9 ||
+        delta > c.drive_steering_limit_rad + 1e-9 || delta > c.max_steer_rate_radps * c.dt_s + 1e-9)
+      return false;
+  }
+  const Kinematics kinematics(c);
+  VehicleState end = start;
+  end.steering_angles = angles;
+  end.wheel_speeds = speeds;
+  end.velocity = kinematics.forward(speeds, angles);
+  if (!within_body_limits(end.velocity, start.actual_mode, c) ||
+      !drive_interpolation_admissible(start, end, c, c.dt_s) ||
+      kinematics.max_module_residual(speeds, angles, end.velocity) >
+          c.drive_kinematic_tolerance_mps + 1e-9)
+    return false;
+  const auto projected = DriveModel(c).project(
+      {end.velocity.vx, end.velocity.vy, end.velocity.wz}, start.actual_mode);
+  double maximum_speed = 0;
+  for (double speed : speeds)
+    maximum_speed = std::max(maximum_speed, std::abs(speed));
+  const double linear_error = maximum_speed * c.drive_steering_limit_rad + 1e-7;
+  const double radius = std::hypot(c.wheelbase_m / 2, c.track_m / 2);
+  return std::hypot(end.velocity.vx - projected.vx, end.velocity.vy - projected.vy) <= linear_error &&
+         std::abs(end.velocity.wz - projected.wz) <= linear_error / radius;
 }
 } // namespace swerve_mppi::detail

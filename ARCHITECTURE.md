@@ -14,7 +14,9 @@ Nav2 controller plugin belong in separate adapter packages.
 | ModeScheduler | Enumerate keep/single-switch branches; enforce dwell and switch hysteresis before selection. |
 | ModeManager | Commit a frozen entry request; gate handover on its matching ID and measured state. |
 | ModeExecutor | Persist actual mode; supervise braking/alignment, acknowledge requests and latch execution faults. |
-| TimingGuard / TimedExecutor | Enforce clock/cadence, fresh feedback and ordered command envelopes; latch timing failures and renew sessions on recovery. |
+| TimingGuard | Check clock/cadence, observation and command age, source/scheduled execution metadata and ordered envelopes. |
+| TimedExecutor | Transactionally preview execution, validate its exact joint interval/full stop against current context, commit or use checked braking; latch timing/protocol/unsafe-stop faults. |
+| ActuationModel / ActuationPlan | Build a checked actuator reference and expose affine Drive or proportional braking followed by stationary alignment samples. |
 | Optimizer | Optimize continuous controls inside one branch; advance only an accepted keep-mode warm start. |
 | NoiseGenerator | Seeded Gaussian proposals, effective projected perturbations and control-noise correction. |
 | RolloutEngine | Generate an inspectable pose horizon and mark ticks consumed by transitions. |
@@ -300,3 +302,33 @@ An independent encoder fixture with 64 substeps per tick checks completion,
 measured stopping, one second of post-completion Hold, path error, mode changes
 and unfinished stationary intervals. These are standalone regressions, not a
 calibrated plant or Gazebo benchmark. See docs/VALIDATION.md for measured results.
+
+
+## Execution-time validation (0.14)
+
+Controller validation certifies a plan at its planning observation. A queued plan
+must be revalidated at execution: the robot or obstacles may have changed during
+computation/transport even when all timestamps remain within their age limits.
+TimedExecutor takes current ControllerInput and a source/scheduled/expiry-stamped
+CommandEnvelope. TimingGuard remains separately usable for transport checks.
+The envelope owns its originating task ID, heading policy and full ordered path.
+TimedExecutor rejects a missing/mismatched snapshot before any supervisor preview,
+even if the old command remains mechanically and collision valid. TaskMismatch uses
+the same independently checked stopping fallback; a fresh command for the latest
+task can recover without resetting healthy execution.
+
+The supervisor is copied for a transactional preview. ActuationModel converts that
+ExecutionResult and the execution-start state into a checked ActuationPlan.
+RolloutEngine::generate_execution integrates this exact joint interval and a full
+stop; the shared TrajectoryValidator applies current circular obstacles and
+injected hard constraints. Only a valid continuation commits the preview. A rejected
+command gets a separate checked stopping preview; unsafe stopping latches SafeStop.
+New request IDs are not consumed by a rejected preview. Healthy output contains the
+same ActuationPlan the validator checked, for high-rate target sampling.
+
+The actuator reference is production code. The behavior fixture retains independent
+encoder equations/integration as a test oracle. No ROS/Gazebo transport, global
+reacquisition, solver deadline or physical actuator calibration is added here.
+The current state must describe the application instant; estimated states and
+uncertainty envelopes require an explicit adapter/model contract. A timestamp
+rewrite alone does not time-align stale measurements.
