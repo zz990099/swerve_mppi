@@ -55,7 +55,8 @@ Startup/recovery order:
 2. Reset Controller, TimedExecutor with a strictly newer session, and ProfileRunner.
    Drain stale queues. Endpoint session numbers must increase across sender restarts.
 3. Send a zero-wheel arm packet with measured steering and a new endpoint session.
-   Immediately stream fresh zero targets while awaiting a matching healthy status.
+   Retransmit that identical frozen arm while awaiting a matching healthy status;
+   retries cannot renew deadlines. Then stream fresh targets.
    Recovery acknowledgement alone does not authorize Drive; core validation still does.
 4. Install a checked profile at its application boundary, sample at actuator rate,
    and publish each sample with a short validity window. Preserve exclusive ownership.
