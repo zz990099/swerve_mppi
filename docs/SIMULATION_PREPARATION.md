@@ -7,9 +7,21 @@ MPPI tracking acceptance remain integration work.
 
 ## Coherent feedback and scheduling
 
-`FeedbackAdapter::make` accepts one complete named encoder observation, one pose
-at exactly the same source stamp, executor-owned ModeFeedback and the application
-stamp. It rejects mismatched stamps, partial or duplicate required joints, more
+For ROS ingress use `FeedbackAdapter::make_at_nanoseconds`: retain the original
+integer `stamp_ns` in JointObservation and StampedPose, and pass the original
+integer application stamp. It compares all three exactly **before** converting
+once to core seconds. Adjacent nanoseconds are rejected even at large epochs where
+their double representations coincide. Missing/negative integer stamps are invalid;
+the legacy `stamp_s` fields are ignored by this entry point.
+
+The portable `make` seconds entry point remains available for non-ROS callers.
+It permits only four scaled machine epsilons of conversion roundoff, without a
+fixed nanosecond or freshness allowance. It cannot prove nanosecond identity at
+large epochs; do not use it as the ROS synchronization boundary.
+
+Both entry points accept one complete named encoder observation, one pose,
+executor-owned ModeFeedback and the application stamp. They reject mismatched
+stamps, partial or duplicate required joints, more
 than 64 joint names, nonfinite data and inadmissible nominal feedback. Joint order
 may vary; required names are `<prefix>{fl,fr,rl,rr}_{steering,wheel}_joint`.
 It converts wheel rad/s into linear m/s and computes body-frame FK from that same
@@ -19,7 +31,7 @@ The helper never combines separate odometry twist with encoders or rewrites a
 stale measurement stamp. Encoder FK agrees by construction; it does not establish
 physical no-slip motion.
 
-The equality check deliberately does not solve asynchronous transport latency.
+The source-stamp equality check deliberately does not solve asynchronous transport latency.
 For the first controlled test, pause/step the simulator at model boundaries and
 collect a coherent snapshot, run planning with the physics paused, validate/install
 at that boundary, then execute the next 0.1 s interval while sampling at >=100 Hz.

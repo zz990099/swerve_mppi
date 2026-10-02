@@ -2,6 +2,7 @@
 #include "swerve_mppi/controller.hpp"
 #include "swerve_mppi/feedback_adapter.hpp"
 #include "swerve_mppi/profile_runner.hpp"
+#include <chrono>
 #include <iostream>
 #include <limits>
 using namespace swerve_mppi;
@@ -40,6 +41,40 @@ int main() {
           "raw snapshots cannot be restamped to application time");
     check(adapter.make(j, {pose.pose, .99}, {}, 1).error == SnapshotError::Unsynchronized,
           "pose and encoder stamp must agree");
+    {
+      auto exact = j;
+      exact.stamp_s = 1 + 5000000 * 1e-9;
+      const double clock = 1005000000LL * 1e-9;
+      check(exact.stamp_s != clock, "regression must exercise different floating conversions");
+      check(adapter.make(exact, {pose.pose, clock}, {}, clock).state.has_value(),
+            "same source time with conversion roundoff must be admitted");
+      check(!adapter.make(exact, {pose.pose, clock + 1e-9}, {}, clock).state,
+            "floating conversion allowance cannot hide a real nanosecond mismatch");
+      exact.stamp_ns = 1005000000LL;
+      StampedPose stamped{pose.pose, clock, exact.stamp_ns};
+      const auto ns = adapter.make_at_nanoseconds(exact, stamped, {}, exact.stamp_ns);
+      check(ns.state &&
+                ns.state->stamp_s ==
+                    std::chrono::duration<double>(std::chrono::nanoseconds(exact.stamp_ns)).count(),
+            "integer ingress compares stamps before one canonical conversion");
+      check(!adapter.make_at_nanoseconds(exact, stamped, {}, exact.stamp_ns + 1).state,
+            "integer ingress rejects an adjacent application nanosecond");
+      ++stamped.stamp_ns;
+      check(!adapter.make_at_nanoseconds(exact, stamped, {}, exact.stamp_ns).state,
+            "integer ingress rejects an adjacent pose nanosecond");
+      // Adjacent nanoseconds collapse to the same double near a Unix epoch.
+      exact.stamp_ns = 2000000000000000000LL;
+      stamped.stamp_ns = exact.stamp_ns + 1;
+      check(!adapter.make_at_nanoseconds(exact, stamped, {}, exact.stamp_ns).state,
+            "integer comparison must precede conversion at large epochs");
+      stamped.stamp_ns = exact.stamp_ns;
+      exact.stamp_s = stamped.stamp_s = std::numeric_limits<double>::quiet_NaN();
+      check(adapter.make_at_nanoseconds(exact, stamped, {}, exact.stamp_ns).state.has_value(),
+            "integer ingress does not depend on independently converted seconds");
+      exact.stamp_ns = -1;
+      check(adapter.make_at_nanoseconds(exact, stamped, {}, 0).error == SnapshotError::InvalidTime,
+            "integer ingress requires original nonnegative source stamps");
+    }
     j.names[0] = j.names[2];
     check(!adapter.make(j, pose, {}, 1).state, "duplicate/missing required joint rejected");
     j = observation(s, c);

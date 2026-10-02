@@ -1,6 +1,9 @@
 #include "swerve_mppi/feedback_adapter.hpp"
 #include "swerve_mppi/model.hpp"
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <limits>
 
 namespace swerve_mppi {
 FeedbackAdapter::FeedbackAdapter(const Config &config, std::string prefix) : config_(config) {
@@ -16,16 +19,37 @@ SnapshotResult FeedbackAdapter::make(const JointObservation &joints, const Stamp
   for (double t : {joints.stamp_s, pose.stamp_s, application_s})
     if (!std::isfinite(t) || t < 0)
       return {SnapshotError::InvalidTime, std::nullopt};
-  // Equal source stamps, not a freshness allowance. A stale/raw observation is
-  // not an execution-start state. Transport latency needs an explicit schedule.
-  if (joints.stamp_s != pose.stamp_s || joints.stamp_s != application_s)
+  // Only floating conversion roundoff, never a transport freshness allowance.
+  // Use integer source stamps for ROS; doubles cannot distinguish adjacent ns
+  // at large epochs. There is deliberately no fixed nanosecond tolerance here.
+  const auto same = [](double a, double b) {
+    return std::abs(a - b) <=
+           4 * std::numeric_limits<double>::epsilon() * std::max(std::abs(a), std::abs(b));
+  };
+  if (!same(joints.stamp_s, pose.stamp_s) || !same(joints.stamp_s, application_s))
     return {SnapshotError::Unsynchronized, std::nullopt};
+  return assemble(joints, pose.pose, mode, joints.stamp_s);
+}
+SnapshotResult FeedbackAdapter::make_at_nanoseconds(const JointObservation &joints,
+                                                    const StampedPose &pose,
+                                                    const ModeFeedback &mode,
+                                                    std::int64_t application_ns) const {
+  if (joints.stamp_ns < 0 || pose.stamp_ns < 0 || application_ns < 0)
+    return {SnapshotError::InvalidTime, std::nullopt};
+  if (joints.stamp_ns != pose.stamp_ns || joints.stamp_ns != application_ns)
+    return {SnapshotError::Unsynchronized, std::nullopt};
+  const double seconds =
+      std::chrono::duration<double>(std::chrono::nanoseconds(joints.stamp_ns)).count();
+  return assemble(joints, pose.pose, mode, seconds);
+}
+SnapshotResult FeedbackAdapter::assemble(const JointObservation &joints, const Pose2d &pose,
+                                         const ModeFeedback &mode, double stamp_s) const {
   if (joints.names.size() > 64 || joints.positions.size() != joints.names.size() ||
       joints.velocities.size() != joints.names.size())
     return {SnapshotError::MissingJoint, std::nullopt};
   VehicleState state;
-  state.pose = pose.pose;
-  state.stamp_s = joints.stamp_s;
+  state.pose = pose;
+  state.stamp_s = stamp_s;
   state.actual_mode = mode.actual_mode;
   state.mode_confirmed = mode.confirmed;
   state.mode_fault = mode.fault;

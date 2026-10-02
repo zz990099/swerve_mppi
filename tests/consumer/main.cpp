@@ -22,6 +22,8 @@ int main() {
   const auto midpoint = guarded.actuation ? guarded.actuation->sample(.05) : std::nullopt;
   const auto snapshot =
       swerve_mppi::FeedbackAdapter(swerve_mppi::Config{}).make({}, {{}, 0}, {}, 0);
+  const auto integer_snapshot =
+      swerve_mppi::FeedbackAdapter(swerve_mppi::Config{}).make_at_nanoseconds({}, {}, {}, 0);
   swerve_mppi::ProfileRunner runner(swerve_mppi::Config{});
   const bool installed = runner.install(guarded, 0, 1);
   const auto joints = runner.sample(.05, 1.05);
@@ -54,6 +56,7 @@ int main() {
                  swerve_mppi::check_model_feedback({}, swerve_mppi::Config{}).status ==
                      swerve_mppi::FeedbackStatus::Valid &&
                  snapshot.error == swerve_mppi::SnapshotError::InvalidTime && nominal_stop &&
+                 integer_snapshot.error == swerve_mppi::SnapshotError::InvalidTime &&
                  residual == 0 && correction == 0 && legacy_correction == 0 && stop.valid &&
                  continuation.valid &&
                  continuation.sweep_margins_m.size() + 1 == continuation.poses.size() &&

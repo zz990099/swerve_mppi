@@ -114,6 +114,9 @@ The optional allocation regression runs in CI; wall-clock timing is not a CI gat
 
 ## Current status
 
+Version 0.17.1 adds exact integer-nanosecond snapshot admission for ROS ingress
+and permits only floating conversion roundoff in the portable seconds API.
+
 Version 0.17 adds a named, timestamp-strict FeedbackAdapter, actual ProfileRunner
 closed-loop tests for 14 scenarios and five seeds, a production-budget pipeline
 probe, and PIC builds for downstream ROS plugins. Gazebo package 0.2 supplies an
