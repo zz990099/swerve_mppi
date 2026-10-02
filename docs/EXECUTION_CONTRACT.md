@@ -1,4 +1,4 @@
-# Standalone execution protocol (0.14.1)
+# Standalone execution protocol (0.15)
 
 This contract is independent of ROS, Nav2 and Gazebo. TimedExecutor is the guarded
 integration entry point; execute only its returned ActuationPlan, sampled at the
@@ -34,12 +34,14 @@ before enabling control; this is not a cross-process UUID protocol.
 ```cpp
 #include <swerve_mppi/controller.hpp>
 #include <swerve_mppi/timing.hpp>
+#include <swerve_mppi/profile_runner.hpp>
 
 swerve_mppi::Config config;
 auto validator = std::make_shared<swerve_mppi::TrajectoryValidator>(config);
 // Add bounded const hard constraints before sharing the validator.
 swerve_mppi::Controller controller(config, validator);
 swerve_mppi::TimedExecutor executor(config, session_id, initial_actual_mode, {}, validator);
+swerve_mppi::ProfileRunner profiles(config, .5); // Monotonic wall-clock watchdog.
 std::uint64_t sequence = 0;
 
 // Once per config.dt_s. Capture the task from the actual planning observation.
@@ -50,11 +52,9 @@ const swerve_mppi::CommandEnvelope envelope{
     swerve_mppi::CommandTask::capture(planning_input)};
 // latest_input describes the application instant, including current constraints.
 const auto guarded = executor.update(envelope, latest_input, application_time_s);
-if (guarded.actuation) {
-  // Adapter retains a copy for its high-rate actuator callback. This can also
-  // be a checked stopping fallback when the queued command was rejected.
-  adapter.install_profile(*guarded.actuation, application_time_s);
-} else {
+// A separately checked stopping fallback may also install. Failed/expired
+// installation latches until verified recovery; it cannot retain old Drive.
+if (!profiles.install(guarded, application_time_s, monotonic_wall_s)) {
   adapter.emergency_stop(); // Independent watchdog behavior, no certified profile.
 }
 // Map protocol feedback alongside the NEXT measured pose/twist/encoders:
@@ -75,14 +75,13 @@ latest_input.vehicle.stamp_s must describe application_time_s, not an old sample
 whose timestamp was rewritten. For stepped tests, observe at the application
 boundary; real-time integration requires explicit state time alignment.
 
-The adapter's actuator callback consumes the installed profile, not the raw
-execution endpoint arrays:
+The independently scheduled actuator callback samples the installed profile:
 
 ```cpp
-const auto targets = active_plan.sample(now_s - profile_application_time_s);
+const auto targets = profiles.sample(now_s, monotonic_wall_s);
 if (targets) {
-  // wheel_speeds are linear m/s; divide by config.wheel_radius_m for joint rad/s.
-  adapter.publish_joint_targets(*targets, config.wheel_radius_m);
+  // FL, FR, RL, RR: steering_angles in rad, wheel_angular_speeds in rad/s.
+  adapter.publish_joint_targets(*targets);
 } else {
   adapter.emergency_stop(); // Never extrapolate or hold an expired Drive.
 }
@@ -92,6 +91,24 @@ Run serial executor ticks and a missing-command watchdog update even if planning
 does not produce a result. Replace the profile at each validated application
 boundary; no previous profile authorizes the next tick. Treat diagnostics from
 guarded as authoritative: a rejected planner Output must not report completion.
+Serialize install/sample/reset on each ProfileRunner (or protect with a short
+lock); do not share its mutable state concurrently. Planning must not block the
+actuator callback. Both times supplied to ProfileRunner must be nonnegative,
+finite and nondecreasing; application time is simulation time and wall time is
+steady time. A paused simulation still expires the wall watchdog. Missed tick
+boundaries, malformed results and either clock rollback latch failure. Reset the
+runner only after independently stopping/verifying the plant, draining old commands,
+renewing the TimedExecutor session and resetting Controller. None of these helpers
+detect total process silence without callbacks: the actuator endpoint needs an
+independent watchdog/emergency stop. No normal braking profile certifies SafeStop.
+
+Before planning or certifying a stop, version 0.15 compares measured body-frame
+twist with encoder forward kinematics. Defaults admit at most 0.05 m/s linear
+vector error and 0.10 rad/s angular error. InconsistentFeedback cancels execution
+without a checked normal-stop fallback. These are admission tolerances, not slip
+or localization uncertainty bounds; calibration and conservative uncertainty
+modelling remain adapter/plant work. Encoder-derived odometry agrees by construction
+and cannot independently validate physical slip.
 
 Initialize the executor with verified actual mode; this does not measure or
 automatically discover the chassis configuration.

@@ -41,6 +41,9 @@ void validate(const Config &c) {
     }
   }
   const double nonnegative[] = {c.drive_kinematic_tolerance_mps,
+                                c.feedback_linear_tolerance_mps,
+                                c.feedback_angular_tolerance_radps,
+                                c.compute_budget_ratio,
                                 c.control_correction_weight,
                                 c.path_progress_slack_m,
                                 c.goal_settle_time_s,
@@ -78,6 +81,10 @@ void validate(const Config &c) {
       c.steering_tolerance_rad >= c.steering_limit_rad ||
       c.drive_steering_limit_rad < c.steering_tolerance_rad ||
       c.drive_steering_limit_rad > c.steering_limit_rad || c.horizon_steps < 2 ||
+      c.horizon_steps > 512 || c.stopping_horizon_steps > 4096 ||
+      c.samples_per_branch > 2048 || c.iterations > 32 || c.compute_budget_ratio > 1 ||
+      c.max_path_points < 1 || c.max_path_points > 65536 ||
+      c.max_obstacles < 1 || c.max_obstacles > 4096 ||
       c.stopping_horizon_steps < 2 || c.safety_reduction_attempts > 16 ||
       c.samples_per_branch < 1 || c.iterations < 1) {
     throw std::invalid_argument("MPPI horizon, sample count, and iterations invalid");

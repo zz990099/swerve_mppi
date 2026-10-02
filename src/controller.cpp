@@ -1,4 +1,5 @@
 #include "swerve_mppi/controller.hpp"
+#include "swerve_mppi/feedback.hpp"
 
 #include "drive_interpolation.hpp"
 #include "time_comparison.hpp"
@@ -9,19 +10,56 @@
 #include <stdexcept>
 
 namespace swerve_mppi {
-Controller::Controller(const Config &config, std::shared_ptr<const TrajectoryValidator> validator)
+Controller::Controller(const Config &config, std::shared_ptr<const TrajectoryValidator> validator,
+                       PlanningBudget::Now now)
     : validator_(validator ? std::move(validator) : std::make_shared<TrajectoryValidator>(config)),
-      safety_rollout_(config), safety_actuation_(config), config_(config), model_(config),
+      safety_rollout_(config), safety_actuation_(config), config_(config), now_(std::move(now)),
+      model_(config),
       optimizer_(config, validator_),
       scheduler_(config), mode_manager_(config), path_manager_(config), goal_manager_(config) {
   validator_->require_compatible(config_);
 }
 
 Output Controller::compute(const ControllerInput &input) {
+  PlanningBudget budget(config_.dt_s * config_.compute_budget_ratio, now_);
+  auto out = compute_impl(input, budget);
+  // A slow bounded rollout or user critic can cross the cooperative deadline.
+  // Never publish a late Drive/request, even if it was feasible before timeout.
+  if (out.planning_stats.budget_exhausted || budget.expired()) {
+    optimizer_.reset();
+    alignment_control_.reset();
+    out.action = Action::SafeStop;
+    out.failure_reason = FailureReason::ComputeTimeout;
+    out.control_policy = ControlPolicy::Fault;
+    out.navigation_status = NavigationStatus::Fault;
+    out.goal_reached = false;
+    out.mode_request.reset();
+    if (detail::valid_vehicle(input.vehicle, config_)) {
+      out.requested_mode = input.vehicle.actual_mode;
+      out.steering_targets = input.vehicle.steering_angles;
+    }
+    out.wheel_speed_targets.fill(0);
+    out.body_command = {};
+    out.planning_stats.budget_exhausted = true;
+  }
+  return out;
+}
+Output Controller::compute_impl(const ControllerInput &input, const PlanningBudget &budget) {
   safety_reductions_ = 0;
   Output stop;
   stop.requested_mode = input.vehicle.actual_mode;
   stop.phase = mode_manager_.phase();
+  if (input.reference_path.size() > config_.max_path_points ||
+      input.obstacles.size() > config_.max_obstacles) {
+    stop.failure_reason = FailureReason::WorkloadExceeded;
+    return stop;
+  }
+  if (detail::valid_vehicle(input.vehicle, config_) &&
+      check_feedback(input.vehicle, config_).status == FeedbackStatus::Inconsistent) {
+    stop.steering_targets = input.vehicle.steering_angles;
+    stop.failure_reason = FailureReason::InconsistentFeedback;
+    return stop;
+  }
   if (!detail::valid_input(input, config_)) {
     stop.failure_reason = FailureReason::InvalidInput;
     return stop;
@@ -90,7 +128,7 @@ Output Controller::compute(const ControllerInput &input) {
     out = compute_goal(prepared, approach);
     out.control_policy = ControlPolicy::Capture;
   } else {
-    out = compute_tracking(prepared);
+    out = compute_tracking(prepared, budget);
     out.control_policy = ControlPolicy::Tracking;
   }
   // Check the actual non-driving interval, including stationary steering,
@@ -115,18 +153,25 @@ Output Controller::compute(const ControllerInput &input) {
   out.safety_reductions = safety_reductions_;
   return out;
 }
-Output Controller::compute_tracking(const ControllerInput &input) {
+Output Controller::compute_tracking(const ControllerInput &input, const PlanningBudget &budget) {
   const auto branches = scheduler_.make_branches(input.vehicle);
   PlanningStats stats;
   std::vector<Solution> solutions;
   solutions.reserve(branches.size());
   for (const auto &branch : branches) {
-    solutions.push_back(optimizer_.optimize(input, branch));
+    solutions.push_back(optimizer_.optimize(input, branch, &budget));
     const auto &work = solutions.back().planning_stats;
     stats.branches += work.branches;
     stats.evaluated_rollouts += work.evaluated_rollouts;
     stats.feasible_rollouts += work.feasible_rollouts;
     stats.fallback_updates += work.fallback_updates;
+    if (work.budget_exhausted || budget.expired()) {
+      Output out; // Expired work cannot authorize another expensive stopping check.
+      out.failure_reason = FailureReason::ComputeTimeout;
+      out.planning_stats = stats;
+      out.planning_stats.budget_exhausted = true;
+      return out;
+    }
   }
   const auto &keep = solutions.front();
   const auto &best = solutions[scheduler_.select(solutions)];

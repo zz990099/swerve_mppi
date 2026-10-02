@@ -1,4 +1,5 @@
 #include "swerve_mppi/mode.hpp"
+#include "swerve_mppi/feedback.hpp"
 #include "time_comparison.hpp"
 #include "validation.hpp"
 #include <algorithm>
@@ -9,7 +10,8 @@ namespace swerve_mppi {
 ModeManager::ModeManager(const Config &config) : config_(config) { validate(config_); }
 void ModeManager::begin(DriveMode target_mode, const Control &intent,
                         const VehicleState &observed) {
-  if (active() || !detail::valid_vehicle(observed, config_) || !observed.mode_confirmed ||
+  if (active() || check_feedback(observed, config_).status != FeedbackStatus::Valid ||
+      !observed.mode_confirmed ||
       observed.mode_fault || target_mode == observed.actual_mode ||
       !detail::valid_mode(target_mode) || !std::isfinite(intent.vx) || !std::isfinite(intent.vy) ||
       !std::isfinite(intent.wz))
@@ -31,11 +33,17 @@ Output ModeManager::update(const VehicleState &observed) {
   out.phase = phase_;
   out.requested_mode = request_.mode;
   out.steering_targets = observed.steering_angles;
+  if (check_feedback(observed, config_).status != FeedbackStatus::Valid || observed.mode_fault) {
+    phase_ = TransitionPhase::Fault;
+    out.phase = phase_;
+    out.action = Action::SafeStop;
+    return out;
+  }
   if (phase_ == TransitionPhase::Stable) {
     out.action = Action::Hold;
     return out;
   }
-  if (!detail::valid_vehicle(observed, config_) || observed.stamp_s < start_s_ ||
+  if (observed.stamp_s < start_s_ ||
       observed.stamp_s <= last_stamp_s_ || observed.mode_fault ||
       phase_ == TransitionPhase::Fault ||
       detail::deadline_exceeded(observed.stamp_s, start_s_, config_.confirmation_timeout_s)) {

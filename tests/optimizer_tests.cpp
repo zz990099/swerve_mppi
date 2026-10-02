@@ -17,6 +17,7 @@ ControllerInput input() {
 }
 void test_hysteresis_selection() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.switch_hysteresis = .4;
   ModeScheduler scheduler(c);
   Solution keep;
@@ -41,6 +42,7 @@ void test_hysteresis_selection() {
 }
 void test_rollout_and_swept_collision() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.minimum_mode_dwell_s = 0;
   RolloutEngine rollout(c);
   auto in = input();
@@ -67,6 +69,7 @@ void test_rollout_and_swept_collision() {
 }
 void test_effective_noise_and_disabled_noise() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.noise_v_mps = 1;
   c.noise_w_radps = 1;
   NoiseGenerator noise(c);
@@ -130,6 +133,7 @@ double covariance_score(const std::vector<Control> &mean, const std::vector<Cont
 }
 void test_marginal_covariance() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.noise_v_mps = 1;
   c.noise_w_radps = 0;
   c.control_correction_weight = 1;
@@ -221,6 +225,7 @@ void test_marginal_covariance() {
 }
 void test_correlated_noise_precision() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.noise_correlation = .5;
   c.noise_v_mps = 1;
   c.noise_w_radps = 0;
@@ -254,6 +259,7 @@ void test_correlated_noise_precision() {
 }
 void test_frozen_alignment_rollout() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.minimum_mode_dwell_s = 0;
   VehicleState state;
   state.actual_mode = DriveMode::Crab;
@@ -274,6 +280,7 @@ void test_frozen_alignment_rollout() {
 }
 void test_optimizer_reset_and_closed_loop() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.minimum_mode_dwell_s = 100;
   c.noise_v_mps = 0;
   c.noise_w_radps = 0;
@@ -301,6 +308,7 @@ void test_optimizer_reset_and_closed_loop() {
 }
 void test_reusable_rollouts_and_planning_stats() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.minimum_mode_dwell_s = 100;
   c.noise_v_mps = c.noise_w_radps = 0;
   c.samples_per_branch = 8;
@@ -360,6 +368,7 @@ void test_reusable_rollouts_and_planning_stats() {
 }
 void test_tracking_speed_limit() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.minimum_mode_dwell_s = 0;
   for (auto mode : {DriveMode::DualAckermann, DriveMode::Crab}) {
     auto in = input();
@@ -391,6 +400,7 @@ public:
 };
 void test_curve_yaw_budget() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.horizon_steps = 16;
   c.samples_per_branch = 16;
   auto in = input();
@@ -429,6 +439,7 @@ public:
 };
 void test_extension_and_invalid_inputs() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   Optimizer optimizer(c);
   optimizer.critics().add(std::make_shared<RejectAll>());
   check(!std::isfinite(optimizer.optimize(input(), {}).cost),
@@ -463,3 +474,4 @@ int main() {
     return 1;
   }
 }
+

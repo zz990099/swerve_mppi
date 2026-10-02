@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.14.1 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.15.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -10,6 +10,8 @@ option(SWERVE_MPPI_BUILD_BENCHMARKS "Build standalone measurement tools" OFF)
 add_library(swerve_mppi_core
   src/navigation.cpp
   src/config.cpp
+  src/feedback.cpp
+  src/profile_runner.cpp
   src/kinematics.cpp
   src/model.cpp
   src/transition_model.cpp
@@ -41,7 +43,7 @@ if(SWERVE_MPPI_BUILD_TESTS)
   add_executable(swerve_mppi_tests tests/core_tests.cpp)
   target_link_libraries(swerve_mppi_tests PRIVATE swerve_mppi_core)
   add_test(NAME swerve_mppi_tests COMMAND swerve_mppi_tests)
-  foreach(suite model optimizer execution navigation safety timing actuation)
+  foreach(suite model optimizer execution navigation safety timing actuation admission)
     add_executable(swerve_mppi_${suite}_tests tests/${suite}_tests.cpp)
     target_link_libraries(swerve_mppi_${suite}_tests PRIVATE swerve_mppi_core)
     add_test(NAME ${suite}_regressions COMMAND swerve_mppi_${suite}_tests)
@@ -64,7 +66,7 @@ if(SWERVE_MPPI_BUILD_TESTS)
       -DTEST_COMPILER=${CMAKE_CXX_COMPILER}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_test.cmake)
   set_tests_properties(swerve_mppi_tests model_regressions optimizer_regressions execution_regressions navigation_regressions safety_regressions timing_regressions actuation_regressions
-    installed_consumer PROPERTIES TIMEOUT 60)
+    admission_regressions installed_consumer PROPERTIES TIMEOUT 60)
 endif()
 
 if(SWERVE_MPPI_BUILD_BENCHMARKS)

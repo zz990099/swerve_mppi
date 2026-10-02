@@ -1,4 +1,5 @@
 #include "swerve_mppi/timing.hpp"
+#include "swerve_mppi/feedback.hpp"
 #include "time_comparison.hpp"
 #include "validation.hpp"
 #include <cmath>
@@ -119,6 +120,10 @@ TimedExecutionResult TimedExecutor::update(const std::optional<CommandEnvelope> 
   stop.requested_mode = measured.actual_mode;
   if (error != TimingError::None)
     return {executor_.update(stop, measured), error, ExecutionSafetyError::None,
+            TrajectoryStatus::Invalid, std::nullopt};
+  if (detail::valid_vehicle(measured, config_) &&
+      check_feedback(measured, config_).status == FeedbackStatus::Inconsistent)
+    return {executor_.update(stop, measured), error, ExecutionSafetyError::InconsistentFeedback,
             TrajectoryStatus::Invalid, std::nullopt};
   if (!detail::valid_input(latest, config_))
     return {executor_.update(stop, measured), error, ExecutionSafetyError::InvalidContext,

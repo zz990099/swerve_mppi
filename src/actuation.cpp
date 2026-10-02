@@ -1,4 +1,5 @@
 #include "swerve_mppi/actuation.hpp"
+#include "swerve_mppi/feedback.hpp"
 
 #include "drive_interpolation.hpp"
 #include "stopping_motion.hpp"
@@ -61,7 +62,7 @@ ActuationModel::ActuationModel(const Config &config) : config_(config), kinemati
 std::optional<ActuationPlan> ActuationModel::plan_stopping(
     const VehicleState &measured, Action action,
     const std::array<double, 4> &steering_targets) const {
-  if (!detail::valid_vehicle(measured, config_) || measured.mode_fault ||
+  if (check_feedback(measured, config_).status != FeedbackStatus::Valid || measured.mode_fault ||
       !detail::valid_steering(steering_targets, config_) ||
       (action != Action::Brake && action != Action::Hold && action != Action::RequestMode))
     return std::nullopt;
@@ -81,7 +82,7 @@ std::optional<ActuationPlan> ActuationModel::plan_stopping(
 }
 std::optional<ActuationPlan> ActuationModel::plan(const VehicleState &measured,
                                                const ExecutionResult &execution) const {
-  if (!detail::valid_vehicle(measured, config_) || measured.mode_fault ||
+  if (check_feedback(measured, config_).status != FeedbackStatus::Valid || measured.mode_fault ||
       execution.feedback.fault ||
       !valid_phase(execution.phase) ||
       execution.feedback.confirmed != (execution.phase == TransitionPhase::Stable) ||

@@ -12,6 +12,7 @@ namespace {
 using namespace swerve_mppi::test;
 void run(const std::string &scenario, unsigned seed, bool timed) {
   Config c;
+  c.compute_budget_ratio = 0; // Behavior assertions are independent of host speed.
   c.random_seed = seed;
   Controller controller(c);
   ModeExecutor executor(c);

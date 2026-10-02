@@ -29,7 +29,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.14 CONFIG REQUIRED)
+find_package(swerve_mppi 0.15 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -113,6 +113,19 @@ See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for commands and measurement limi
 The optional allocation regression runs in CI; wall-clock timing is not a CI gate.
 
 ## Current status
+
+Version 0.15 adds body/joint feedback consistency admission, bounded input and
+workspace sizes, and a shared steady-clock planning budget (default 80% of dt_s).
+Inconsistent feedback cannot certify a normal stop. Oversize inputs are rejected
+without truncation; expired solves emit SafeStop and cannot publish partial Drive.
+The budget is cooperative, not a hard real-time guarantee. ProfileRunner samples
+checked TimedExecutor profiles, converts wheel m/s to joint rad/s, and latches
+missed profile boundaries, clock rollback and wall-watchdog expiry. Rebuild all
+consumers against 0.15 because public layouts and constructor symbols changed.
+See [docs/ADMISSION_VALIDATION.md](docs/ADMISSION_VALIDATION.md) for limits and tests.
+The Gazebo repository has an external joint command mode; a complete ROS adapter,
+measurement time alignment and physical braking/slip/latency calibration remain
+integration work. Core regression success does not certify the physical plant.
 
 Version 0.14.1 validates the actual Brake/Hold/RequestMode interval and its full
 stopping tail before Controller publication, including alignment during pending

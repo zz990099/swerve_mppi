@@ -66,7 +66,9 @@ continuous-time dynamics and noncircular footprints require independent validati
 The allocation instrument replaces ordinary new/new[] in the benchmark executable
 only. It counts attempts that allocate successfully while compute executes; it
 excludes constructor allocations, aligned allocation overloads and internal malloc
-calls. The library does not contain allocator hooks or wall-clock instrumentation.
+calls. The library does not contain allocator hooks. Version 0.15 uses steady_clock
+for cooperative deadline admission; the benchmark explicitly disables that budget
+to measure complete solves rather than truncated workloads.
 
 `--smoke` runs straight/seed 42 with defaults and rejects a peak above 200 ordinary
 allocations per compute. CI enables the benchmark and runs this structural gate
@@ -91,9 +93,15 @@ Reset restarts warm/RNG/task state without shrinking workspace capacity.
 This reduces heap activity, but is not allocation-free: output/fallback ownership,
 local references, branch/solution vectors and input validation still incur work.
 Dense path cost remains proportional to local segment count per rollout pose;
-obstacle cost remains proportional to obstacle count. No fixed solver deadline
-or automatic wall-clock truncation is implemented. Host-specific real-time
-budgets must be measured before using the core in a periodic adapter.
+obstacle cost remains proportional to obstacle count. Version 0.15 defaults to
+4096 input path points and 128 obstacles, rejecting excess before scanning without
+truncation. Configured maxima are bounded; see ADMISSION_VALIDATION.md.
+compute_budget_ratio defaults to 0.8 (80 ms at dt_s=0.1), shared across all branches.
+Optimizer checks between evaluations, and Controller rejects any late result with
+ComputeTimeout/SafeStop. A single evaluation or custom critic may overrun; this is
+not a hard real-time bound. Measure target-host workloads and run an independent
+actuator watchdog. Zero disables the budget for offline validation only; behavior
+tests and this benchmark use zero to keep algorithm checks independent of host speed.
 
 ## Output diagnostics
 
@@ -120,6 +128,8 @@ or individual critic. These fields explain the action and do not replace the
 executor's own latched fault/recovery contract.
 
 PlanningStats resets on every compute/optimize call:
+
+- budget_exhausted marks deadline rejection; no partial solution is executable.
 
 - branches counts optimized branches, not only the winning branch.
 - evaluated_rollouts includes the initial nominal, every sampled proposal and

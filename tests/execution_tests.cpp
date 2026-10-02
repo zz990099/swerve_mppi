@@ -44,6 +44,7 @@ Output request(std::uint64_t id, DriveMode mode, const Config &c) {
 }
 void test_all_directed_transitions() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   for (auto from : {DriveMode::DualAckermann, DriveMode::Spin, DriveMode::Crab}) {
     for (auto to : {DriveMode::DualAckermann, DriveMode::Spin, DriveMode::Crab}) {
       if (from == to)
@@ -96,6 +97,7 @@ void test_all_directed_transitions() {
 }
 void test_stale_ack_and_measured_alignment() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   ModeManager m(c);
   VehicleState s;
   s.stamp_s = 1;
@@ -130,6 +132,7 @@ void test_stale_ack_and_measured_alignment() {
 }
 void test_executor_idempotency_and_timeout() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.alignment_min_s = 0;
   ModeExecutor executor(c);
   VehicleState s;
@@ -164,6 +167,7 @@ void test_executor_idempotency_and_timeout() {
 }
 void test_cancellation_recovery_and_invalid_commands() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   ModeExecutor e(c);
   VehicleState s;
   s.stamp_s = 1;
@@ -201,6 +205,7 @@ void test_cancellation_recovery_and_invalid_commands() {
 }
 void test_request_geometry_and_id_exhaustion() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   VehicleState s;
   s.stamp_s = 1;
   for (auto mode : {DriveMode::DualAckermann, DriveMode::Spin, DriveMode::Crab}) {
@@ -224,6 +229,7 @@ void test_request_geometry_and_id_exhaustion() {
 }
 void test_persistent_mode_and_unconfirmed_drive() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   ModeExecutor e(c, DriveMode::Crab);
   VehicleState s;
   s.actual_mode = DriveMode::Crab;
@@ -252,6 +258,7 @@ void test_persistent_mode_and_unconfirmed_drive() {
 }
 void test_boot_age_drive_consistency_and_preemption() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   VehicleState s;
   s.stamp_s = 1;
   s.time_in_mode_s = 4;
@@ -281,6 +288,7 @@ void test_boot_age_drive_consistency_and_preemption() {
 }
 void test_transition_prediction_deadline() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.max_steer_rate_radps = .1;
   c.horizon_steps = 200;
   c.minimum_mode_dwell_s = 0;
@@ -298,6 +306,7 @@ void test_transition_protocol_tick_matrix() {
       for (double alignment : {0.0, .13}) {
         for (double steer_rate : {2.5, 10.0}) {
           Config c;
+          c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
           c.dt_s = dt;
           c.confirmation_prediction_s = allowance;
           c.alignment_min_s = alignment;
@@ -377,6 +386,7 @@ void test_transition_protocol_tick_matrix() {
 }
 void test_confirmation_receipt_deadline() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.dt_s = .125;
   c.alignment_min_s = c.confirmation_prediction_s = 0;
   c.confirmation_timeout_s = c.dt_s;
@@ -415,6 +425,7 @@ void test_decimal_deadline_and_tick_boundaries() {
     for (double stamp : {1.0, 1e6, 1700000000.0}) {
       for (double lateness : {0.0, 1e-5}) {
         Config c;
+        c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
         c.dt_s = dt;
         c.alignment_min_s = c.confirmation_prediction_s = 0;
         c.confirmation_timeout_s = dt;
@@ -450,6 +461,7 @@ void test_decimal_deadline_and_tick_boundaries() {
     }
   }
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.dt_s = .04;
   c.alignment_min_s = .28; // .28/.04 rounds above seven in binary floating point.
   c.confirmation_prediction_s = 0;
@@ -487,6 +499,7 @@ void test_decimal_deadline_and_tick_boundaries() {
 void test_same_mode_alignment_decimal_deadline() {
   for (double lateness : {0.0, 1e-5}) {
     Config c;
+    c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
     c.confirmation_timeout_s = c.dt_s;
     c.max_steer_rate_radps = 20;
     c.horizon_steps = 2;
@@ -511,6 +524,7 @@ void test_same_mode_alignment_decimal_deadline() {
 }
 void test_zero_delay_controller_capture_timing() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.alignment_min_s = c.confirmation_prediction_s = 0;
   c.max_steer_rate_radps = 10;
   ControllerInput input;
@@ -536,6 +550,7 @@ void test_zero_delay_controller_capture_timing() {
 }
 void test_controller_executor_lateral_loop() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.horizon_steps = 32;
   c.samples_per_branch = 24;
   c.minimum_mode_dwell_s = 0;
@@ -566,6 +581,7 @@ void test_controller_executor_lateral_loop() {
 }
 void test_measured_steering_tolerance() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   VehicleState s;
   s.stamp_s = 1;
   const Control control{.4, 0, .2};
@@ -598,6 +614,7 @@ void test_measured_steering_tolerance() {
 }
 void test_nonfinite_drive_commands() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   VehicleState s;
   s.stamp_s = 1;
   for (double bad :
@@ -625,6 +642,7 @@ void test_nonfinite_drive_commands() {
 }
 void test_frozen_controller_alignment() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.minimum_mode_dwell_s = 100;
   c.noise_v_mps = c.noise_w_radps = 0;
   auto initial = [] {
@@ -656,6 +674,7 @@ void test_frozen_controller_alignment() {
 }
 void test_drive_steering_command_limits() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.max_steer_rate_radps = .1;
   for (double delta : {.02, .3}) {
     VehicleState s;
@@ -674,6 +693,7 @@ void test_drive_steering_command_limits() {
 }
 void test_absolute_speed_and_drive_interpolation_limits() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   for (auto mode : {DriveMode::DualAckermann, DriveMode::Crab, DriveMode::Spin}) {
     const double maximum = mode == DriveMode::Crab   ? c.max_crab_speed_mps
                            : mode == DriveMode::Spin ? c.max_spin_radps
@@ -715,6 +735,7 @@ void test_absolute_speed_and_drive_interpolation_limits() {
 }
 void test_module_velocity_residuals() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   VehicleState state;
   state.stamp_s = 1;
   for (auto speeds :
@@ -748,6 +769,7 @@ void test_module_velocity_residuals() {
 }
 void test_curved_ackermann_and_spin_drive() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.minimum_mode_dwell_s = 100;
   c.samples_per_branch = 8;
   c.noise_v_mps = c.noise_w_radps = 0;
@@ -776,6 +798,7 @@ void test_curved_ackermann_and_spin_drive() {
 }
 void test_rollout_entry_direction() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.horizon_steps = 32;
   c.minimum_mode_dwell_s = 0;
   VehicleState s;
@@ -801,6 +824,7 @@ void test_rollout_entry_direction() {
 }
 void test_capture_alignment_commitment() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   for (bool corner : {false, true}) {
     Controller controller(c);
     ControllerInput in;
@@ -847,6 +871,7 @@ void test_capture_alignment_commitment() {
 
 void test_stable_feedback_and_interior_speed() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   for (auto mode : {DriveMode::DualAckermann, DriveMode::Crab, DriveMode::Spin}) {
     for (bool lost_confirmation : {false, true}) {
       VehicleState s;
@@ -1000,3 +1025,4 @@ int main() {
     return 1;
   }
 }
+

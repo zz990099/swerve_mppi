@@ -23,6 +23,7 @@ ControllerInput make_input() {
 
 void test_mode_kinematics() {
   Config config;
+  config.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   DriveModel model(config);
   check(!model.feasible({0.2, 0.1, 0.0}, DriveMode::DualAckermann),
         "Ackermann must forbid lateral velocity");
@@ -47,6 +48,7 @@ void test_mode_kinematics() {
 
 void test_transition_rollout() {
   Config config;
+  config.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   DriveModel model(config);
   TransitionModel transition(config);
   VehicleState state;
@@ -71,13 +73,16 @@ void test_transition_rollout() {
 
 void test_confirmation_and_timeout() {
   Config config;
+  config.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   ModeManager manager(config);
   VehicleState observed;
   observed.stamp_s = 1.0;
   manager.begin(DriveMode::Crab, {}, observed);
   observed.velocity.vx = 0.2;
+  observed.wheel_speeds.fill(0.2);
   check(manager.update(observed).action == Action::Brake, "mode change must brake first");
   observed.velocity = {};
+  observed.wheel_speeds.fill(0);
   observed.stamp_s = 1.1;
   check(manager.update(observed).action == Action::RequestMode,
         "stopped vehicle should request the new mode");
@@ -106,6 +111,7 @@ void test_confirmation_and_timeout() {
 
 void test_mode_sampling_and_infeasibility() {
   Config config;
+  config.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   config.minimum_mode_dwell_s = 1.0;
   ModeScheduler scheduler(config);
   VehicleState fresh;
@@ -131,6 +137,7 @@ void test_mode_sampling_and_infeasibility() {
 
 void test_controller_lateral_goal() {
   Config config;
+  config.compute_budget_ratio = 0; // Algorithm regression, independent of host/debug speed.
   config.horizon_steps = 32;
   config.samples_per_branch = 100;
   config.minimum_mode_dwell_s = 0.0;

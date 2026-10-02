@@ -77,7 +77,8 @@ enum class ExecutionSafetyError {
   InvalidActuation,
   CommandRejected,
   UnsafeStoppingTrajectory,
-  TaskMismatch
+  TaskMismatch,
+  InconsistentFeedback
 };
 struct TimedExecutionResult {
   ExecutionResult execution;

@@ -3,13 +3,15 @@
 #include "swerve_mppi/critics.hpp"
 #include "swerve_mppi/mode.hpp"
 #include "swerve_mppi/noise.hpp"
+#include "swerve_mppi/planning_budget.hpp"
 
 namespace swerve_mppi {
 class Optimizer {
 public:
   explicit Optimizer(const Config &config,
                      std::shared_ptr<const TrajectoryValidator> validator = nullptr);
-  Solution optimize(const ControllerInput &input, const Branch &branch);
+  Solution optimize(const ControllerInput &input, const Branch &branch,
+                    const PlanningBudget *budget = nullptr);
   // Advance a warm start only after the controller actually issues its drive action.
   void accept(const Solution &solution, DriveMode mode);
   void reset();

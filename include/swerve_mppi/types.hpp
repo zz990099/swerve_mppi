@@ -106,7 +106,10 @@ enum class FailureReason {
   NoFeasiblePlan,
   ModelFailure,
   TransitionFault,
-  UnsafeStoppingTrajectory
+  UnsafeStoppingTrajectory,
+  InconsistentFeedback,
+  WorkloadExceeded,
+  ComputeTimeout
 };
 enum class ControlPolicy { Stopped, Tracking, Alignment, Capture, ModeTransition, Fault, Blocked };
 struct PlanningStats {
@@ -114,6 +117,7 @@ struct PlanningStats {
   std::size_t evaluated_rollouts = 0;
   std::size_t feasible_rollouts = 0;
   std::size_t fallback_updates = 0;
+  bool budget_exhausted = false;
 };
 
 struct Output {

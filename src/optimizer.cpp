@@ -1,4 +1,5 @@
 #include "swerve_mppi/optimizer.hpp"
+#include "swerve_mppi/feedback.hpp"
 
 #include "validation.hpp"
 #include <algorithm>
@@ -55,10 +56,19 @@ std::vector<Control> Optimizer::seed(const ControllerInput &input, const Branch 
   return controls;
 }
 
-Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch) {
+Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch,
+                             const PlanningBudget *budget) {
+  PlanningBudget local_budget(budget ? 0 : config_.dt_s * config_.compute_budget_ratio);
+  const auto &active_budget = budget ? *budget : local_budget;
   Solution result;
   result.branch = branch;
-  if (!detail::valid_input(input, config_))
+  if (active_budget.expired()) {
+    result.planning_stats.budget_exhausted = true;
+    reset();
+    return result;
+  }
+  if (!detail::valid_input(input, config_) ||
+      check_feedback(input.vehicle, config_).status != FeedbackStatus::Valid)
     return result;
   // Anticipate the yaw-rate budget of the ordered local curve. A horizon with
   // limited steering cannot track a tight bend at the straight-line speed cap.
@@ -101,6 +111,15 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch)
     mean[t] = constrain(mean[t], t);
   PlanningStats stats;
   stats.branches = 1;
+  const auto timeout = [&]() {
+    result.cost = std::numeric_limits<double>::infinity();
+    result.controls.clear();
+    result.trajectory.valid = false;
+    stats.budget_exhausted = true;
+    result.planning_stats = stats;
+    reset();
+    return result;
+  };
   auto evaluate = [&](const std::vector<Control> &controls) {
     rollout_.generate(input.vehicle, branch, controls, proposal_);
     ++stats.evaluated_rollouts;
@@ -115,13 +134,19 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch)
     out.cost = cost;
   };
   const double nominal_cost = evaluate(mean);
+  if (active_budget.expired())
+    return timeout();
   capture(result, mean, nominal_cost);
   const auto fresh_seed = input.tracking ? seed(input, branch, false) : std::vector<Control>{};
   std::size_t feasible = 0;
   for (std::size_t iteration = 0; iteration < config_.iterations; ++iteration) {
+    if (active_budget.expired())
+      return timeout();
     double minimum = std::numeric_limits<double>::infinity();
     Solution fallback = result;
     for (std::size_t k = 0; k < samples_.size(); ++k) {
+      if (active_budget.expired())
+        return timeout();
       auto &sample = samples_[k];
       if (k == 0) {
         // Preserve the nominal proposal when noisy steering-sensitive paths stall.
@@ -137,6 +162,8 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch)
                            candidate_[t].wz - mean[t].wz};
       }
       sample.cost = evaluate(candidate_);
+      if (active_budget.expired())
+        return timeout();
       sample.active = proposal_.active_controls;
       if (!std::isfinite(sample.cost))
         continue;
@@ -180,6 +207,8 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch)
     }
     // Return the weighted MPPI sequence; a feasible proposal is only a fallback.
     const double updated_cost = evaluate(mean);
+    if (active_budget.expired())
+      return timeout();
     if (std::isfinite(updated_cost))
       capture(result, mean, updated_cost);
     else {

@@ -13,7 +13,11 @@ void TrajectoryValidator::require_compatible(const Config &config) const {
   if (config.robot_radius_m != config_.robot_radius_m ||
       config.collision_margin_m != config_.collision_margin_m ||
       config.steering_limit_rad != config_.steering_limit_rad ||
-      config.max_wheel_speed_mps != config_.max_wheel_speed_mps)
+      config.max_wheel_speed_mps != config_.max_wheel_speed_mps ||
+      config.max_path_points != config_.max_path_points ||
+      config.max_obstacles != config_.max_obstacles ||
+      config.feedback_linear_tolerance_mps != config_.feedback_linear_tolerance_mps ||
+      config.feedback_angular_tolerance_radps != config_.feedback_angular_tolerance_radps)
     throw std::invalid_argument("trajectory validator safety configuration differs from consumer");
 }
 void TrajectoryValidator::add(std::shared_ptr<const TrajectoryConstraint> constraint) {
@@ -23,7 +27,9 @@ void TrajectoryValidator::add(std::shared_ptr<const TrajectoryConstraint> constr
 }
 TrajectoryStatus TrajectoryValidator::check(const ControllerInput &input,
                                             const Trajectory &trajectory) const {
-  if (!trajectory.valid || trajectory.poses.empty() || !detail::valid_input(input, config_) ||
+  if (!trajectory.valid || trajectory.poses.empty() ||
+      trajectory.poses.size() > 4097 || // Absolute public trace cap, including the initial pose.
+      !detail::valid_input(input, config_) ||
       (!trajectory.sweep_margins_m.empty() &&
        trajectory.sweep_margins_m.size() + 1 != trajectory.poses.size()))
     return TrajectoryStatus::Invalid;

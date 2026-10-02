@@ -1,4 +1,5 @@
 #include "swerve_mppi/model.hpp"
+#include "swerve_mppi/feedback.hpp"
 
 #include "drive_interpolation.hpp"
 #include "motion_profile.hpp"
@@ -119,7 +120,8 @@ std::array<double, 4> DriveModel::steering_for_entry(DriveMode mode, const Contr
 StepResult DriveModel::step(const VehicleState &start, const Control &u, double dt) const {
   StepResult out;
   out.state = start;
-  if (!std::isfinite(dt) || dt <= 0.0 || !detail::valid_vehicle(start, config_) ||
+  if (!std::isfinite(dt) || dt <= 0.0 ||
+      check_feedback(start, config_).status != FeedbackStatus::Valid ||
       !feasible(u, start.actual_mode)) {
     out.valid = false;
     return out;

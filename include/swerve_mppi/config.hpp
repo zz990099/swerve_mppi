@@ -37,6 +37,10 @@ struct Config {
   double stopped_linear_mps = 0.035;
   double stopped_angular_radps = 0.035;
   double stopped_wheel_speed_mps = 0.005;
+  // Absolute disagreement between body-frame twist and wheel forward kinematics.
+  // Zero requests numerical agreement; these tolerances do not model tire slip.
+  double feedback_linear_tolerance_mps = 0.05;
+  double feedback_angular_tolerance_radps = 0.10;
 
   // Age of the confirmed actual mode, not request stability time.
   double minimum_mode_dwell_s = 1.0;
@@ -50,6 +54,12 @@ struct Config {
 
   // One compute call per model tick; arbitrary period ratios are not implemented.
   double dt_s = 0.1;
+  // Fraction of dt_s allowed for the whole compute, measured by steady_clock.
+  // Zero disables the clock budget for offline deterministic validation only.
+  double compute_budget_ratio = 0.8;
+  // Reject oversize contexts before scanning them. Never truncate obstacles/path.
+  std::size_t max_path_points = 4096;
+  std::size_t max_obstacles = 128;
   std::size_t horizon_steps = 20;
   // Independent bounded budget for alignment, first Drive and a complete stop.
   // Exhaustion rejects the continuation; it never implies a stopped state.

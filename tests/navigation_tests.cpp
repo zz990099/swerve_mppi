@@ -10,6 +10,7 @@ void check(bool ok, const char *message) {
 }
 void test_path_progress_and_replan() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   PathManager manager(c);
   ControllerInput in;
   in.reference_path = {{0, 0, 0}, {2, 0, 0}, {2, 2, 1.57}};
@@ -33,6 +34,7 @@ void test_path_progress_and_replan() {
 }
 void test_loops_duplicates_and_yaw() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   PathManager manager(c);
   ControllerInput in;
   in.reference_path = {{0, 0, 0}, {2, 0, 0}, {2, 2, 0}, {0, 2, 0}, {0, 0, 0}, {2, -2, 0}};
@@ -55,6 +57,7 @@ void test_loops_duplicates_and_yaw() {
 }
 void test_cusp_target() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   PathManager manager(c);
   ControllerInput in;
   in.reference_path = {{0, 0, 0}, {1, 0, 0}, {1, 0, 0}, {0, 0, 0}};
@@ -70,6 +73,7 @@ void test_cusp_target() {
 }
 void test_short_paths_preserve_segment_order() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   const std::vector<std::vector<Pose2d>> paths = {
       {{0, 0, 0}, {.2, 0, 0}, {.2, .2, 0}, {0, .2, 0}, {0, 0, 0}},
       {{0, 0, 0}, {.25, .25, 0}, {0, .25, 0}, {.25, 0, 0}, {0, 0, 0}},
@@ -114,6 +118,7 @@ void test_short_paths_preserve_segment_order() {
 }
 void test_dense_segment_capture() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   PathManager manager(c);
   ControllerInput in;
   in.reference_path = {{0, 0, 0},   {0, 0, 0},   {.02, 0, 0}, {.04, 0, 0},
@@ -132,6 +137,7 @@ void test_dense_segment_capture() {
 }
 void test_completion_requires_measured_stop() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   GoalManager manager(c);
   PathReference path;
   path.goal_eligible = true;
@@ -169,6 +175,7 @@ void test_completion_requires_measured_stop() {
 }
 void test_effective_target_and_goal_eligibility() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   PathManager manager(c);
   GoalManager goal(c);
   ControllerInput in;
@@ -199,6 +206,7 @@ void test_effective_target_and_goal_eligibility() {
 }
 void test_replan_execution_boundaries() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.noise_v_mps = c.noise_w_radps = 0;
   Controller controller(c);
   ControllerInput in;
@@ -232,6 +240,7 @@ void test_replan_execution_boundaries() {
 }
 void test_task_restart_and_stall() {
   Config c;
+  c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   Controller controller(c);
   ControllerInput input;
   input.vehicle.stamp_s = 1;
@@ -284,3 +293,4 @@ int main() {
     return 1;
   }
 }
+

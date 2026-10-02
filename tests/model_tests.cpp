@@ -402,8 +402,8 @@ void test_zero_delay_transition_and_confirmation() {
   manager.begin(DriveMode::Spin, {}, s);
   s.velocity = {};
   s.wheel_speeds.fill(.1);
-  check(manager.update(s).action == Action::Brake,
-        "zero odometry with spinning wheels must not confirm a stopped chassis");
+  check(manager.update(s).action == Action::SafeStop,
+        "zero odometry with spinning wheels must fault rather than confirm a stopped chassis");
 }
 void test_configuration_ownership() {
   DriveModel model(Config{});

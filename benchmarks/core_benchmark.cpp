@@ -36,6 +36,7 @@ double percentile(std::vector<double> samples, double q) {
 void run(const std::string &scenario, unsigned seed, double lookahead, double path_weight,
          bool check_allocations) {
   Config c;
+  c.compute_budget_ratio = 0; // Measure full work; deadline admission is tested separately.
   c.random_seed = seed;
   c.path_lookahead_m = lookahead;
   c.path_weight = path_weight;

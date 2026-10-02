@@ -1,4 +1,5 @@
 #include "swerve_mppi/executor.hpp"
+#include "swerve_mppi/feedback.hpp"
 
 #include "drive_interpolation.hpp"
 #include "time_comparison.hpp"
@@ -49,8 +50,9 @@ ModeExecutor::ModeExecutor(const Config &config, DriveMode mode)
 ExecutionResult ModeExecutor::update(const Output &command, const VehicleState &measured) {
   ExecutionResult out;
   out.steering_targets = last_steering_;
-  const bool valid = detail::valid_vehicle(measured, config_);
-  if (valid) {
+  const bool numeric_valid = detail::valid_vehicle(measured, config_);
+  const bool valid = check_feedback(measured, config_).status == FeedbackStatus::Valid;
+  if (numeric_valid) {
     last_steering_ = measured.steering_angles;
     out.steering_targets = last_steering_;
   }
@@ -173,7 +175,8 @@ ExecutionResult ModeExecutor::update(const Output &command, const VehicleState &
 }
 
 void ModeExecutor::reset(const VehicleState &recovered) {
-  if (!detail::valid_vehicle(recovered, config_) || !is_stopped(recovered, config_) ||
+  if (check_feedback(recovered, config_).status != FeedbackStatus::Valid ||
+      !is_stopped(recovered, config_) ||
       !recovered.mode_confirmed || recovered.mode_fault)
     throw std::invalid_argument("executor recovery requires verified stopped state");
   actual_mode_ = recovered.actual_mode;

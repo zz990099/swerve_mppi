@@ -17,6 +17,8 @@ Nav2 controller plugin belong in separate adapter packages.
 | TimingGuard | Check clock/cadence, observation and command age, source/scheduled execution metadata and ordered envelopes. |
 | TimedExecutor | Transactionally preview execution, validate its exact joint interval/full stop against current context, commit or use checked braking; latch timing/protocol/unsafe-stop faults. |
 | ActuationModel / ActuationPlan | Build a checked actuator reference and expose affine Drive or proportional braking followed by stationary alignment samples. |
+| ProfileRunner | Serial high-rate sampling, joint-unit conversion and latched application/wall-clock expiry; leaves mode protocol to TimedExecutor. |
+| FeedbackCheck / PlanningBudget | Admit mutually consistent body/joint observations and share one cooperative steady-clock budget across all branches. |
 | Optimizer | Optimize continuous controls inside one branch; advance only an accepted keep-mode warm start. |
 | NoiseGenerator | Seeded Gaussian proposals, effective projected perturbations and control-noise correction. |
 | RolloutEngine | Generate an inspectable pose horizon and mark ticks consumed by transitions. |
@@ -36,7 +38,7 @@ state while retaining vector capacity.
 
 ## Planning and execution
 
-1. Check the timestamp, finite state, measured joint limits and path.
+1. Start the shared wall budget; reject oversize contexts, then check timestamp, finite state, measured joint limits, body/joint consistency and path.
 2. Update path progress and local target; reset task state for a new path/ID/policy.
 3. If a committed mode transition is active, update it from actual measured feedback.
 4. Finish committed local alignment/first Drive before choosing a new terminal,
@@ -175,7 +177,12 @@ Output::control_policy identifies Tracking, Alignment, Capture, ModeTransition,
 Stopped, Blocked or Fault. FailureReason separates invalid data, clock/path/feedback
 faults, no feasible plan, unsafe stopping, model failure and transition faults. PlanningStats counts all
 branches, physical rollout evaluations, finite scores and fallback updates in the
-current compute call. It does not report elapsed time or enforce a solve deadline.
+current compute call, with budget_exhausted indicating cooperative deadline rejection.
+Controller uses one steady-clock budget across preparation, all branches and final
+safety/publication checks. Optimizer checks between evaluations; a single bounded
+rollout or custom critic can overrun. A final gate rejects every expired result,
+including terminal Hold. The independently scheduled actuator watchdog must stop
+execution while a solve is delayed; arbitrary user callbacks must themselves be bounded.
 Legacy Output::feasible_rollouts remains the selected branch's feasible proposal
 count. See docs/PERFORMANCE.md for measurement and exact counter semantics.
 
@@ -333,7 +340,8 @@ same ActuationPlan the validator checked, for high-rate target sampling.
 
 The actuator reference is production code. The behavior fixture retains independent
 encoder equations/integration as a test oracle. No ROS/Gazebo transport, global
-reacquisition, solver deadline or physical actuator calibration is added here.
+reacquisition or physical actuator calibration is added here. Version 0.15 adds
+cooperative deadlines and a portable profile consumer, still without ROS transport.
 The current state must describe the application instant; estimated states and
 uncertainty envelopes require an explicit adapter/model contract. A timestamp
 rewrite alone does not time-align stale measurements.
