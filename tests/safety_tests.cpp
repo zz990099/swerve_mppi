@@ -19,6 +19,45 @@ Config deterministic() {
   c.samples_per_branch = 8;
   return c;
 }
+void test_trajectory_anchor() {
+  Config c;
+  TrajectoryValidator validator(c);
+  auto in = straight();
+  Trajectory trace;
+  trace.valid = true;
+  trace.poses = {{0, 0, 0}, {1, 0, 0}};
+  check(validator.check(in, trace) == TrajectoryStatus::Valid,
+        "anchored caller-provided piecewise linear traces must remain valid");
+  for (const Pose2d pose : {Pose2d{2, 0, 0}, Pose2d{0, 2, 0}, Pose2d{0, 0, .1}}) {
+    trace.poses[0] = pose;
+    check(validator.check(in, trace) == TrajectoryStatus::Invalid,
+          "translated or rotated trajectory anchors must be rejected");
+  }
+  trace.poses[0] = {};
+  in.vehicle.pose.x = .1;
+  check(validator.check(in, trace) == TrajectoryStatus::Invalid,
+        "cached traces must be rejected after feedback advances");
+  in.vehicle.pose = {0, 0, -std::numeric_limits<double>::max()};
+  trace.poses = {{0, 0, std::numeric_limits<double>::max()}};
+  check(validator.check(in, trace) == TrajectoryStatus::Invalid,
+        "overflowing yaw differences must fail closed");
+  in.vehicle.pose = {};
+  trace.poses = {{0, 0, 2 * std::acos(-1.0)}};
+  check(validator.check(in, trace) == TrajectoryStatus::Valid,
+        "equivalent wrapped yaw and a single stationary pose must be accepted");
+  const double radius = c.robot_radius_m + c.collision_margin_m + .1;
+  in.obstacles = {{-radius + 1e-10, 0, .1}};
+  trace.poses = {{5e-10, 0, 0}};
+  check(validator.check(in, trace) == TrajectoryStatus::Collision,
+        "anchor tolerance must never omit the exact measured colliding footprint");
+  trace.poses = {{2, 0, 0}, {3, 0, 0}};
+  in.obstacles = {{0, 0, .1}};
+  check(validator.check(in, trace) == TrajectoryStatus::Invalid,
+        "the reviewed remote safe trace must not validate a colliding current vehicle");
+  trace.poses = {{0, 0, 0}};
+  check(validator.check(in, trace) == TrajectoryStatus::Collision,
+        "anchored single-pose holds must check current collision");
+}
 void test_validator_configuration_contract() {
   const Config c;
   for (int field = 0; field < 4; ++field) {
@@ -461,6 +500,7 @@ void test_residual_hold_obstacle() {
 } // namespace
 int main() {
   try {
+    test_trajectory_anchor();
     test_residual_hold_obstacle();
     test_drive_requires_complete_stopping_continuation();
     test_first_drive_deceleration_matches_execution();

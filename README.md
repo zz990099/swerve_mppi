@@ -29,7 +29,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.12 CONFIG REQUIRED)
+find_package(swerve_mppi 0.13 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -96,6 +96,12 @@ See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for commands and measurement limi
 The optional allocation regression runs in CI; wall-clock timing is not a CI gate.
 
 ## Current status
+
+Version 0.13 fixes marginal noise weighting across inactive alignment ticks and
+rejects trajectories whose initial pose differs from current vehicle feedback.
+NoiseGenerator::correction accepts an optional Branch argument; callers sampling
+mode switches must pass it. Rebuild consumers against 0.13 because its symbol
+signature changed. See docs/CORRELATION_ANCHOR_VALIDATION.md for verification.
 
 Version 0.12 closes the residual-motion and full-period execution review findings.
 Hold/RequestMode finish proportional braking before steering, including rolling

@@ -21,6 +21,8 @@ public:
   // Reject a different footprint, margin or measured joint validity envelope.
   // Planning-only parameters may differ because check() consumes explicit poses.
   void require_compatible(const Config &config) const;
+  // The initial pose must match input.vehicle.pose within 1e-9 m/rad
+  // (yaw modulo 2*pi). Also checks the exact current circular footprint.
   TrajectoryStatus check(const ControllerInput &input, const Trajectory &trajectory) const;
 
 private:

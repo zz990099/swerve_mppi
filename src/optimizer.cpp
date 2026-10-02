@@ -143,7 +143,7 @@ Solution Optimizer::optimize(const ControllerInput &input, const Branch &branch)
       ++feasible;
       if (sample.cost < fallback.cost)
         capture(fallback, candidate_, sample.cost);
-      sample.cost += noise_.correction(mean, sample.noise, sample.active);
+      sample.cost += noise_.correction(mean, sample.noise, sample.active, branch);
       if (std::isfinite(sample.cost))
         minimum = std::min(minimum, sample.cost);
     }

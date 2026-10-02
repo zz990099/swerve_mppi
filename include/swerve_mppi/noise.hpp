@@ -9,8 +9,10 @@ public:
   explicit NoiseGenerator(const Config &config);
   void sample(const std::vector<Control> &mean, const Branch &branch, DriveMode current_mode,
               std::vector<Control> &candidate, std::vector<Control> &effective_noise);
+  // Marginal AR(1) precision over active ticks; only explicit entry resets it.
+  // Pass the same branch used by sample() when a mode switch is present.
   double correction(const std::vector<Control> &mean, const std::vector<Control> &effective_noise,
-                    const std::vector<bool> &active) const;
+                    const std::vector<bool> &active, const Branch &branch = {}) const;
   void reset();
 
 private:

@@ -33,6 +33,23 @@ TrajectoryStatus TrajectoryValidator::check(const ControllerInput &input,
   for (double margin : trajectory.sweep_margins_m)
     if (!std::isfinite(margin) || margin < 0)
       return TrajectoryStatus::Invalid;
+  const auto &current = input.vehicle.pose;
+  const auto &initial = trajectory.poses.front();
+  constexpr double anchor_tolerance = 1e-9;
+  const double yaw_error = angle_distance(initial.yaw, current.yaw);
+  if (!std::isfinite(yaw_error) ||
+      std::hypot(initial.x - current.x, initial.y - current.y) > anchor_tolerance ||
+      std::abs(yaw_error) > anchor_tolerance)
+    return TrajectoryStatus::Invalid;
+  // Check the exact measured footprint even when the anchor differs by roundoff.
+  for (const auto &obstacle : input.obstacles) {
+    const double clearance = std::hypot(current.x - obstacle.x, current.y - obstacle.y) -
+                             obstacle.radius - config_.robot_radius_m - config_.collision_margin_m;
+    if (!std::isfinite(clearance))
+      return TrajectoryStatus::Invalid;
+    if (clearance <= 0)
+      return TrajectoryStatus::Collision;
+  }
   for (std::size_t i = 0; i < trajectory.poses.size(); ++i) {
     const double margin =
         i == 0 || trajectory.sweep_margins_m.empty() ? 0 : trajectory.sweep_margins_m[i - 1];

@@ -38,21 +38,27 @@ void NoiseGenerator::sample(const std::vector<Control> &mean, const Branch &bran
 }
 double NoiseGenerator::correction(const std::vector<Control> &mean,
                                   const std::vector<Control> &noise,
-                                  const std::vector<bool> &active) const {
+                                  const std::vector<bool> &active, const Branch &branch) const {
   if (noise.size() != mean.size() || active.size() != mean.size())
     throw std::invalid_argument("noise correction dimensions must match the nominal sequence");
   double sum = 0.0;
   const double rho = config_.noise_correlation;
+  std::size_t previous = mean.size();
   for (std::size_t t = 0; t < mean.size(); ++t) {
+    if (branch.switches && t == branch.switch_step) {
+      previous = mean.size();
+      continue;
+    }
     if (!active[t])
       continue;
-    // Whiten both vectors with the AR(1) precision operator. A masked interval
-    // starts a new active segment; inactive controls cannot affect this cost.
-    const bool linked = t > 0 && active[t - 1];
-    const double a = linked ? rho : 0.0;
-    const double variance_scale = linked ? 1.0 - rho * rho : 1.0;
-    const Control m = linked ? mean[t - 1] : Control{};
-    const Control n = linked ? noise[t - 1] : Control{};
+    // Marginalizing unobserved ticks retains correlation across their gap.
+    // The explicit entry tick alone restarts the process, matching sample().
+    const bool linked = previous != mean.size();
+    const double a = linked ? std::pow(rho, t - previous) : 0.0;
+    const double variance_scale = 1.0 - a * a;
+    const Control m = linked ? mean[previous] : Control{};
+    const Control n = linked ? noise[previous] : Control{};
+    previous = t;
     if (config_.noise_v_mps > 0.0)
       sum += ((mean[t].vx - a * m.vx) * (noise[t].vx - a * n.vx) +
               (mean[t].vy - a * m.vy) * (noise[t].vy - a * n.vy)) /

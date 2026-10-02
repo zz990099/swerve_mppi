@@ -106,9 +106,11 @@ directions as separate branches remains future work.
 `noise_correlation` controls temporal continuity without changing marginal noise
 variance. Zero selects independent noise. The noise process restarts after the
 frozen mode-entry control. Weighting whitens nominal controls and effective noise
-with the AR(1) precision operator inside each contiguous active segment; inactive
-ticks break segments and contribute no correction. For zero correlation this
-reduces to control_correction_weight * nominal * effective_noise / variance.
+with the marginal AR(1) precision operator over active ticks. Inactive ticks
+contribute no correction but retain correlation rho^gap between successive active
+indices; only the frozen explicit mode-entry tick breaks this linkage. Callers
+of NoiseGenerator::correction must pass the same Branch used for sampling.
+For zero correlation this reduces to control_correction_weight * nominal * effective_noise / variance.
 A disabled noise dimension contributes no correction. Weights use a
 minimum-normalized exponential of trajectory cost plus that correction. Mode selection compares physical
 critic scores; proposal correction is used only for weighting within a branch.
@@ -122,7 +124,10 @@ default objectives and allows additional const critics through shared ownership.
 A nonfinite critic result rejects a trajectory. Each rollout exposes its initial
 pose and one pose per tick, final vehicle state, applied controls and transition
 mask. Controller and Optimizer share one const TrajectoryValidator. Its swept
-centre-line circle checks and injected TrajectoryConstraint objects apply to MPPI,
+centre-line circle checks require an initial pose matching current feedback within
+1e-9 m/rad (yaw modulo 2*pi), independently check the exact current footprint,
+and reject stale or shifted traces. These checks and injected TrajectoryConstraint
+objects apply to MPPI,
 capture, alignment and fallback stopping. Build/configure the validator before
 passing it to Controller; do not mutate shared constraints during computation.
 The obstacle critic contributes clearance cost; lowering a weight cannot override

@@ -93,6 +93,132 @@ void test_effective_noise_and_disabled_noise() {
   check(disabled.correction(mean, effective, std::vector<bool>(mean.size(), true)) == 0,
         "zero noise must not divide by zero");
 }
+// Independent dense covariance solve, rather than the production recurrence.
+double covariance_score(const std::vector<Control> &mean, const std::vector<Control> &delta,
+                        const std::vector<bool> &active, double rho, const Branch &branch) {
+  std::vector<std::size_t> indices;
+  for (std::size_t i = 0; i < active.size(); ++i)
+    if (active[i] && !(branch.switches && i == branch.switch_step))
+      indices.push_back(i);
+  const auto n = indices.size();
+  std::vector<std::vector<double>> matrix(n, std::vector<double>(n + 1));
+  for (std::size_t i = 0; i < n; ++i) {
+    for (std::size_t j = 0; j < n; ++j) {
+      const auto a = indices[i], b = indices[j];
+      const bool separated =
+          branch.switches && ((a < branch.switch_step) != (b < branch.switch_step));
+      matrix[i][j] = separated ? 0 : std::pow(rho, a > b ? a - b : b - a);
+    }
+    matrix[i][n] = delta[indices[i]].vx;
+  }
+  for (std::size_t k = 0; k < n; ++k) {
+    const double pivot = matrix[k][k];
+    for (std::size_t j = k; j <= n; ++j)
+      matrix[k][j] /= pivot;
+    for (std::size_t i = 0; i < n; ++i) {
+      if (i == k)
+        continue;
+      const double factor = matrix[i][k];
+      for (std::size_t j = k; j <= n; ++j)
+        matrix[i][j] -= factor * matrix[k][j];
+    }
+  }
+  double score = 0;
+  for (std::size_t i = 0; i < n; ++i)
+    score += mean[indices[i]].vx * matrix[i][n];
+  return score;
+}
+void test_marginal_covariance() {
+  Config c;
+  c.noise_v_mps = 1;
+  c.noise_w_radps = 0;
+  c.control_correction_weight = 1;
+  std::vector<Control> mean(8), delta(8);
+  for (std::size_t i = 0; i < mean.size(); ++i) {
+    mean[i].vx = .1 * (i + 1);
+    delta[i].vx = .03 * (i % 3) - .02;
+  }
+  for (double rho : {0.0, .5, .85, .99}) {
+    c.noise_correlation = rho;
+    NoiseGenerator noise(c);
+    for (const Branch branch :
+         {Branch{}, Branch{DriveMode::Crab, 3, true}, Branch{DriveMode::Crab, 0, true}})
+      for (unsigned mask = 0; mask < 256; ++mask) {
+        std::vector<bool> active(8);
+        for (unsigned i = 0; i < 8; ++i)
+          active[i] = (mask & (1u << i)) != 0;
+        check(std::abs(noise.correction(mean, delta, active, branch) -
+                       covariance_score(mean, delta, active, rho, branch)) < 1e-9,
+              "sparse correction must match inverse marginal covariance including entry resets");
+      }
+  }
+  c.noise_correlation = .85;
+  c.noise_v_mps = .8;
+  c.noise_w_radps = .7;
+  const std::vector<bool> mask{true, false, true, false, false, true, true, false};
+  auto lateral_mean = mean, lateral_delta = delta, yaw_mean = mean, yaw_delta = delta;
+  for (std::size_t i = 0; i < mean.size(); ++i) {
+    lateral_mean[i].vx *= -.4;
+    lateral_delta[i].vx *= .3;
+    yaw_mean[i].vx *= .6;
+    yaw_delta[i].vx *= -.2;
+    mean[i].vy = lateral_mean[i].vx;
+    delta[i].vy = lateral_delta[i].vx;
+    mean[i].wz = yaw_mean[i].vx;
+    delta[i].wz = yaw_delta[i].vx;
+  }
+  const double expected = (covariance_score(mean, delta, mask, .85, {}) +
+                           covariance_score(lateral_mean, lateral_delta, mask, .85, {})) /
+                              (.8 * .8) +
+                          covariance_score(yaw_mean, yaw_delta, mask, .85, {}) / (.7 * .7);
+  check(std::abs(NoiseGenerator(c).correction(mean, delta, mask) - expected) < 1e-9,
+        "each enabled dimension must use its own marginal variance");
+  c.noise_w_radps = 0;
+  c.noise_correlation = .5;
+  c.noise_v_mps = .01;
+  NoiseGenerator generator(c);
+  mean.assign(3, {.2, 0, 0});
+  for (const Branch branch : {Branch{}, Branch{DriveMode::Crab, 1, true}}) {
+    double sum_x = 0, sum_y = 0, xx = 0, yy = 0, xy = 0;
+    constexpr int count = 50000;
+    for (int i = 0; i < count; ++i) {
+      std::vector<Control> candidate, effective;
+      generator.sample(mean, branch, DriveMode::DualAckermann, candidate, effective);
+      const double x = effective[0].vx, y = effective[2].vx;
+      sum_x += x;
+      sum_y += y;
+      xx += x * x;
+      yy += y * y;
+      xy += x * y;
+    }
+    const double correlation =
+        (xy - sum_x * sum_y / count) /
+        std::sqrt((xx - sum_x * sum_x / count) * (yy - sum_y * sum_y / count));
+    check(std::abs(correlation - (branch.switches ? 0 : .25)) < .02,
+          "sampling must preserve gap correlation and reset only at explicit entry");
+  }
+  VehicleState state;
+  state.actual_mode = DriveMode::Crab;
+  mean.assign(c.horizon_steps, {0, .4, 0});
+  const auto trace = RolloutEngine(c).generate(state, {}, mean);
+  check(trace.valid && trace.active_controls[0] && !trace.active_controls[1],
+        "real alignment must expose the sparse active mask");
+  // Exercise another noise dimension with the real rollout mask.
+  delta.assign(mean.size(), {.01, .02, .03});
+  for (auto &u : mean) {
+    u.vx = u.vy;
+    u.vy = 0;
+  }
+  for (auto &u : delta) {
+    u.vx = u.vy;
+    u.vy = 0;
+  }
+  c.noise_v_mps = 1;
+  NoiseGenerator alignment(c);
+  check(std::abs(alignment.correction(mean, delta, trace.active_controls) -
+                 covariance_score(mean, delta, trace.active_controls, .5, {})) < 1e-9,
+        "alignment masks must retain the sampled marginal covariance");
+}
 void test_correlated_noise_precision() {
   Config c;
   c.noise_correlation = .5;
@@ -105,8 +231,8 @@ void test_correlated_noise_precision() {
   const double expected = .2 + (2 - .5) * (.4 - .1) / .75 + (3 - 1) * (.1 - .2) / .75;
   check(std::abs(noise.correction(mean, perturbation, {true, true, true}) - expected) < 1e-9,
         "correlated proposals must use their temporal precision in weighting");
-  check(std::abs(noise.correction(mean, perturbation, {true, false, true}) - .5) < 1e-9,
-        "masked intervals must isolate active noise correction segments");
+  check(std::abs(noise.correction(mean, perturbation, {true, false, true}) - 26.0 / 75.0) < 1e-9,
+        "masked intervals must retain marginal correlation across the gap");
   mean.assign(c.horizon_steps, {.2, 0, 0});
   std::vector<Control> a, b, effective;
   noise.sample(mean, {}, DriveMode::DualAckermann, a, effective);
@@ -322,6 +448,7 @@ int main() {
     test_hysteresis_selection();
     test_rollout_and_swept_collision();
     test_effective_noise_and_disabled_noise();
+    test_marginal_covariance();
     test_correlated_noise_precision();
     test_frozen_alignment_rollout();
     test_optimizer_reset_and_closed_loop();

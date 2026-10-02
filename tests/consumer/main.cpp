@@ -13,6 +13,9 @@ int main() {
   validator.require_compatible(swerve_mppi::Config{});
   const auto residual =
       swerve_mppi::Kinematics(swerve_mppi::Config{}).max_module_residual({}, {}, {});
+  swerve_mppi::NoiseGenerator noise(swerve_mppi::Config{});
+  const double correction = noise.correction({}, {}, {}, {});
+  const double legacy_correction = noise.correction({}, {}, {});
   swerve_mppi::Trajectory stop;
   swerve_mppi::RolloutEngine(swerve_mppi::Config{}).generate_stop({}, stop);
   swerve_mppi::Trajectory continuation;
@@ -26,7 +29,7 @@ int main() {
   return controller.compute({}).action == swerve_mppi::Action::SafeStop &&
                  result.feedback.confirmed &&
                  guarded.timing_error == swerve_mppi::TimingError::None && residual == 0 &&
-                 stop.valid && continuation.valid &&
+                 correction == 0 && legacy_correction == 0 && stop.valid && continuation.valid &&
                  continuation.sweep_margins_m.size() + 1 == continuation.poses.size() &&
                  continuation.position_error_m >= 0 && step.sweep_margin_m >= 0 &&
                  step.integration_error_m >= 0 && path.goal_eligible &&
