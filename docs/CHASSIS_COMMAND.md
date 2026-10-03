@@ -1,4 +1,4 @@
-# Chassis command contract (0.18)
+# Chassis command contract (0.20)
 
 The public planning result is `Output`, containing `PlanningDiagnostics` and an
 optional `ChassisCommand`. It has no `action`, steering angles or wheel speeds.
@@ -57,13 +57,26 @@ Retries cannot renew deadlines. After confirmation, the planner observes matchin
 actual mode, confirmed flag, request ID and stopped/aligned feedback before sending
 its stopped handover and subsequent ordinary body target.
 
-In 0.19.1, planner acknowledgement accepts mechanically legal equivalent rolling
-lines (angles modulo pi), because first accepted execution may choose a different
-signed wheel representation than the earlier planning snapshot. The executor
-still freezes exact mechanical positions and checks retries against those positions.
-Acknowledgement preserves measured steering during the handover; it never commands
-a wrapped motion across a mechanical stop. Non-equivalent geometry, an incorrect
-ID, unconfirmed mode or moving feedback cannot complete the request.
+In 0.20, execution returns `ModeFeedback::accepted_mode_request`, the exact
+immutable `JointModeRequest` it first accepted (ID, mode, mechanical steering
+positions and original body entry velocity). Copy it to
+`VehicleState::accepted_mode_request` with the other executor status fields.
+Before acceptance, prediction selects geometry at the latest measured snapshot.
+After acceptance, the planner validates the receipt against its frozen body intent
+and original rolling lines modulo pi, then uses the receipt's exact positions in
+retry safety checks. It never infers the commitment from moving measured angles.
+
+The receipt remains present through completion and ordinary driving, until a
+new request is accepted or deliberate executor recovery clears it. A pending
+matching accepted ID without the receipt faults; once bound, missing or mutated
+receipt data faults as well. A different accepted signed representation is legal,
+but handover still requires exact measured alignment to the accepted positions,
+matching confirmed mode/ID and stopped motion. Handover retains measured steering.
+
+Nonzero entry steering is computed from normalized direction/curvature, regardless
+of speed magnitude, including subnormal finite values. Exactly zero entry intent
+uses the canonical geometry for the selected mode. The original entry velocity
+is echoed without normalization and remains immutable across retries.
 
 ## Execution ownership
 
@@ -89,8 +102,11 @@ of the MPPI planning output or requirements for a ROS chassis command message.
 
 ## Migration and verification
 
-The current package is 0.19; use `find_package(swerve_mppi 0.19 CONFIG REQUIRED)`
+The current package is 0.20; use `find_package(swerve_mppi 0.20 CONFIG REQUIRED)`
 and module-qualified headers from [DEVELOPMENT.md](DEVELOPMENT.md).
+The added feedback field changes the public aggregate layout: rebuild all consumers
+and preserve the complete accepted request in ROS status conversion.
+`FeedbackAdapter` copies it automatically; manual mappings must do so explicitly.
 For the 0.18 command migration: Replace old
 `Output.action/body_command/steering_targets/wheel_speed_targets/mode_request`
 access with `Output.command`, target_velocity and its optional mode_request.

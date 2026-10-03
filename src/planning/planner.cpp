@@ -116,8 +116,14 @@ JointCommand Planner::compute_impl(const ControllerInput & input, const Planning
   }
   prepared.tracking =
     TrackingContext{path.target, path.remaining_m, limit, path.goal_eligible, input.heading_policy};
-  const auto goal = goal_manager_.update(
-    input.vehicle, path, mode_manager_.active() || alignment_control_.has_value());
+  GoalState goal;
+  try {
+    goal = goal_manager_.update(
+      input.vehicle, path, mode_manager_.active() || alignment_control_.has_value());
+  } catch (const std::invalid_argument &) {
+    stop.failure_reason = FailureReason::InvalidInput;
+    return stop;
+  }
   JointCommand out;
   if (mode_manager_.active()) {
     out = mode_manager_.update(input.vehicle);
@@ -276,8 +282,9 @@ JointCommand Planner::compute_goal(const ControllerInput & input, const GoalStat
     const auto & pose = input.vehicle.pose;
     const auto & target = input.tracking->goal;
     const double dx = target.x - pose.x, dy = target.y - pose.y;
-    const double x = std::cos(pose.yaw) * dx + std::sin(pose.yaw) * dy;
-    const double y = -std::sin(pose.yaw) * dx + std::cos(pose.yaw) * dy;
+    const double heading = wrap_angle(pose.yaw);
+    const double x = std::cos(heading) * dx + std::sin(heading) * dy;
+    const double y = -std::sin(heading) * dx + std::cos(heading) * dy;
     target_mode = input.vehicle.actual_mode == DriveMode::DualAckermann &&
                       std::abs(y) < config_.goal_position_tolerance_m / 2
                     ? DriveMode::DualAckermann

@@ -12,10 +12,6 @@ namespace swerve_mppi
 {
 namespace
 {
-bool same_request(const JointModeRequest & a, const JointModeRequest & b)
-{
-  return a.id == b.id && a.mode == b.mode && a.steering_targets == b.steering_targets;
-}
 bool valid_entry(const JointModeRequest & request, const Config & config)
 {
   const auto & angles = request.steering_targets;
@@ -73,9 +69,12 @@ ExecutionResult ModeExecutor::update(const JointCommand & command, const Vehicle
   auto finish = [&]() {
     out.phase = phase_;
     out.feedback = {
-      actual_mode_, phase_ == TransitionPhase::Stable, phase_ == TransitionPhase::Fault,
+      actual_mode_,
+      phase_ == TransitionPhase::Stable,
+      phase_ == TransitionPhase::Fault,
       last_request_id_,
-      initialized_ && valid ? std::max(0.0, measured.stamp_s - confirmed_s_) : 0.0};
+      initialized_ && valid ? std::max(0.0, measured.stamp_s - confirmed_s_) : 0.0,
+      request_};
     return out;
   };
   auto fault = [&]() {
@@ -103,11 +102,12 @@ ExecutionResult ModeExecutor::update(const JointCommand & command, const Vehicle
     if (
       r.id == 0 || !detail::valid_mode(r.mode) || r.mode != command.requested_mode ||
       !detail::valid_steering(r.steering_targets, config_) || !valid_entry(r, config_) ||
-      r.id < last_request_id_) {
+      !std::isfinite(r.entry_velocity.vx) || !std::isfinite(r.entry_velocity.vy) ||
+      !std::isfinite(r.entry_velocity.wz) || r.id < last_request_id_) {
       return fault();
     }
     if (r.id == last_request_id_) {
-      if (!request_ || !same_request(r, *request_)) {
+      if (!request_ || !detail::same_request(r, *request_)) {
         return fault();
       }
       // A retry after completion remains a stopped acknowledgement; no restart.

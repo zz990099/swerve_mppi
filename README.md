@@ -12,11 +12,14 @@ header migration and the official ROS Rolling formatting/checking workflow.
 
 ## Build, test and install
 
-Version 0.19.1 fixes queued mode acknowledgement when execution selects an
-equivalent signed wheel geometry, and certifies module residuals throughout the
-complete Drive interval. See [docs/BOUNDARY_REVIEW_VALIDATION.md](docs/BOUNDARY_REVIEW_VALIDATION.md)
-for the regressions, bounds and validation. The 0.19 module-qualified include
-paths and actionless chassis command interface are retained.
+Version 0.20.0 adds executor-owned accepted entry geometry to mode feedback, so
+pending-request safety checks follow the actual committed steering interval.
+It also makes nonzero entry geometry independent of velocity amplitude and avoids
+finite-yaw subtraction overflow. See [docs/ENTRY_FEEDBACK_VALIDATION.md](docs/ENTRY_FEEDBACK_VALIDATION.md)
+for regressions and validation. Downstream consumers must rebuild and forward the
+new feedback field; the actionless chassis command and module include paths remain.
+The earlier Drive interval certification is documented in
+[docs/BOUNDARY_REVIEW_VALIDATION.md](docs/BOUNDARY_REVIEW_VALIDATION.md).
 
 Requirements: CMake 3.20 or newer and a C++17 compiler. CMake is the only supported
 build entry point; no workspace activation script or ROS environment is required.
@@ -37,7 +40,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.19 CONFIG REQUIRED)
+find_package(swerve_mppi 0.20 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -52,7 +55,9 @@ advances by one model step per accepted drive action; arbitrary controller/model
 period ratios are not supported yet.
 
 - Pose and path coordinates share one world frame. Velocities are in the robot
-  frame. Lengths, angles and time use metres, radians and seconds.
+  frame. Lengths, angles and time use metres, radians and seconds. Finite unwrapped
+  yaw is reduced periodically before angular differences/transforms. Nonfinite
+  derived goal errors withhold authorization with InvalidInput.
 - Wheel order is FL, FR, RL, RR. Core wheel speeds are **linear rolling speeds in
   m/s**. Convert joint rad/s using wheel_radius_m; do not copy raw JointState
   velocities into VehicleState::wheel_speeds.
@@ -62,7 +67,8 @@ period ratios are not supported yet.
 - Timestamps must be finite, nonnegative and strictly increasing. The adapter
   owns feedback freshness checks, clock-reset handling and coordinate conversion.
 - time_in_mode_s is the age of the actual confirmed mode, not the requested
-  mode. mode_confirmed and mode_request_id must come from the execution layer.
+  mode. mode_confirmed, mode_request_id and accepted_mode_request must come from
+  the execution layer.
   Startup uses request ID zero; subsequent IDs increase within an execution session.
 - `Output::command` is an optional `ChassisCommand`: explicit mode, body-frame
   `target_velocity` (`vx`, `vy`, `wz`) and optional `mode_request`. The planning
@@ -73,7 +79,9 @@ period ratios are not supported yet.
 - A mode request carries a nonzero ID, target mode and frozen body `entry_velocity`.
   Its target_velocity is exactly zero. Entry intent specifies alignment geometry,
   never permission to drive. Retries preserve the entire request; execution confirms
-  the matching ID/mode using stopped body/joints and measured steering.
+  the matching ID/mode using stopped body/joints and measured steering. Execution
+  echoes its frozen mechanical entry in accepted_mode_request; prediction uses that
+  exact geometry after acceptance, and final handover requires measured alignment.
 - Target velocity is the nominal intent, rather than FK of rate-limited joint
   endpoints. The execution layer compiles it at the current snapshot with the same
   DriveModel used in prediction. Large steering changes still require stop/alignment.

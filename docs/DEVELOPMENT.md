@@ -45,7 +45,7 @@ For example:
 ```
 
 ```cmake
-find_package(swerve_mppi 0.19 CONFIG REQUIRED)
+find_package(swerve_mppi 0.20 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -55,6 +55,16 @@ Classes, methods, the chassis command contract and the exported core target reta
 their behavior.
 The independent installed consumer compiles every installed public header in its own
 translation unit, then links/runs without access to private source headers.
+
+## Feedback migration in 0.20
+
+The module paths above remain current. Version 0.20 appends
+`accepted_mode_request` to both `ModeFeedback` and `VehicleState` and changes their
+aggregate layout. Rebuild consumers. Pass the complete executor-owned accepted
+`JointModeRequest` unchanged through status conversion; `FeedbackAdapter` does so
+automatically. A pending accepted ID without its receipt is no longer sufficient.
+See [CHASSIS_COMMAND.md](CHASSIS_COMMAND.md) for receipt lifecycle and geometry rules.
+The public chassis command still contains only velocity, mode and optional request.
 
 ## Official ROS Rolling format
 

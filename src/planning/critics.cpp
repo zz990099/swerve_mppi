@@ -48,7 +48,7 @@ PathMatch path_match(const Pose2d & pose, const std::vector<Pose2d> & path)
   return {
     std::sqrt(nearest_squared),
     wrap_angle(
-      path[nearest - 1].yaw +
+      wrap_angle(path[nearest - 1].yaw) +
       nearest_t * angle_distance(path[nearest].yaw, path[nearest - 1].yaw))};
 }
 

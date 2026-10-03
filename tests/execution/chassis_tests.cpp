@@ -283,7 +283,8 @@ void test_queued_request_equivalent_geometry()
     ControllerInput input;
     input.vehicle = stopped();
     input.vehicle.steering_angles.fill(sign * .01);
-    input.reference_path = {{0, 0, 0}, {0, sign * .2, 0}};
+    input.reference_path.push_back({0, 0, 0});
+    input.reference_path.push_back({0, sign * .2, 0});
     auto output = controller.compute(input);
     check(output.command && output.command->mode_request, "near lateral goal must request Crab");
     const auto frozen = *output.command->mode_request;
@@ -357,6 +358,8 @@ void test_equivalent_acknowledgement_guards()
     s.mode_request_id = request.mode_request->id + 1;
     check(manager.update(s).action == Action::RequestMode, "equivalence cannot bypass request ID");
     s.mode_request_id = request.mode_request->id;
+    s.accepted_mode_request = request.mode_request;
+    s.accepted_mode_request->steering_targets = equivalent;
     s.actual_mode = mode == DriveMode::DualAckermann ? DriveMode::Crab : DriveMode::DualAckermann;
     s.stamp_s += c.dt_s;
     check(
@@ -436,6 +439,236 @@ void test_guarded_public_pipeline()
       r.safety_error != ExecutionSafetyError::TaskMismatch,
     "absent authorization must latch even without a matching source task");
 }
+class SteeringAwayFromZero final : public TrajectoryConstraint
+{
+public:
+  bool allows(const ControllerInput & input, const Trajectory & trace) const override
+  {
+    for (std::size_t i = 0; i < 4; ++i) {
+      const double angle = input.vehicle.steering_angles[i];
+      if (angle * (trace.final_state.steering_angles[i] - angle) < -1e-12) {
+        return false;
+      }
+    }
+    return true;
+  }
+};
+void test_queued_entry_with_joint_constraint()
+{
+  Config c;
+  c.compute_budget_ratio = 0;
+  for (double sign : {-1., 1.}) {
+    auto validator = std::make_shared<TrajectoryValidator>(c);
+    validator->add(std::make_shared<SteeringAwayFromZero>());
+    Controller controller(c, validator);
+    TimedExecutor executor(c, 1, DriveMode::DualAckermann, {}, validator);
+    ProfileRunner runner(c);
+    ControllerInput input;
+    input.vehicle = stopped();
+    input.vehicle.steering_angles.fill(sign * .01);
+    input.reference_path = {{0, 0, 0}, {0, sign * .2, 0}};
+    auto output = controller.compute(input);
+    check(output.command && output.command->mode_request, "constrained entry must request Crab");
+    const auto frozen = *output.command->mode_request;
+    auto before_acceptance = controller;
+    input.vehicle.steering_angles.fill(-sign * .01);
+    input.vehicle.stamp_s += c.dt_s;
+    const auto refreshed = before_acceptance.compute(input);
+    check(
+      refreshed.command && refreshed.command->mode_request &&
+        refreshed.command->mode_request->id == frozen.id,
+      "unaccepted body request must predict geometry at the latest snapshot");
+    CommandEnvelope packet{1, 1, 1.05, output, 1, 1.1, 1.125, CommandTask::capture(input)};
+    const auto first = executor.update(packet, input, 1.1);
+    check(
+      first.actuation && !first.execution.feedback.fault &&
+        first.execution.feedback.accepted_mode_request &&
+        sign * first.execution.steering_targets[0] < -1.5,
+      "queued execution must accept and echo its opposite mechanical representation");
+    input.vehicle.mode_confirmed = first.execution.feedback.confirmed;
+    input.vehicle.mode_request_id = first.execution.feedback.request_id;
+    input.vehicle.accepted_mode_request = first.execution.feedback.accepted_mode_request;
+    const auto retry = controller.compute(input);
+    check(
+      retry.command && retry.command->mode_request && retry.command->mode_request->id == frozen.id,
+      "accepted opposite geometry must pass the planner's joint constraint");
+    double wall = 10;
+    check(runner.install(first, 1.1, wall), "constrained first profile must install");
+    actuate_profile(input.vehicle, runner, first.execution.feedback, c, wall, {});
+    wall += c.dt_s;
+    bool drove = false, completed = false;
+    for (std::uint64_t tick = 2; tick < 60; ++tick) {
+      output = controller.compute(input);
+      check(output.command.has_value(), "legitimate constrained entry must not cancel");
+      if (output.command->mode_request) {
+        const auto & r = *output.command->mode_request;
+        check(
+          r.id == frozen.id && r.mode == frozen.mode &&
+            r.entry_velocity.vx == frozen.entry_velocity.vx &&
+            r.entry_velocity.vy == frozen.entry_velocity.vy &&
+            r.entry_velocity.wz == frozen.entry_velocity.wz,
+          "geometry feedback cannot mutate the frozen body request");
+      }
+      const double now = input.vehicle.stamp_s;
+      packet = {1, tick, now, output, now, now, now + .025, CommandTask::capture(input)};
+      const auto checked = executor.update(packet, input, now);
+      check(
+        checked.actuation && !checked.execution.feedback.fault &&
+          checked.safety_error == ExecutionSafetyError::None,
+        "planner and executor must authorize the same constrained joint interval");
+      drove = drove || checked.execution.action == Action::Drive;
+      check(runner.install(checked, now, wall), "constrained retry profile must install");
+      actuate_profile(input.vehicle, runner, checked.execution.feedback, c, wall, {});
+      wall += c.dt_s;
+      if (output.goal_reached) {
+        completed = true;
+        break;
+      }
+    }
+    check(drove && completed, "both constrained signed entries must drive and complete");
+  }
+}
+void test_acceptance_metadata_guards()
+{
+  Config c;
+  for (int mutation = 0; mutation < 8; ++mutation) {
+    auto s = stopped();
+    s.steering_angles.fill(.01);
+    ModeManager manager(c);
+    manager.begin(DriveMode::Crab, {0, .2, 0}, s);
+    const auto first = manager.update(s);
+    s.mode_request_id = first.mode_request->id;
+    s.mode_confirmed = false;
+    s.accepted_mode_request = first.mode_request;
+    s.accepted_mode_request->steering_targets.fill(-1.5707963267948966);
+    s.stamp_s += c.dt_s;
+    const auto accepted = manager.update(s);
+    check(
+      accepted.action == Action::RequestMode && accepted.steering_targets[0] < -1.5,
+      "equivalent acceptance must replace the private mechanical prediction");
+    s.steering_angles.fill(.02);
+    s.stamp_s += c.dt_s;
+    check(
+      manager.update(s).steering_targets == accepted.steering_targets,
+      "fresh measurements cannot reselect the accepted mechanical representation");
+    s.stamp_s += c.dt_s;
+    switch (mutation) {
+      case 0:
+        s.accepted_mode_request.reset();
+        break;
+      case 1:
+        ++s.mode_request_id;
+        ++s.accepted_mode_request->id;
+        break;
+      case 2:
+        s.accepted_mode_request->steering_targets.fill(1.5707963267948966);
+        break;
+      case 3:
+        s.accepted_mode_request->entry_velocity.vy = .3;
+        break;
+      case 4:
+        s.accepted_mode_request->mode = DriveMode::Spin;
+        break;
+      case 5:
+        s.accepted_mode_request->steering_targets.fill(0);
+        break;
+      case 6:
+        s.accepted_mode_request->steering_targets[0] = 2;
+        break;
+      case 7:
+        s.accepted_mode_request->entry_velocity.vy = std::numeric_limits<double>::quiet_NaN();
+        break;
+    }
+    check(
+      manager.update(s).action == Action::SafeStop, "accepted feedback cannot disappear or mutate");
+  }
+  auto s = stopped();
+  ModeManager manager(c);
+  manager.begin(DriveMode::Crab, {0, .2, 0}, s);
+  s.mode_request_id = manager.update(s).mode_request->id;
+  s.stamp_s += c.dt_s;
+  check(manager.update(s).action == Action::SafeStop, "accepted ID without geometry must fault");
+  for (int mutation = 0; mutation < 4; ++mutation) {
+    s = stopped();
+    ModeManager fresh(c);
+    fresh.begin(DriveMode::Crab, {0, .2, 0}, s);
+    s.accepted_mode_request = fresh.update(s).mode_request;
+    s.mode_request_id = s.accepted_mode_request->id;
+    s.mode_confirmed = false;
+    if (mutation == 0) {
+      s.accepted_mode_request->mode = DriveMode::Spin;
+    } else if (mutation == 1) {
+      s.accepted_mode_request->entry_velocity.vy = .3;
+    } else if (mutation == 2) {
+      s.accepted_mode_request->steering_targets.fill(0);
+    } else {
+      s.accepted_mode_request->entry_velocity.vy = std::numeric_limits<double>::quiet_NaN();
+    }
+    s.stamp_s += c.dt_s;
+    check(
+      fresh.update(s).action == Action::SafeStop, "first acceptance must match the body intent");
+  }
+  s = stopped();
+  ModeManager exact(c);
+  exact.begin(DriveMode::Crab, {0, .2, 0}, s);
+  s.accepted_mode_request = exact.update(s).mode_request;
+  s.accepted_mode_request->steering_targets.fill(-1.5707963267948966);
+  s.mode_request_id = s.accepted_mode_request->id;
+  s.mode_confirmed = false;
+  s.stamp_s += c.dt_s;
+  check(exact.update(s).action == Action::RequestMode, "equivalent receipt must bind");
+  s.actual_mode = DriveMode::Crab;
+  s.mode_confirmed = true;
+  s.steering_angles.fill(1.5707963267948966);
+  s.stamp_s += c.dt_s;
+  check(
+    exact.update(s).action == Action::RequestMode,
+    "equivalent measured lines cannot replace exact accepted mechanical positions");
+  s.steering_angles = s.accepted_mode_request->steering_targets;
+  s.stamp_s += c.dt_s;
+  check(exact.update(s).action == Action::Hold, "exact measured alignment must complete handover");
+}
+void test_small_entry_intents()
+{
+  Config c;
+  for (auto mode : {DriveMode::Spin, DriveMode::Crab, DriveMode::DualAckermann}) {
+    const Control direction = mode == DriveMode::Spin   ? Control{0, 0, .3}
+                              : mode == DriveMode::Crab ? Control{.2, .2, 0}
+                                                        : Control{.3, 0, .1};
+    const auto expected = DriveModel(c).steering_for_entry(mode, direction, {});
+    for (double scale : {1., 1e-8, 5e-9, 1e-9, 1e-10, 1e-300}) {
+      const Twist2d entry{direction.vx * scale, direction.vy * scale, direction.wz * scale};
+      auto s =
+        stopped(mode == DriveMode::DualAckermann ? DriveMode::Crab : DriveMode::DualAckermann);
+      ControllerInput input;
+      input.vehicle = s;
+      input.reference_path.push_back({0, 0, 0});
+      const auto target = request(1, mode, entry);
+      CommandEnvelope packet{1, 1, 1, target, 1, 1, 1.025, CommandTask::capture(input)};
+      const auto checked = TimedExecutor(c, 1, s.actual_mode).update(packet, input, 1);
+      check(
+        checked.actuation && !checked.execution.feedback.fault &&
+          checked.execution.feedback.accepted_mode_request,
+        "small admissible entry intent must not latch a protocol fault");
+      for (std::size_t i = 0; i < 4; ++i) {
+        check(
+          std::abs(checked.execution.steering_targets[i] - expected[i]) < 1e-12,
+          "entry geometry must be independent of positive amplitude");
+      }
+    }
+  }
+  for (double sign : {-1., 1.}) {
+    ControllerInput input;
+    input.vehicle = stopped();
+    input.reference_path.push_back({0, 0, 0});
+    const auto target =
+      request(1, DriveMode::Spin, {0, 0, sign * std::numeric_limits<double>::denorm_min()});
+    CommandEnvelope packet{1, 1, 1, target, 1, 1, 1.025, CommandTask::capture(input)};
+    check(
+      TimedExecutor(c, 1).update(packet, input, 1).actuation.has_value(),
+      "subnormal signed Spin intent must retain valid alignment geometry");
+  }
+}
 void test_public_planner_state_and_budget()
 {
   Config c;
@@ -477,6 +710,9 @@ int main()
     test_all_directed_mode_transitions();
     test_queued_request_equivalent_geometry();
     test_equivalent_acknowledgement_guards();
+    test_queued_entry_with_joint_constraint();
+    test_acceptance_metadata_guards();
+    test_small_entry_intents();
     test_malformed_commands_and_feedback();
     test_guarded_public_pipeline();
     test_public_planner_state_and_budget();

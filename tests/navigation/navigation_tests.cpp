@@ -1,8 +1,11 @@
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 #include "planning/detail/planner.hpp"
+#include "swerve_mppi/planning/controller.hpp"
+#include "swerve_mppi/planning/critics.hpp"
 using namespace swerve_mppi;
 namespace
 {
@@ -324,6 +327,77 @@ void test_task_restart_and_stall()
     "measured progress must clear the stall diagnostic");
 }
 }  // namespace
+void test_large_angles_and_derived_errors()
+{
+  Config c;
+  c.compute_budget_ratio = 0;
+  const double large = std::numeric_limits<double>::max();
+  const double expected = angle_distance(wrap_angle(large), wrap_angle(-large));
+  check(
+    std::isfinite(angle_distance(large, -large)) && angle_distance(large, -large) == expected &&
+      angle_distance(large, large) == 0,
+    "finite angles must not overflow before periodic subtraction");
+  ControllerInput input;
+  input.vehicle.stamp_s = 1;
+  input.vehicle.actual_mode = DriveMode::Spin;
+  input.vehicle.steering_angles = DriveModel(c).steering_for_mode(DriveMode::Spin, {});
+  input.vehicle.pose.yaw = large;
+  input.reference_path = {{0, 0, -large}};
+  const auto output = Controller(c).compute(input);
+  auto normalized = input;
+  normalized.vehicle.pose.yaw = wrap_angle(large);
+  normalized.reference_path[0].yaw = wrap_angle(-large);
+  const auto wrapped = Controller(c).compute(normalized);
+  check(
+    output.command && wrapped.command && std::isfinite(output.goal_yaw_error_rad) &&
+      output.goal_yaw_error_rad == wrapped.goal_yaw_error_rad &&
+      output.command->target_velocity.wz == wrapped.command->target_velocity.wz,
+    "large finite yaw must behave like its normalized representation");
+  auto path_input = input;
+  path_input.reference_path = {{0, 0, large}, {2, 0, -large}};
+  auto wrapped_path = path_input;
+  for (auto & pose : wrapped_path.reference_path) {
+    pose.yaw = wrap_angle(pose.yaw);
+  }
+  const auto path = PathManager(c).update(path_input);
+  const auto normal_path = PathManager(c).update(wrapped_path);
+  check(
+    path.target.yaw == normal_path.target.yaw,
+    "path interpolation must reduce large heading before adding local angular progress");
+  path_input.tracking = TrackingContext{{}, 2, .5, false, PathHeadingPolicy::FollowPath};
+  wrapped_path.tracking = path_input.tracking;
+  Trajectory trace;
+  trace.valid = true;
+  trace.poses = {path_input.vehicle.pose, {1, 0, .2}};
+  trace.final_state.pose = trace.poses.back();
+  const double path_cost = CriticManager(c).score(path_input, trace);
+  check(
+    std::isfinite(path_cost) && path_cost == CriticManager(c).score(wrapped_path, trace),
+    "path-heading cost must use the same normalized angular interpolation");
+  VehicleState state;
+  state.pose.yaw = large;
+  state.wheel_speeds.fill(.4);
+  state.velocity.vx = .4;
+  auto normal_state = state;
+  normal_state.pose.yaw = wrap_angle(large);
+  for (auto control : {Control{.4, 0, 0}, Control{.4, 0, .1}, Control{}}) {
+    const auto a = DriveModel(c).step(state, control, c.dt_s);
+    const auto b = DriveModel(c).step(normal_state, control, c.dt_s);
+    check(
+      a.valid && b.valid &&
+        std::hypot(a.state.pose.x - b.state.pose.x, a.state.pose.y - b.state.pose.y) < 1e-12 &&
+        a.state.pose.yaw == b.state.pose.yaw,
+      "fixed/moving steering and braking must normalize heading before integration");
+  }
+  input = {};
+  input.vehicle.pose.x = -large;
+  input.reference_path = {{large, 0, 0}};
+  const auto invalid = Controller(c).compute(input);
+  check(
+    !invalid.command && invalid.failure_reason == FailureReason::InvalidInput &&
+      std::isfinite(invalid.goal_distance_m) && std::isfinite(invalid.goal_yaw_error_rad),
+    "nonfinite derived distance must withhold authorization without leaking NaN diagnostics");
+}
 int main()
 {
   try {
@@ -336,6 +410,7 @@ int main()
     test_short_paths_preserve_segment_order();
     test_dense_segment_capture();
     test_replan_execution_boundaries();
+    test_large_angles_and_derived_errors();
     std::cout << "Navigation regressions passed\n";
     return 0;
   } catch (const std::exception & e) {

@@ -168,6 +168,7 @@ std::optional<ActuationPlan> ActuationModel::plan(
   out.endpoint_.state.mode_confirmed = execution.feedback.confirmed;
   out.endpoint_.state.mode_fault = execution.feedback.fault;
   out.endpoint_.state.mode_request_id = execution.feedback.request_id;
+  out.endpoint_.state.accepted_mode_request = execution.feedback.accepted_mode_request;
   out.endpoint_.state.time_in_mode_s = execution.feedback.time_in_mode_s + config_.dt_s;
   if (!valid_endpoint(out.endpoint_, config_)) {
     return std::nullopt;

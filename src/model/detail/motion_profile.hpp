@@ -61,9 +61,10 @@ inline void integrate_constant(Pose2d & pose, const Twist2d & v, double dt)
     std::abs(a) < 1e-4 ? a / 2 - a * a * a / 24 + a * a * a * a * a / 720 : (1 - std::cos(a)) / a;
   const double dx = dt * (sinc * v.vx - cosc * v.vy);
   const double dy = dt * (cosc * v.vx + sinc * v.vy);
-  pose.x += std::cos(pose.yaw) * dx - std::sin(pose.yaw) * dy;
-  pose.y += std::sin(pose.yaw) * dx + std::cos(pose.yaw) * dy;
-  pose.yaw = wrap_angle(pose.yaw + a);
+  const double yaw = wrap_angle(pose.yaw);
+  pose.x += std::cos(yaw) * dx - std::sin(yaw) * dy;
+  pose.y += std::sin(yaw) * dx + std::cos(yaw) * dy;
+  pose.yaw = wrap_angle(yaw + a);
 }
 inline void integrate_ramp(
   Pose2d & pose, const Twist2d & a, const Twist2d & b, double dt, double & error,
@@ -84,7 +85,7 @@ inline void integrate_ramp(
   }
   constexpr std::size_t subdivisions = 8;
   const double h = dt / subdivisions;
-  const double yaw = pose.yaw;
+  const double yaw = wrap_angle(pose.yaw);
   for (std::size_t i = 0; i < subdivisions; ++i) {
     const double f = (i + .5) / subdivisions;
     const auto v = interpolate(a, b, f);
@@ -169,7 +170,7 @@ inline void integrate_drive(
     derivative +
     speed_bound * (std::max(std::abs(before.wz), std::abs(end.velocity.wz)) + angular_deviation);
   auto yaw_at = [&](double f) {
-    double yaw = start.pose.yaw;
+    double yaw = wrap_angle(start.pose.yaw);
     for (std::size_t i = 0; i < 4; ++i) {
       const auto v = wheel_integral(
         start.wheel_speeds[i], end.wheel_speeds[i] - start.wheel_speeds[i],

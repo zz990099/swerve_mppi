@@ -71,6 +71,7 @@ inline double actuate_profile(
   state.mode_confirmed = mode.confirmed;
   state.mode_fault = mode.fault;
   state.mode_request_id = mode.request_id;
+  state.accepted_mode_request = mode.accepted_mode_request;
   state.time_in_mode_s = mode.time_in_mode_s;
   state.stamp_s = start + c.dt_s;
   return clearance;

@@ -90,6 +90,8 @@ double TransitionModel::rollout(
     detail::append_motion(next, trace, sweep_margins, error);
   }
   state.actual_mode = target_mode;
+  // A hypothetical transition cannot echo an actual executor acceptance.
+  state.accepted_mode_request.reset();
   state.mode_confirmed = true;
   state.time_in_mode_s = 0.0;
   return (steps - begin) * config_.dt_s;

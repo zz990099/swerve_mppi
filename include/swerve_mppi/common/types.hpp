@@ -61,6 +61,16 @@ struct Twist2d
   double wz = 0.0;
 };
 
+struct JointModeRequest
+{
+  std::uint64_t id = 0;
+  DriveMode mode = DriveMode::DualAckermann;
+  // Mechanical positions frozen by execution at first acceptance.
+  std::array<double, 4> steering_targets{};
+  // The complete frozen body intent, echoed without rescaling.
+  Twist2d entry_velocity;
+};
+
 struct VehicleState
 {
   Pose2d pose;
@@ -75,6 +85,9 @@ struct VehicleState
   std::uint64_t mode_request_id = 0;
   double time_in_mode_s = 0.0;
   double stamp_s = 0.0;
+  // Executor-owned first-accepted request, retained through completion.
+  // Required when a pending planner request's ID has been accepted.
+  std::optional<JointModeRequest> accepted_mode_request{};
 };
 
 struct CircleObstacle
@@ -114,15 +127,6 @@ struct Control
   double wz = 0.0;
 };
 
-struct JointModeRequest
-{
-  std::uint64_t id = 0;
-  DriveMode mode = DriveMode::DualAckermann;
-  // Frozen mechanical positions, including the intended Crab entry direction.
-  std::array<double, 4> steering_targets{};
-  Twist2d entry_velocity;  // Frozen body intent used by the chassis interface.
-};
-
 struct ModeFeedback
 {
   DriveMode actual_mode = DriveMode::DualAckermann;
@@ -130,6 +134,9 @@ struct ModeFeedback
   bool fault = false;
   std::uint64_t request_id = 0;
   double time_in_mode_s = 0.0;
+  // Exact immutable request accepted by execution, including mechanical entry
+  // positions. Empty at startup or after deliberate executor recovery.
+  std::optional<JointModeRequest> accepted_mode_request{};
 };
 
 struct ExecutionResult

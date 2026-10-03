@@ -39,8 +39,9 @@ std::vector<Control> Optimizer::seed(
   const Pose2d & pose = input.vehicle.pose;
   const double dx = goal.x - pose.x;
   const double dy = goal.y - pose.y;
-  const double local_x = std::cos(pose.yaw) * dx + std::sin(pose.yaw) * dy;
-  const double local_y = -std::sin(pose.yaw) * dx + std::cos(pose.yaw) * dy;
+  const double heading = wrap_angle(pose.yaw);
+  const double local_x = std::cos(heading) * dx + std::sin(heading) * dy;
+  const double local_y = -std::sin(heading) * dx + std::cos(heading) * dy;
   std::vector<Control> controls(config_.horizon_steps);
   for (std::size_t i = 0; i < controls.size(); ++i) {
     const DriveMode mode =

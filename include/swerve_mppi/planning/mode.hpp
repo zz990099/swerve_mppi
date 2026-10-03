@@ -41,6 +41,7 @@ private:
   Config config_;
   TransitionPhase phase_ = TransitionPhase::Stable;
   JointModeRequest request_;
+  std::optional<JointModeRequest> accepted_request_;
   std::uint64_t last_request_id_ = 0;
   double start_s_ = 0.0;
   double last_stamp_s_ = -1.0;

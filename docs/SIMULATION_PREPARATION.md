@@ -1,4 +1,4 @@
-# Simulation integration preparation (0.18)
+# Simulation integration preparation (0.20)
 
 This release supplies the feedback boundary, profile-consumer regressions and a
 production-budget measurement tool, plus an actionless chassis command boundary. The separate Gazebo package supplies an
@@ -30,6 +30,15 @@ owner must check frame IDs before conversion; the portable adapter has no TF tre
 The helper never combines separate odometry twist with encoders or rewrites a
 stale measurement stamp. Encoder FK agrees by construction; it does not establish
 physical no-slip motion.
+
+Version 0.20 requires the executor-owned `accepted_mode_request` receipt to be
+forwarded with mode status. `FeedbackAdapter` preserves it automatically. A manual
+ROS conversion must carry its presence, request ID, mode, four mechanical steering
+positions and the original body entry velocity. Keep the receipt through confirmation
+and normal driving; clear it only on deliberate executor recovery or replace it
+when a new request is accepted. Do not reconstruct it from current encoders or
+planner predictions. Rebuild downstream consumers because the feedback/state
+aggregate layout changed. The MPPI output remains velocity plus mode request.
 
 The source-stamp equality check deliberately does not solve asynchronous transport latency.
 For the first controlled test, pause/step the simulator at model boundaries and

@@ -1,4 +1,4 @@
-# Standalone execution protocol (0.18)
+# Standalone execution protocol (0.20)
 
 This contract is independent of ROS, Nav2 and Gazebo. TimedExecutor is the guarded
 integration entry point; execute only its returned ActuationPlan, sampled at the
@@ -20,6 +20,7 @@ actuator reference. Neither class simulates actuators or certifies physical trac
 | ModeRequest::entry_velocity | Frozen body intent defining entry geometry; never authorizes drive. |
 | ModeFeedback::actual_mode | Last successfully completed mode, retained throughout a switch. |
 | ModeFeedback::request_id | Executor's active/last accepted ID; completion also requires confirmed. |
+| ModeFeedback::accepted_mode_request | Optional executor-owned immutable JointModeRequest: accepted ID/mode, mechanical steering positions and original entry velocity. Retained through completion. |
 | ModeFeedback::confirmed | Stable mode, with transition stop/alignment checks completed. |
 | ModeFeedback::fault | Latched execution failure; requires deliberate recovery. |
 | ModeFeedback::time_in_mode_s | Age of the actual mode; resets only when a new mode completes. |
@@ -31,6 +32,16 @@ above both its own high-water mark and VehicleState::mode_request_id. Both
 manager and executor retain high-water marks across reset. A restarted process
 must establish a fresh, drained transport session and obtain executor feedback
 before enabling control; this is not a cross-process UUID protocol.
+
+Since 0.20, copy `accepted_mode_request` unchanged alongside the mode fields.
+Its ID must equal the echoed nonzero request ID, positions must be finite and
+mechanically bounded, and entry velocity must be finite. A pending planner request
+with matching accepted ID must have a receipt matching its mode/body intent and
+physical rolling lines; missing or changed bound receipts latch the transition
+fault. Current measured angles are not acceptance metadata. Accepted request and
+body intent persist through completion, until another request or deliberate recovery.
+Before acceptance, prediction uses the latest measured snapshot; after acceptance,
+only the frozen receipt defines the checked steering interval.
 
 See [CHASSIS_COMMAND.md](CHASSIS_COMMAND.md) for command construction and migration.
 TimedExecutor compiles a target with the shared DriveModel at the execution snapshot,
@@ -71,6 +82,7 @@ next_input.vehicle.actual_mode = feedback.actual_mode;
 next_input.vehicle.mode_confirmed = feedback.confirmed;
 next_input.vehicle.mode_fault = feedback.fault;
 next_input.vehicle.mode_request_id = feedback.request_id;
+next_input.vehicle.accepted_mode_request = feedback.accepted_mode_request;
 next_input.vehicle.time_in_mode_s = feedback.time_in_mode_s;
 // Advance stamp_s from the actual measurement clock, not wall-clock prediction.
 ```
@@ -172,10 +184,24 @@ confirmation ticks, even when the initial geometry is already aligned. Confirmat
 angles within steering_tolerance_rad and at least alignment_min_s since entering
 alignment. If wheels/body move again, it returns to braking and restarts the
 alignment minimum, while retaining the original overall deadline. The reported
-mode changes only at confirmation. Controller/ModeManager then verifies mode,
-ID, stopped measurements and equivalent rolling-line geometry modulo pi, and
-emits one stopped handover cycle retaining measured steering. The executor's
-own confirmation still requires its exact frozen mechanical targets.
+mode changes only at confirmation. Controller/ModeManager verifies the accepted
+receipt's mode, ID, body entry intent and equivalent rolling lines modulo pi,
+then certifies retries using its exact mechanical positions. Final handover checks
+confirmed mode/ID, stopped measurements and exact alignment to those accepted
+positions, and retains measured steering. The executor also requires its exact
+frozen mechanical targets.
+
+Nonzero entry steering uses the projected intent normalized by its largest absolute
+component. This avoids different body/wheel epsilon decisions and preserves signed
+Spin geometry even for subnormal finite yaw rates. Exactly zero intent retains
+canonical mode-entry behavior. Normalization affects geometry only; the original
+body payload is frozen and echoed unchanged.
+
+Finite unwrapped heading inputs are reduced periodically before angular differences,
+body/world transforms and pose integration. Subtracting separately reduced angles
+avoids overflow for opposite finite extremes. GoalManager rejects nonfinite derived
+position/yaw errors before changing its settling clock; Controller returns absent
+command with `InvalidInput`. Finite input alone cannot authorize a nonfinite result.
 
 ## Internal actions, timing and cancellation
 

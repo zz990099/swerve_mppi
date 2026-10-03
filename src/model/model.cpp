@@ -130,10 +130,16 @@ std::array<double, 4> DriveModel::steering_for_entry(
   DriveMode mode, const Control & intent, const std::array<double, 4> & current) const
 {
   const auto projected = project(intent, mode);
-  if (std::hypot(projected.vx, projected.vy) < kEpsilon && std::abs(projected.wz) < kEpsilon) {
+  const double scale =
+    std::max({std::abs(projected.vx), std::abs(projected.vy), std::abs(projected.wz)});
+  if (scale == 0) {
     return steering_for_mode(mode, current);
   }
-  return kinematics_.inverse(projected, current).angles;
+  // Entry specifies direction/curvature, not rolling speed. Divide instead of
+  // multiplying by a reciprocal so subnormal finite intents remain representable.
+  return kinematics_
+    .inverse({projected.vx / scale, projected.vy / scale, projected.wz / scale}, current)
+    .angles;
 }
 
 StepResult DriveModel::step(const VehicleState & start, const Control & u, double dt) const

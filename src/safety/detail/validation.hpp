@@ -35,6 +35,12 @@ inline bool steering_aligned(
   }
   return true;
 }
+inline bool same_request(const JointModeRequest & a, const JointModeRequest & b)
+{
+  return a.id == b.id && a.mode == b.mode && a.steering_targets == b.steering_targets &&
+         a.entry_velocity.vx == b.entry_velocity.vx && a.entry_velocity.vy == b.entry_velocity.vy &&
+         a.entry_velocity.wz == b.entry_velocity.wz;
+}
 inline bool valid_vehicle(const VehicleState & vehicle, const Config & config)
 {
   if (
@@ -54,6 +60,15 @@ inline bool valid_vehicle(const VehicleState & vehicle, const Config & config)
   }
   for (double speed : vehicle.wheel_speeds) {
     if (!std::isfinite(speed) || std::abs(speed) > config.max_wheel_speed_mps + 1e-9) {
+      return false;
+    }
+  }
+  if (vehicle.accepted_mode_request) {
+    const auto & r = *vehicle.accepted_mode_request;
+    if (
+      r.id == 0 || r.id != vehicle.mode_request_id || !valid_mode(r.mode) ||
+      !valid_steering(r.steering_targets, config) || !std::isfinite(r.entry_velocity.vx) ||
+      !std::isfinite(r.entry_velocity.vy) || !std::isfinite(r.entry_velocity.wz)) {
       return false;
     }
   }

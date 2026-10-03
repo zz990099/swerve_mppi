@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(swerve_mppi_consumer LANGUAGES CXX)
-find_package(swerve_mppi 0.19.1 CONFIG REQUIRED)
+find_package(swerve_mppi 0.20 CONFIG REQUIRED)
 add_executable(consumer main.cpp)
 target_link_libraries(consumer PRIVATE swerve_mppi::core)
 # Compile every installed public header in its own translation unit. Moving

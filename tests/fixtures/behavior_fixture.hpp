@@ -113,6 +113,7 @@ inline void actuate(VehicleState & s, const ExecutionResult & command, const Con
   s.mode_confirmed = command.feedback.confirmed;
   s.mode_fault = command.feedback.fault;
   s.mode_request_id = command.feedback.request_id;
+  s.accepted_mode_request = command.feedback.accepted_mode_request;
   s.time_in_mode_s = command.feedback.time_in_mode_s;
   s.stamp_s += c.dt_s;
 }

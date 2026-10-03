@@ -10,8 +10,11 @@ namespace
 {
 constexpr double kPi = 3.14159265358979323846;
 }
-double wrap_angle(double angle) { return std::remainder(angle, 2.0 * kPi); }
-double angle_distance(double a, double b) { return wrap_angle(a - b); }
+double wrap_angle(double angle)
+{
+  return angle >= -kPi && angle <= kPi ? angle : std::remainder(angle, 2.0 * kPi);
+}
+double angle_distance(double a, double b) { return wrap_angle(wrap_angle(a) - wrap_angle(b)); }
 Kinematics::Kinematics(const Config & config) : config_(config) { validate(config_); }
 
 WheelCommand Kinematics::inverse(const Control & u, const std::array<double, 4> & current) const

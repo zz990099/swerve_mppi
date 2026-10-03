@@ -112,11 +112,15 @@ the deadline. Request IDs remain monotonic across deliberate recovery.
 Timeout covers the entire committed transition, including braking.
 
 The public body-entry request is immutable, while execution freezes its exact
-mechanical representation at first accepted application. ModeManager acknowledges
-legal equivalent rolling lines modulo pi if execution selected different wheel
-signs than prediction. ModeExecutor still requires its exact frozen positions.
-The stopped handover retains measured steering; equivalence never authorizes a
-wrapped actuator motion across a hard stop.
+mechanical representation at first accepted application. In 0.20, ModeFeedback
+and VehicleState carry that complete accepted JointModeRequest. Before acceptance,
+ModeManager predicts steering from the latest snapshot. After acceptance it binds
+the receipt, checks that its rolling lines match the original intent modulo pi,
+and uses the exact frozen mechanical positions in every retry safety check.
+The accepted receipt cannot disappear or change. Final handover requires measured
+alignment to those exact positions, stopped motion, matching ID/mode and confirmation.
+It retains measured steering; equivalence never authorizes a wrapped actuator
+motion across a hard stop.
 
 ## Continuous optimization
 

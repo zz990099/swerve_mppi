@@ -110,13 +110,19 @@ int main()
     j.velocities.resize(65);
     check(!adapter.make(j, pose, {}, 1).state, "adapter workload is bounded");
     j = observation(s, c);
-    const ModeFeedback pending{DriveMode::Crab, false, false, 42, .25};
+    ModeFeedback pending{DriveMode::Crab, false, false, 42, .25};
+    pending.accepted_mode_request = JointModeRequest{42, DriveMode::Crab, {}, {.2, 0, 0}};
     result = adapter.make(j, pose, pending, 1);
     check(
       result.state && !result.state->mode_confirmed && result.state->mode_request_id == 42 &&
-        result.state->actual_mode == DriveMode::Crab,
+        result.state->actual_mode == DriveMode::Crab && result.state->accepted_mode_request &&
+        result.state->accepted_mode_request->entry_velocity.vx == .2,
       "adapter must preserve executor mode metadata without inventing "
       "confirmation");
+    pending.accepted_mode_request->id = 41;
+    check(
+      adapter.make(j, pose, pending, 1).error == SnapshotError::InvalidFeedback,
+      "geometry receipt must be bound to the echoed request ID");
     // Real guarded plan -> high-rate runner -> missing next plan. Recovery must
     // reset both protocols, and an old-session command must remain rejected.
     Controller controller(c);

@@ -35,6 +35,7 @@ void feedback(VehicleState & s, const ModeFeedback & f)
   s.mode_confirmed = f.confirmed;
   s.mode_fault = f.fault;
   s.mode_request_id = f.request_id;
+  s.accepted_mode_request = f.accepted_mode_request;
   s.time_in_mode_s = f.time_in_mode_s;
 }
 void actuate(VehicleState & s, const ExecutionResult & r, const Config & c)
@@ -137,6 +138,7 @@ void test_stale_ack_and_measured_alignment()
     m.update(s).action == Action::RequestMode,
     "old acknowledgement must never complete a new request");
   s.mode_request_id = 21;
+  s.accepted_mode_request = out.mode_request;
   s.steering_angles.fill(0);
   s.stamp_s += .1;
   check(
@@ -421,7 +423,7 @@ void test_transition_protocol_tick_matrix()
                     if (tick - *confirmed_tick < delivery_delay) {
                       result.feedback.actual_mode = from;
                       result.feedback.confirmed = false;
-                      result.feedback.request_id = 0;
+                      // Delay completion, retaining the already accepted request receipt.
                     }
                   }
                   test::actuate(state, result, c);
@@ -501,6 +503,7 @@ void test_decimal_deadline_and_tick_boundaries()
         state.actual_mode = confirmed.feedback.actual_mode;
         state.mode_confirmed = true;
         state.mode_request_id = confirmed.feedback.request_id;
+        state.accepted_mode_request = confirmed.feedback.accepted_mode_request;
         state.stamp_s = stamp + dt + lateness;
         check(
           (manager.update(state).action == Action::SafeStop) == (lateness > 0),
@@ -988,6 +991,7 @@ void test_capture_alignment_commitment()
     "terminal lateral capture must request Crab entry");
   in.vehicle.actual_mode = DriveMode::Crab;
   in.vehicle.mode_request_id = request.mode_request->id;
+  in.vehicle.accepted_mode_request = request.mode_request;
   in.vehicle.steering_angles = request.steering_targets;
   in.vehicle.stamp_s += c.dt_s;
   check(controller.compute(in).action == Action::Hold, "confirmation must retain stopped handover");

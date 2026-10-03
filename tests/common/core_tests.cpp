@@ -112,6 +112,7 @@ void test_confirmation_and_timeout()
     "mode value without an acknowledgement must not permit driving");
   observed.mode_confirmed = true;
   observed.mode_request_id = 1;
+  observed.accepted_mode_request = JointModeRequest{1, DriveMode::Crab, {}};
   observed.stamp_s = 1.3;
   check(
     manager.update(observed).action == Action::Hold && !manager.active(),
@@ -179,6 +180,7 @@ void test_controller_lateral_goal()
   input.vehicle.mode_confirmed = true;
   input.vehicle.time_in_mode_s = 0.0;
   input.vehicle.mode_request_id = first.mode_request->id;
+  input.vehicle.accepted_mode_request = first.mode_request;
   input.vehicle.steering_angles = first.mode_request->steering_targets;
   input.vehicle.stamp_s += config.dt_s;
   check(

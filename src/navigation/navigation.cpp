@@ -50,7 +50,7 @@ Pose2d PathManager::interpolate(double distance) const
   return {
     path_[i - 1].x + t * (path_[i].x - path_[i - 1].x),
     path_[i - 1].y + t * (path_[i].y - path_[i - 1].y),
-    wrap_angle(path_[i - 1].yaw + t * angle_distance(path_[i].yaw, path_[i - 1].yaw))};
+    wrap_angle(wrap_angle(path_[i - 1].yaw) + t * angle_distance(path_[i].yaw, path_[i - 1].yaw))};
 }
 PathReference PathManager::update(const ControllerInput & input)
 {
@@ -205,6 +205,12 @@ GoalState GoalManager::update(const VehicleState & s, const PathReference & path
     path.progress_m < 0) {
     throw std::invalid_argument("invalid goal input");
   }
+  GoalState out;
+  out.distance_m = std::hypot(s.pose.x - path.goal.x, s.pose.y - path.goal.y);
+  out.yaw_error_rad = angle_distance(path.goal.yaw, s.pose.yaw);
+  if (!std::isfinite(out.distance_m) || !std::isfinite(out.yaw_error_rad)) {
+    throw std::invalid_argument("nonfinite derived goal error");
+  }
   // Sparse or repeated observations cannot establish continuous stopped dwell.
   if (
     last_observation_s_ >= 0 &&
@@ -213,9 +219,6 @@ GoalState GoalManager::update(const VehicleState & s, const PathReference & path
     settle_start_ = -1;
   }
   last_observation_s_ = s.stamp_s;
-  GoalState out;
-  out.distance_m = std::hypot(s.pose.x - path.goal.x, s.pose.y - path.goal.y);
-  out.yaw_error_rad = angle_distance(path.goal.yaw, s.pose.yaw);
   const double yaw = std::abs(out.yaw_error_rad);
   if (
     !position_acquired_ && path.goal_eligible &&
