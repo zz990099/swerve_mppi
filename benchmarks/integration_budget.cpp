@@ -1,21 +1,25 @@
-#include "behavior_fixture.hpp"
-#include "swerve_mppi/controller.hpp"
-#include "swerve_mppi/profile_runner.hpp"
 #include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <string>
+
+#include "behavior_fixture.hpp"
+#include "swerve_mppi/execution/profile_runner.hpp"
+#include "swerve_mppi/planning/controller.hpp"
 using namespace swerve_mppi;
-int main(int argc, char **argv) {
+int main(int argc, char ** argv)
+{
   try {
     const int repetitions = argc == 2 ? std::stoi(argv[1]) : 50;
-    if (repetitions < 2 || repetitions > 10000)
+    if (repetitions < 2 || repetitions > 10000) {
       throw std::invalid_argument("repetitions must be 2..10000");
-    std::cout << "obstacles,repetitions,budget_ms,p50_ms,p95_ms,p99_ms,max_ms,min_headroom_ms,"
+    }
+    std::cout << "obstacles,repetitions,budget_ms,p50_ms,p95_ms,p99_ms,max_ms,"
+                 "min_headroom_ms,"
                  "compute_timeouts,total_overruns,other_failures\n";
     int failures = 0;
     for (int count : {0, 40, 128}) {
-      Config c; // Production budget enabled. Never disable it for this probe.
+      Config c;  // Production budget enabled. Never disable it for this probe.
       auto input = test::scenario_input("curve");
       input.obstacles.clear();
       for (int i = 0; i < count; ++i) {
@@ -35,10 +39,11 @@ int main(int argc, char **argv) {
         const double now = input.vehicle.stamp_s;
         const auto start = std::chrono::steady_clock::now();
         const auto output = controller.compute(input);
-        if (output.failure_reason == FailureReason::ComputeTimeout)
+        if (output.failure_reason == FailureReason::ComputeTimeout) {
           ++timeouts;
-        else if (!output.command)
+        } else if (!output.command) {
           ++other;
+        }
         CommandEnvelope packet{session,    static_cast<std::uint64_t>(iteration + 1),
                                now,        output,
                                now,        now,
@@ -46,18 +51,22 @@ int main(int argc, char **argv) {
         const auto admitted = executor.update(packet, input, now);
         const bool installed = runner.install(admitted, now, wall);
         if (installed) {
-          if (!runner.sample(now, wall))
+          if (!runner.sample(now, wall)) {
             ++other;
-        } else if (output.command.has_value())
+          }
+        } else if (output.command.has_value()) {
           ++other;
+        }
         const double ms =
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
-                .count();
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+            .count();
         times.push_back(ms);
         overruns += ms > c.dt_s * c.compute_budget_ratio * 1000;
-        // Fixed stationary snapshots isolate workload; no claim of plant motion.
-        if (installed)
+        // Fixed stationary snapshots isolate workload; no claim of plant
+        // motion.
+        if (installed) {
           runner.sample(now + c.dt_s, wall + c.dt_s);
+        }
       }
       std::sort(times.begin(), times.end());
       const auto percentile = [&](double p) {
@@ -70,8 +79,9 @@ int main(int argc, char **argv) {
                 << '\n';
       failures += other;
     }
-    return failures ? 1 : 0; // Timing measurements are not a host-specific CI threshold.
-  } catch (const std::exception &e) {
+    return failures ? 1 : 0;  // Timing measurements are not a host-specific CI
+                              // threshold.
+  } catch (const std::exception & e) {
     std::cerr << e.what() << '\n';
     return 1;
   }

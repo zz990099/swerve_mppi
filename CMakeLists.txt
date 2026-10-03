@@ -1,41 +1,43 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.18.0 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.19.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 option(SWERVE_MPPI_BUILD_TESTS "Build standalone tests" ON)
 option(SWERVE_MPPI_BUILD_BENCHMARKS "Build standalone measurement tools" OFF)
+option(SWERVE_MPPI_BUILD_FORMAT_TESTS "Check the pinned ROS Rolling C++ format" OFF)
 
-add_library(swerve_mppi_core
-  src/navigation.cpp
-  src/config.cpp
-  src/feedback.cpp
-  src/feedback_adapter.cpp
-  src/profile_runner.cpp
-  src/kinematics.cpp
-  src/model.cpp
-  src/transition_model.cpp
-  src/rollout.cpp
-  src/critics.cpp
-  src/trajectory_validator.cpp
-  src/noise.cpp
-  src/mode_scheduler.cpp
-  src/mode_manager.cpp
-  src/executor.cpp
-  src/actuation.cpp
-  src/timing.cpp
-  src/optimizer.cpp
-  src/controller.cpp
-  src/planner.cpp
-  src/chassis_executor.cpp
-  src/chassis_timing.cpp
-)
+if(SWERVE_MPPI_BUILD_FORMAT_TESTS)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+else()
+  find_package(Python3 QUIET COMPONENTS Interpreter)
+endif()
+if(Python3_Interpreter_FOUND)
+  add_custom_target(format
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/format.py --fix
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Apply the official ROS Rolling format")
+  add_custom_target(format_check
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/format.py --check
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Check the official ROS Rolling format")
+endif()
+if(SWERVE_MPPI_BUILD_FORMAT_TESTS)
+  enable_testing()
+  add_test(NAME ros_format
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/format.py --check)
+  set_tests_properties(ros_format PROPERTIES TIMEOUT 60)
+endif()
+
+add_library(swerve_mppi_core)
+add_subdirectory(src)
 add_library(swerve_mppi::core ALIAS swerve_mppi_core)
 set_target_properties(swerve_mppi_core PROPERTIES EXPORT_NAME core POSITION_INDEPENDENT_CODE ON)
 target_include_directories(swerve_mppi_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 target_compile_features(swerve_mppi_core PUBLIC cxx_std_17)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -44,19 +46,28 @@ endif()
 
 if(SWERVE_MPPI_BUILD_TESTS)
   enable_testing()
-  add_executable(swerve_mppi_tests tests/core_tests.cpp)
+  add_executable(swerve_mppi_tests tests/common/core_tests.cpp)
   target_link_libraries(swerve_mppi_tests PRIVATE swerve_mppi_core)
-  target_include_directories(swerve_mppi_tests PRIVATE src)
+  target_include_directories(swerve_mppi_tests PRIVATE src tests/fixtures)
   add_test(NAME swerve_mppi_tests COMMAND swerve_mppi_tests)
-  foreach(suite model optimizer execution navigation safety timing actuation admission integration chassis)
-    add_executable(swerve_mppi_${suite}_tests tests/${suite}_tests.cpp)
+  foreach(suite_path
+    model/model planning/optimizer execution/execution navigation/navigation
+    safety/safety execution/timing model/actuation safety/admission integration/integration
+    execution/chassis
+  )
+    get_filename_component(suite "${suite_path}" NAME)
+    add_executable(swerve_mppi_${suite}_tests tests/${suite_path}_tests.cpp)
     target_link_libraries(swerve_mppi_${suite}_tests PRIVATE swerve_mppi_core)
-    target_include_directories(swerve_mppi_${suite}_tests PRIVATE src)
+    target_include_directories(swerve_mppi_${suite}_tests PRIVATE src tests/fixtures)
     add_test(NAME ${suite}_regressions COMMAND swerve_mppi_${suite}_tests)
   endforeach()
-  add_executable(swerve_mppi_behavior_tests tests/behavior_tests.cpp)
+  add_executable(swerve_mppi_behavior_tests tests/integration/behavior_tests.cpp)
   target_link_libraries(swerve_mppi_behavior_tests PRIVATE swerve_mppi_core)
-  foreach(scenario straight lateral curve spin reverse final_yaw scurve scurve_duplicates cusp loop short_cusp short_loop short_corner near_obstacles)
+  target_include_directories(swerve_mppi_behavior_tests PRIVATE tests/fixtures)
+  foreach(scenario
+    straight lateral curve spin reverse final_yaw scurve scurve_duplicates
+    cusp loop short_cusp short_loop short_corner near_obstacles
+  )
     add_test(NAME behavior_${scenario} COMMAND swerve_mppi_behavior_tests ${scenario})
     add_test(NAME timed_behavior_${scenario} COMMAND swerve_mppi_behavior_tests ${scenario} --timed)
     add_test(NAME profile_behavior_${scenario} COMMAND swerve_mppi_behavior_tests ${scenario} --profile)
@@ -73,16 +84,20 @@ if(SWERVE_MPPI_BUILD_TESTS)
       -DTEST_GENERATOR=${CMAKE_GENERATOR}
       -DTEST_COMPILER=${CMAKE_CXX_COMPILER}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_test.cmake)
-  set_tests_properties(swerve_mppi_tests model_regressions optimizer_regressions execution_regressions navigation_regressions safety_regressions timing_regressions actuation_regressions
-    admission_regressions integration_regressions chassis_regressions installed_consumer PROPERTIES TIMEOUT 60)
+  set_tests_properties(
+    swerve_mppi_tests model_regressions optimizer_regressions execution_regressions
+    navigation_regressions safety_regressions timing_regressions actuation_regressions
+    admission_regressions integration_regressions chassis_regressions installed_consumer
+    PROPERTIES TIMEOUT 60
+  )
 endif()
 
 if(SWERVE_MPPI_BUILD_BENCHMARKS)
   add_executable(swerve_mppi_integration_budget benchmarks/integration_budget.cpp)
-  target_include_directories(swerve_mppi_integration_budget PRIVATE tests)
+  target_include_directories(swerve_mppi_integration_budget PRIVATE tests/fixtures)
   target_link_libraries(swerve_mppi_integration_budget PRIVATE swerve_mppi_core)
   add_executable(swerve_mppi_benchmark benchmarks/core_benchmark.cpp)
-  target_include_directories(swerve_mppi_benchmark PRIVATE tests)
+  target_include_directories(swerve_mppi_benchmark PRIVATE tests/fixtures)
   target_link_libraries(swerve_mppi_benchmark PRIVATE swerve_mppi_core)
   if(SWERVE_MPPI_BUILD_TESTS)
     add_test(NAME benchmark_allocations COMMAND swerve_mppi_benchmark --smoke)

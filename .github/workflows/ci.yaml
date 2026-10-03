@@ -18,12 +18,20 @@ jobs:
         build_type: [Debug, Release]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned ROS Rolling format tools
+        run: python -m pip install -r tools/requirements-format.txt
+      - name: Check ROS format
+        run: python tools/format.py --check
       - name: Configure
         run: >-
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DCMAKE_CXX_FLAGS=-Werror
           -DSWERVE_MPPI_BUILD_BENCHMARKS=ON
+          -DSWERVE_MPPI_BUILD_FORMAT_TESTS=ON
       - name: Build
         run: cmake --build build --parallel 2
       - name: Test core and installed consumer

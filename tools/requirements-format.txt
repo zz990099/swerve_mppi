@@ -1,0 +1,6 @@
+# ROS 2 Rolling snapshot: ament_lint 0.21.3 (2026-10-03).
+# Both packages use the same immutable upstream commit.
+ament_lint @ git+https://github.com/ament/ament_lint.git@8d5a6246a6620a4f548aa485c87b271f0692bd42#subdirectory=ament_lint
+ament_clang_format @ git+https://github.com/ament/ament_lint.git@8d5a6246a6620a4f548aa485c87b271f0692bd42#subdirectory=ament_clang_format
+clang-format==21.1.8
+PyYAML==6.0.3

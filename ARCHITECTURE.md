@@ -4,6 +4,18 @@ The library builds as swerve_mppi::core using CMake. Its public headers contain
 no ROS, Nav2, Gazebo or pluginlib dependencies. ROS validation nodes and a future
 Nav2 controller plugin belong in separate adapter packages.
 
+## Module boundaries
+
+Public interfaces are grouped under `include/swerve_mppi/<module>/`; source files
+and private helpers mirror that structure in `src/<module>/` and `detail/`.
+The modules are common, model, navigation, planning, execution, feedback and safety.
+Their explicit CMake manifests build one exported core library. Tests follow the
+same responsibilities, with shared fixtures and full-pipeline integration scenarios.
+`ExecutionResult` lives in common value types so actuator modelling does not import
+an execution supervisor. Controller exposes a small public header with private
+planning/workspace dependencies. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
+for ownership, include migration and the pinned official ROS Rolling format.
+
 ## Components
 
 | Component | Responsibility |

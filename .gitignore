@@ -2,3 +2,5 @@
 /install*/
 *.o
 *.a
+
+__pycache__/

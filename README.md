@@ -7,6 +7,8 @@ mode confirmation before driving after a switch.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for component responsibilities, execution
 contracts and remaining simulation integration work.
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for module directories, the 0.19
+header migration and the official ROS Rolling formatting/checking workflow.
 
 ## Build, test and install
 
@@ -29,7 +31,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.18 CONFIG REQUIRED)
+find_package(swerve_mppi 0.19 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -108,6 +110,14 @@ See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for commands and measurement limi
 The optional allocation regression runs in CI; wall-clock timing is not a CI gate.
 
 ## Current status
+
+Version 0.19 organizes public headers, implementations and tests into seven functional
+modules, removes model-to-executor header coupling for shared value types and narrows
+the Controller header boundary. Formatting uses the unchanged official Rolling
+ament_clang_format configuration with pinned developer tools and a CI/CTest gate.
+Downstream includes must add their module directory; see
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Algorithms and chassis command semantics
+retain the 0.18 behavior.
 
 Version 0.18 replaces the public joint/action output with optional chassis velocity
 and explicit mode requests. Controller hides its prediction implementation;

@@ -1,0 +1,45 @@
+#pragma once
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <limits>
+#include <optional>
+
+namespace swerve_mppi::detail
+{
+// Inclusive duration/deadline bounds. A nanosecond floor handles decimal tick
+// arithmetic; four scaled machine epsilons cover subtraction of large stamps.
+// Strictly increasing stamps and replay checks deliberately do not use this.
+inline double time_tolerance(double a, double b)
+{
+  return std::max(
+    1e-9, 4 * std::numeric_limits<double>::epsilon() * std::max(std::abs(a), std::abs(b)));
+}
+inline bool duration_exceeded(double elapsed, double limit)
+{
+  return elapsed - limit > time_tolerance(elapsed, limit);
+}
+inline bool deadline_exceeded(double now, double begin, double limit)
+{
+  return now - begin - limit > std::max(time_tolerance(now, begin), time_tolerance(limit, limit));
+}
+inline bool elapsed_at_least(double now, double begin, double minimum)
+{
+  return minimum - (now - begin) <=
+         std::max(time_tolerance(now, begin), time_tolerance(minimum, minimum));
+}
+inline std::optional<std::size_t> duration_ticks(double duration, double dt, std::size_t maximum)
+{
+  if (duration_exceeded(duration, maximum * dt)) {
+    return std::nullopt;
+  }
+  const double ticks = std::ceil(std::max(0.0, duration - time_tolerance(duration, dt)) / dt);
+  if (
+    !std::isfinite(ticks) ||
+    ticks >= static_cast<double>(std::numeric_limits<std::size_t>::max())) {
+    return std::nullopt;
+  }
+  return std::min(maximum, static_cast<std::size_t>(ticks));
+}
+}  // namespace swerve_mppi::detail

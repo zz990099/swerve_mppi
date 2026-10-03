@@ -40,9 +40,9 @@ interpret the planner target as endpoint FK or allow a Twist-only mode switch.
 ## Cycle
 
 ```cpp
-#include <swerve_mppi/controller.hpp>
-#include <swerve_mppi/timing.hpp>
-#include <swerve_mppi/profile_runner.hpp>
+#include <swerve_mppi/planning/controller.hpp>
+#include <swerve_mppi/execution/timing.hpp>
+#include <swerve_mppi/execution/profile_runner.hpp>
 
 swerve_mppi::Config config;
 auto validator = std::make_shared<swerve_mppi::TrajectoryValidator>(config);
@@ -344,8 +344,8 @@ Capture before queueing and preserve the snapshot during transport. Do not bind 
 old Output to the latest task merely to make it pass: recompute for the new task.
 
 ```cpp
-#include <swerve_mppi/controller.hpp>
-#include <swerve_mppi/timing.hpp>
+#include <swerve_mppi/planning/controller.hpp>
+#include <swerve_mppi/execution/timing.hpp>
 
 swerve_mppi::Controller controller(config, validator);
 swerve_mppi::TimedExecutor executor(config, session_id, initial_actual_mode, {}, validator);

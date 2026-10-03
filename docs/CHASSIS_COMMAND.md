@@ -81,7 +81,9 @@ of the MPPI planning output or requirements for a ROS chassis command message.
 
 ## Migration and verification
 
-Rebuild against 0.18 (`find_package(swerve_mppi 0.18 CONFIG REQUIRED)`). Replace old
+The current package is 0.19; use `find_package(swerve_mppi 0.19 CONFIG REQUIRED)`
+and module-qualified headers from [DEVELOPMENT.md](DEVELOPMENT.md).
+For the 0.18 command migration: Replace old
 `Output.action/body_command/steering_targets/wheel_speed_targets/mode_request`
 access with `Output.command`, target_velocity and its optional mode_request.
 Replace direct `ModeExecutor.update(Output, state)` with ChassisExecutor for raw

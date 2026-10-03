@@ -12,6 +12,6 @@ run_checked("${CMAKE_COMMAND}" -S "${CONSUMER_SOURCE_DIR}"
   "-DCMAKE_PREFIX_PATH=${INSTALL_TEST_DIR}/prefix"
   "-DCMAKE_CXX_COMPILER=${TEST_COMPILER}" "-DCMAKE_BUILD_TYPE=${TEST_CONFIG}")
 run_checked("${CMAKE_COMMAND}" --build "${INSTALL_TEST_DIR}/consumer"
-  --config "${TEST_CONFIG}")
+  --config "${TEST_CONFIG}" --parallel 2)
 run_checked("${CMAKE_CTEST_COMMAND}" --test-dir "${INSTALL_TEST_DIR}/consumer"
   -C "${TEST_CONFIG}" --output-on-failure)
