@@ -9,10 +9,10 @@
 
 namespace swerve_mppi {
 namespace {
-bool same_request(const ModeRequest &a, const ModeRequest &b) {
+bool same_request(const JointModeRequest &a, const JointModeRequest &b) {
   return a.id == b.id && a.mode == b.mode && a.steering_targets == b.steering_targets;
 }
-bool valid_entry(const ModeRequest &request, const Config &config) {
+bool valid_entry(const JointModeRequest &request, const Config &config) {
   const auto &angles = request.steering_targets;
   if (request.mode == DriveMode::Crab) {
     for (double angle : angles)
@@ -47,7 +47,7 @@ ModeExecutor::ModeExecutor(const Config &config, DriveMode mode)
     throw std::invalid_argument("invalid executor initial mode");
 }
 
-ExecutionResult ModeExecutor::update(const Output &command, const VehicleState &measured) {
+ExecutionResult ModeExecutor::update(const JointCommand &command, const VehicleState &measured) {
   ExecutionResult out;
   out.steering_targets = last_steering_;
   const bool numeric_valid = detail::valid_vehicle(measured, config_);

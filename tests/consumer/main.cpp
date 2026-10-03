@@ -1,16 +1,18 @@
+#include "swerve_mppi/chassis_executor.hpp"
 #include "swerve_mppi/controller.hpp"
 #include "swerve_mppi/executor.hpp"
 #include "swerve_mppi/feedback.hpp"
 #include "swerve_mppi/feedback_adapter.hpp"
+#include "swerve_mppi/navigation.hpp"
 #include "swerve_mppi/profile_runner.hpp"
 #include "swerve_mppi/timing.hpp"
 int main() {
   swerve_mppi::Optimizer optimizer(swerve_mppi::Config{});
   optimizer.clear_warm_start();
   swerve_mppi::Controller controller(swerve_mppi::Config{});
-  swerve_mppi::ModeExecutor executor(swerve_mppi::Config{});
+  swerve_mppi::ChassisExecutor executor(swerve_mppi::Config{});
   swerve_mppi::Output hold;
-  hold.action = swerve_mppi::Action::Hold;
+  hold.command = swerve_mppi::ChassisCommand{};
   auto result = executor.update(hold, {});
   swerve_mppi::TimedExecutor timed(swerve_mppi::Config{}, 1);
   swerve_mppi::ControllerInput current;
@@ -46,8 +48,7 @@ int main() {
   swerve_mppi::ControllerInput input;
   input.reference_path = {{0, 0, 0}};
   const auto path = paths.update(input);
-  return controller.compute({}).action == swerve_mppi::Action::SafeStop &&
-                 result.feedback.confirmed &&
+  return !controller.compute({}).command && result.feedback.confirmed &&
                  guarded.timing_error == swerve_mppi::TimingError::None &&
                  guarded.safety_error == swerve_mppi::ExecutionSafetyError::None && midpoint &&
                  midpoint->wheel_speeds[0] == 0 && installed && joints &&

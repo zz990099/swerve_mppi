@@ -1,5 +1,6 @@
 #include "behavior_fixture.hpp"
-#include "swerve_mppi/controller.hpp"
+#include "joint_timing.hpp"
+#include "planner.hpp"
 #include "swerve_mppi/feedback.hpp"
 #include "swerve_mppi/profile_runner.hpp"
 #include <algorithm>
@@ -15,8 +16,8 @@ ControllerInput input() {
   in.reference_path = {{0, 0, 0}, {2, 0, 0}};
   return in;
 }
-CommandEnvelope envelope(const ControllerInput &in, const Output &out, std::uint64_t sequence = 1,
-                         std::uint64_t session = 1) {
+detail::JointCommandEnvelope envelope(const ControllerInput &in, const JointCommand &out,
+                                      std::uint64_t sequence = 1, std::uint64_t session = 1) {
   const double now = in.vehicle.stamp_s;
   return {session, sequence, now, out, now, now, now + .025, CommandTask::capture(in)};
 }
@@ -60,20 +61,20 @@ void test_inconsistent_feedback_cannot_certify_stopping() {
           "diagnostics must retain configurable disagreement tolerances");
     check(check_model_feedback(in.vehicle, c).status == FeedbackStatus::Inconsistent,
           "nominal admission must reject even diagnostic-tolerance disagreement");
-    const auto out = Controller(c).compute(in);
+    const auto out = detail::Planner(c).compute(in);
     check(ModeManager(c).update(in.vehicle).action == Action::SafeStop,
           "idle mode supervision must also reject inconsistent feedback");
     check(out.action == Action::SafeStop &&
               out.failure_reason == FailureReason::InconsistentFeedback,
           "inconsistent feedback cannot produce a healthy planning stop");
-    Output brake;
+    JointCommand brake;
     brake.action = Action::Brake;
     const auto raw = ModeExecutor(c, in.vehicle.actual_mode).update(brake, in.vehicle);
     check(
         raw.feedback.fault && !ActuationModel(c).plan(in.vehicle, raw) &&
             !ActuationModel(c).plan_stopping(in.vehicle, Action::Brake, in.vehicle.steering_angles),
         "neither raw supervision nor the nominal actuator model may certify a false stop");
-    TimedExecutor timed(c, 1, in.vehicle.actual_mode);
+    detail::JointTimedExecutor timed(c, 1, in.vehicle.actual_mode);
     const auto guarded = timed.update(envelope(in, brake), in, 1);
     check(guarded.safety_error == ExecutionSafetyError::InconsistentFeedback &&
               guarded.execution.feedback.fault && !guarded.actuation,
@@ -140,7 +141,7 @@ void test_shared_budget_and_late_result_rejection() {
   auto now = PlanningBudget::Clock::time_point{};
   auto validator = std::make_shared<TrajectoryValidator>(c);
   validator->add(std::make_shared<AdvanceClock>(now));
-  Controller controller(c, validator, [&] { return now; });
+  detail::Planner controller(c, validator, [&] { return now; });
   auto in = input();
   const auto out = controller.compute(in);
   check(out.action == Action::SafeStop && out.failure_reason == FailureReason::ComputeTimeout &&
@@ -161,7 +162,7 @@ void test_shared_budget_and_late_result_rejection() {
   auto terminal_validator = std::make_shared<TrajectoryValidator>(c);
   terminal_validator->add(std::make_shared<AdvanceClock>(now));
   in.reference_path = {{0, 0, 0}};
-  const auto late_hold = Controller(c, terminal_validator, [&] { return now; }).compute(in);
+  const auto late_hold = detail::Planner(c, terminal_validator, [&] { return now; }).compute(in);
   check(late_hold.action == Action::SafeStop &&
             late_hold.failure_reason == FailureReason::ComputeTimeout,
         "a late terminal check must not publish an expired Hold or completion");
@@ -175,13 +176,13 @@ void test_workload_admission_and_configuration_caps() {
   Config c;
   auto in = input();
   in.obstacles.resize(500, {100, 100, .05});
-  const auto out = Controller(c).compute(in);
+  const auto out = detail::Planner(c).compute(in);
   check(out.action == Action::SafeStop && out.failure_reason == FailureReason::WorkloadExceeded &&
             out.planning_stats.evaluated_rollouts == 0,
         "reviewed 500-obstacle stress must be rejected before optimization, never truncated");
   in.obstacles.clear();
   in.reference_path.resize(c.max_path_points + 1);
-  check(Controller(c).compute(in).failure_reason == FailureReason::WorkloadExceeded,
+  check(detail::Planner(c).compute(in).failure_reason == FailureReason::WorkloadExceeded,
         "oversize paths must be rejected before scanning or progress mutation");
   for (int field = 0; field < 7; ++field) {
     auto bad = c;
@@ -212,15 +213,15 @@ void test_workload_admission_and_configuration_caps() {
   c.compute_budget_ratio = 0; // This case tests inclusive input sizes, not host speed.
   in = input();
   in.obstacles.resize(2, {100, 100, .05});
-  check(Controller(c).compute(in).action != Action::SafeStop,
+  check(detail::Planner(c).compute(in).action != Action::SafeStop,
         "input size boundaries must be inclusive");
 }
 void test_profile_sampling_watchdog_and_recovery() {
   Config c;
   c.compute_budget_ratio = 0;
   auto in = input();
-  Controller controller(c);
-  TimedExecutor executor(c, 1);
+  detail::Planner controller(c);
+  detail::JointTimedExecutor executor(c, 1);
   const auto command = controller.compute(in);
   const auto result = executor.update(envelope(in, command), in, 1);
   check(result.actuation && result.execution.action == Action::Drive,
@@ -265,7 +266,7 @@ void test_profile_sampling_watchdog_and_recovery() {
   runner.reset(in.vehicle);
   auto changed = in;
   changed.path_id = 2;
-  TimedExecutor fallback_executor(c, 3);
+  detail::JointTimedExecutor fallback_executor(c, 3);
   const auto fallback = fallback_executor.update(envelope(in, command, 1, 3), changed, 1);
   check(fallback.safety_error == ExecutionSafetyError::TaskMismatch && fallback.actuation &&
             runner.install(fallback, 1, 60) && runner.sample(1.05, 60.05),
@@ -274,7 +275,7 @@ void test_profile_sampling_watchdog_and_recovery() {
   check(runner.install(recovered, 1, 70), "start boundary test");
   auto next = in;
   next.vehicle.stamp_s = 1.1;
-  TimedExecutor next_executor(c, 4);
+  detail::JointTimedExecutor next_executor(c, 4);
   const auto next_result = next_executor.update(envelope(next, command, 1, 4), next, 1.1);
   check(runner.install(next_result, 1.1, 70.1),
         "the next checked profile may replace the previous one at the exact boundary");
@@ -285,7 +286,7 @@ void test_profile_sampling_watchdog_and_recovery() {
   runner.reset(in.vehicle);
   check(runner.install(recovered, 1, 90), "start missed tick test");
   next.vehicle.stamp_s = 1.2;
-  TimedExecutor late_executor(c, 5);
+  detail::JointTimedExecutor late_executor(c, 5);
   const auto late = late_executor.update(envelope(next, command, 1, 5), next, 1.2);
   check(late.actuation && !runner.install(late, 1.2, 90.2) && runner.fault(),
         "a fresh new result cannot conceal a missed profile boundary");
@@ -309,12 +310,12 @@ void test_pending_transition_fallback_profiles() {
     auto reject_once = std::make_shared<RejectOnce>();
     if (!task_mismatch)
       validator->add(reject_once);
-    TimedExecutor executor(c, 1, DriveMode::DualAckermann, {}, validator);
+    detail::JointTimedExecutor executor(c, 1, DriveMode::DualAckermann, {}, validator);
     ProfileRunner runner(c);
-    Output request;
+    JointCommand request;
     request.action = Action::RequestMode;
     request.requested_mode = DriveMode::Crab;
-    request.mode_request = ModeRequest{
+    request.mode_request = JointModeRequest{
         17, DriveMode::Crab, DriveModel(c).steering_for_entry(DriveMode::Crab, {0, .3, 0}, {})};
     request.steering_targets = request.mode_request->steering_targets;
     auto result = executor.update(envelope(in, request), in, in.vehicle.stamp_s);
@@ -356,11 +357,11 @@ void test_pending_transition_fallback_profiles() {
   }
   // A task mismatch may not extend a pending request's fixed deadline.
   auto in = input();
-  TimedExecutor executor(c, 2);
-  Output request;
+  detail::JointTimedExecutor executor(c, 2);
+  JointCommand request;
   request.action = Action::RequestMode;
   request.requested_mode = DriveMode::Crab;
-  request.mode_request = ModeRequest{1, DriveMode::Crab, {1, 1, 1, 1}};
+  request.mode_request = JointModeRequest{1, DriveMode::Crab, {1, 1, 1, 1}};
   auto result = executor.update(envelope(in, request, 1, 2), in, 1);
   for (std::uint64_t tick = 1; tick < 40 && !result.execution.feedback.fault; ++tick) {
     in.vehicle.stamp_s = 1 + tick * c.dt_s; // Deliberately stalled steering.
@@ -387,13 +388,13 @@ void test_injected_validator_geometry() {
       bool rejected = false;
       try {
         if (consumer == 0)
-          Controller controller(c, validator);
+          detail::Planner controller(c, validator);
         if (consumer == 1)
           Optimizer optimizer(c, validator);
         if (consumer == 2)
           CriticManager critics(c, validator);
         if (consumer == 3)
-          TimedExecutor executor(c, 1, DriveMode::Spin, {}, validator);
+          detail::JointTimedExecutor executor(c, 1, DriveMode::Spin, {}, validator);
       } catch (const std::invalid_argument &) {
         rejected = true;
       }
@@ -407,9 +408,9 @@ void test_injected_validator_geometry() {
   in.vehicle.steering_angles = wheels.angles;
   in.vehicle.velocity = Kinematics(c).forward(wheels.speeds, wheels.angles);
   auto validator = std::make_shared<TrajectoryValidator>(c);
-  Output brake;
+  JointCommand brake;
   brake.action = Action::Brake;
-  TimedExecutor executor(c, 1, DriveMode::Spin, {}, validator);
+  detail::JointTimedExecutor executor(c, 1, DriveMode::Spin, {}, validator);
   const auto result = executor.update(envelope(in, brake), in, 1);
   check(result.actuation && !result.execution.feedback.fault,
         "matching custom geometry must admit and validate a spinning stop");
@@ -433,7 +434,7 @@ void test_retry_exploration_and_explicit_reset() {
   c.minimum_mode_dwell_s = 1000;
   auto validator = std::make_shared<TrajectoryValidator>(c);
   validator->add(std::make_shared<NarrowFirstYaw>());
-  Controller controller(c, validator);
+  detail::Planner controller(c, validator);
   auto in = input();
   in.reference_path = {{0, 0, 0}, {3, 0, 0}};
   const auto first = controller.compute(in);

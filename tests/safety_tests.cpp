@@ -1,5 +1,6 @@
 #include "behavior_fixture.hpp"
-#include "swerve_mppi/controller.hpp"
+#include "joint_timing.hpp"
+#include "planner.hpp"
 #include "swerve_mppi/timing.hpp"
 #include <iostream>
 
@@ -76,7 +77,7 @@ void test_validator_configuration_contract() {
       bool rejected = false;
       try {
         if (consumer == 0) {
-          Controller controller(c, validator);
+          detail::Planner controller(c, validator);
         }
         if (consumer == 1) {
           Optimizer optimizer(c, validator);
@@ -94,7 +95,7 @@ void test_validator_configuration_contract() {
   planning.random_seed = 7;
   planning.goal_weight = 2;
   auto validator = std::make_shared<TrajectoryValidator>(planning);
-  Controller controller(c, validator);
+  detail::Planner controller(c, validator);
   auto input = straight();
   input.reference_path.back().x = .2;
   input.obstacles = {{.555, 0, .05}};
@@ -105,7 +106,7 @@ void test_validator_configuration_contract() {
 }
 void test_temporary_failure_stops_and_recovers() {
   const auto c = deterministic();
-  Controller controller(c);
+  detail::Planner controller(c);
   ModeExecutor executor(c);
   auto in = straight();
   in.vehicle.velocity.vx = .2;
@@ -130,7 +131,7 @@ void test_temporary_failure_stops_and_recovers() {
 }
 void test_unsafe_stopping_latches_fault() {
   const auto c = deterministic();
-  Controller controller(c);
+  detail::Planner controller(c);
   ModeExecutor executor(c);
   auto in = straight();
   in.vehicle.velocity.vx = .3;
@@ -150,7 +151,7 @@ void test_unsafe_stopping_latches_fault() {
 }
 void test_capture_checks_one_command_then_stop() {
   const auto c = deterministic();
-  Controller controller(c);
+  detail::Planner controller(c);
   ModeExecutor executor(c);
   auto in = straight();
   in.reference_path.back().x = .2;
@@ -174,7 +175,7 @@ void test_terminal_brakes_share_stopping_validation() {
   for (int route = 0; route < 5; ++route) {
     Config c;
     c.max_wheel_accel_mps2 = .2;
-    Controller controller(c);
+    detail::Planner controller(c);
     ModeExecutor executor(c);
     auto in = straight();
     in.reference_path = {{0, 0, route == 1 || route == 3 ? 1.0 : 0.0}};
@@ -206,7 +207,7 @@ void test_terminal_brakes_share_stopping_validation() {
 }
 void test_safe_terminal_braking_retains_navigation_status() {
   Config c;
-  Controller controller(c);
+  detail::Planner controller(c);
   ModeExecutor executor(c);
   auto in = straight();
   in.reference_path = {{0, 0, 1}};
@@ -225,7 +226,7 @@ void test_drive_requires_complete_stopping_continuation() {
   c.horizon_steps = 2;
   c.max_linear_decel_mps2 = .1;
   for (double goal : {2.0, .2}) {
-    Controller controller(c);
+    detail::Planner controller(c);
     ModeExecutor executor(c);
     auto in = straight();
     in.reference_path.back().x = goal;
@@ -242,7 +243,7 @@ void test_drive_requires_complete_stopping_continuation() {
           "a short MPPI horizon must allow a safe stop longer than its prediction horizon");
   }
   c.stopping_horizon_steps = 2;
-  Controller limited(c);
+  detail::Planner limited(c);
   auto in = straight();
   check(limited.compute(in).action == Action::Hold,
         "an exhausted stopping budget must reject Drive, even with no obstacles");
@@ -271,7 +272,7 @@ void test_first_drive_deceleration_matches_execution() {
   check(unsafe.valid && std::abs(unsafe.final_state.pose.x - expected) < 1e-10 &&
             TrajectoryValidator(c).check(in, unsafe) == TrajectoryStatus::Collision,
         "decelerating first Drive must include its full-period displacement");
-  Controller controller(c);
+  detail::Planner controller(c);
   ModeExecutor executor(c);
   const auto output = controller.compute(in);
   check(output.action == Action::Drive && output.safety_reductions > 0 &&
@@ -280,7 +281,7 @@ void test_first_drive_deceleration_matches_execution() {
   auto result = executor.update(output, in.vehicle);
   check(!result.feedback.fault, "reduced Drive must satisfy the same executor contract");
   actuate(in.vehicle, result, c);
-  Output brake;
+  JointCommand brake;
   brake.action = Action::Brake;
   brake.requested_mode = in.vehicle.actual_mode;
   actuate(in.vehicle, executor.update(brake, in.vehicle), c);
@@ -293,7 +294,7 @@ void test_stopping_budget_reduction_restores_progress() {
   c.samples_per_branch = c.iterations = 1;
   auto in = straight();
   in.reference_path.back().x = 1;
-  Controller controller(c);
+  detail::Planner controller(c);
   ModeExecutor executor(c);
   const auto output = controller.compute(in);
   check(output.action == Action::Drive && output.safety_reductions > 0 &&
@@ -304,7 +305,7 @@ void test_stopping_budget_reduction_restores_progress() {
   actuate(in.vehicle, result, c);
   check(in.vehicle.pose.x > 0, "a safe reduced intent must make measured progress");
   c.safety_reduction_attempts = 0;
-  Controller disabled(c);
+  detail::Planner disabled(c);
   in = straight();
   check(disabled.compute(in).action == Action::Hold,
         "zero reduction budget retains checked waiting semantics");
@@ -322,7 +323,7 @@ void test_overspeed_feedback_uses_checked_braking() {
   auto in = straight();
   in.vehicle.velocity.vx = 1;
   in.vehicle.wheel_speeds.fill(1);
-  const auto output = Controller(c).compute(in);
+  const auto output = detail::Planner(c).compute(in);
   check(output.action == Action::Brake &&
             !ModeExecutor(c).update(output, in.vehicle).feedback.fault,
         "measured overspeed must recover by checked Brake instead of an overspeed Drive");
@@ -332,7 +333,7 @@ void test_zero_intent_braking_executes_with_measured_residual() {
   c.path_lookahead_m = .1;
   c.max_wheel_accel_mps2 = .1;
   c.samples_per_branch = c.iterations = 1;
-  Controller controller(c);
+  detail::Planner controller(c);
   ModeExecutor executor(c);
   auto in = straight();
   in.vehicle.wheel_speeds = {.3, .24, .24, .3};
@@ -355,7 +356,7 @@ void test_stationary_terminal_hold_checks_constraints() {
   validator->add(std::make_shared<RejectAll>());
   // Both yaw-settling and waiting for minimum mode dwell used to return early.
   for (double yaw : {0.0, 1.0}) {
-    Controller controller(c, validator);
+    detail::Planner controller(c, validator);
     auto in = straight();
     in.reference_path = {{0, 0, yaw}};
     in.vehicle.time_in_mode_s = 0;
@@ -368,7 +369,7 @@ void test_stationary_terminal_hold_checks_constraints() {
 void test_pending_request_rechecks_fresh_stopping_constraints() {
   Config c;
   c.max_wheel_accel_mps2 = .2;
-  Controller controller(c);
+  detail::Planner controller(c);
   ModeExecutor executor(c);
   auto in = straight();
   in.reference_path = {{0, 0, 1}};
@@ -403,8 +404,7 @@ void test_pending_request_rechecks_fresh_stopping_constraints() {
 class SteeringLock final : public TrajectoryConstraint {
 public:
   bool allows(const ControllerInput &in, const Trajectory &trace) const override {
-    return in.obstacles.empty() ||
-           trace.final_state.steering_angles == in.vehicle.steering_angles;
+    return in.obstacles.empty() || trace.final_state.steering_angles == in.vehicle.steering_angles;
   }
 };
 void test_pending_request_rechecks_actual_steering() {
@@ -413,18 +413,21 @@ void test_pending_request_rechecks_actual_steering() {
       Config c;
       auto validator = std::make_shared<TrajectoryValidator>(c);
       validator->add(std::make_shared<SteeringLock>());
-      Controller controller(c, validator);
+      detail::Planner controller(c, validator);
       ModeExecutor direct(c);
-      TimedExecutor timed(c, 10, DriveMode::DualAckermann, {}, validator);
+      detail::JointTimedExecutor timed(c, 10, DriveMode::DualAckermann, {}, validator);
       auto in = straight();
       in.reference_path = {{0, 0, 1}};
       std::uint64_t sequence = 0;
-      auto execute = [&](const Output &command) {
+      auto execute = [&](const JointCommand &command) {
         if (!guarded)
           return direct.update(command, in.vehicle);
         const double now = in.vehicle.stamp_s;
-        return timed.update(CommandEnvelope{10, ++sequence, now, command, now, now,
-                            now + .025, CommandTask::capture(in)}, in, now).execution;
+        return timed
+            .update(detail::JointCommandEnvelope{10, ++sequence, now, command, now, now, now + .025,
+                                                 CommandTask::capture(in)},
+                    in, now)
+            .execution;
       };
       const auto first = controller.compute(in);
       check(first.action == Action::RequestMode && first.mode_request,
@@ -442,8 +445,8 @@ void test_pending_request_rechecks_actual_steering() {
             "a safe retry must continue without granting mode confirmation");
       actuate(in.vehicle, continued, c);
       in.vehicle.wheel_speeds.fill(residual);
-      in.vehicle.velocity = Kinematics(c).forward(in.vehicle.wheel_speeds,
-                                                 in.vehicle.steering_angles);
+      in.vehicle.velocity =
+          Kinematics(c).forward(in.vehicle.wheel_speeds, in.vehicle.steering_angles);
       in.obstacles = {{100, 100, .05}};
       Trajectory brake;
       RolloutEngine(c).generate_stop(in.vehicle, brake);
@@ -468,25 +471,28 @@ void test_guarded_retry_rechecks_changed_steering_constraint() {
   Config c;
   auto validator = std::make_shared<TrajectoryValidator>(c);
   validator->add(std::make_shared<SteeringLock>());
-  Controller controller(c, validator);
-  TimedExecutor executor(c, 10, DriveMode::DualAckermann, {}, validator);
+  detail::Planner controller(c, validator);
+  detail::JointTimedExecutor executor(c, 10, DriveMode::DualAckermann, {}, validator);
   auto in = straight();
   in.reference_path = {{0, 0, 1}};
   const auto source = in;
   const auto request = controller.compute(source);
-  const auto first = executor.update(CommandEnvelope{10, 1, 1, request, 1, 1, 1.025,
-                                    CommandTask::capture(source)}, in, 1);
+  const auto first = executor.update(
+      detail::JointCommandEnvelope{10, 1, 1, request, 1, 1, 1.025, CommandTask::capture(source)},
+      in, 1);
   check(first.actuation.has_value(), "safe initial transition must have a checked profile");
   actuate(in.vehicle, first.execution, c);
   in.obstacles = {{100, 100, .05}};
   // A queued immutable retry was planned before the steering lock appeared.
   const double now = in.vehicle.stamp_s;
-  const auto rejected = executor.update(CommandEnvelope{10, 2, now, request, 1, now, now + .025,
-                                       CommandTask::capture(source)}, in, now);
+  const auto rejected =
+      executor.update(detail::JointCommandEnvelope{10, 2, now, request, 1, now, now + .025,
+                                                   CommandTask::capture(source)},
+                      in, now);
   check(rejected.timing_error == TimingError::None &&
             rejected.safety_error == ExecutionSafetyError::UnsafeStoppingTrajectory &&
-            rejected.rejected_status == TrajectoryStatus::Rejected &&
-            !rejected.actuation && rejected.execution.feedback.fault &&
+            rejected.rejected_status == TrajectoryStatus::Rejected && !rejected.actuation &&
+            rejected.execution.feedback.fault &&
             rejected.execution.steering_targets == in.vehicle.steering_angles,
         "execution must independently reject forbidden alignment in a committed retry/fallback");
 }
@@ -530,7 +536,7 @@ void test_shared_hard_constraints() {
   auto validator = std::make_shared<TrajectoryValidator>(c);
   validator->add(std::make_shared<TranslationLimit>());
   for (int route = 0; route < 3; ++route) {
-    Controller controller(c, validator);
+    detail::Planner controller(c, validator);
     auto in = straight();
     if (route == 1)
       in.reference_path.back().x = .2;
@@ -581,7 +587,7 @@ void test_residual_hold_obstacle() {
             std::abs(predicted.state.pose.y) < 1e-9,
         "Hold prediction must retain the complete residual braking distance without rolling "
         "steering");
-  const auto output = Controller(c).compute(in);
+  const auto output = detail::Planner(c).compute(in);
   ModeExecutor executor(c, DriveMode::Crab);
   const auto execution = executor.update(output, in.vehicle);
   auto actual = in.vehicle;

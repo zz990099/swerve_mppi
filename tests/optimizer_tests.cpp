@@ -1,4 +1,4 @@
-#include "swerve_mppi/controller.hpp"
+#include "planner.hpp"
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -36,7 +36,7 @@ void test_hysteresis_selection() {
   c.switch_hysteresis = 1000;
   auto in = input();
   in.reference_path = {{0, 0, 0}, {0, 1.4, 0}};
-  const auto out = Controller(c).compute(in);
+  const auto out = detail::Planner(c).compute(in);
   check(out.selected_cost == out.keep_cost && std::isfinite(out.keep_cost),
         "controller must execute the keep solution when mode switching is rejected");
 }
@@ -291,7 +291,7 @@ void test_optimizer_reset_and_closed_loop() {
   auto b = optimizer.optimize(in, {DriveMode::DualAckermann, 0, false});
   check(std::isfinite(a.cost) && a.cost == b.cost && a.controls[0].vx == b.controls[0].vx,
         "reset must provide reproducible finite optimization");
-  Controller controller(c);
+  detail::Planner controller(c);
   const double initial = in.reference_path.back().x;
   for (int i = 0; i < 30; ++i) {
     const auto out = controller.compute(in);
@@ -334,7 +334,7 @@ void test_reusable_rollouts_and_planning_stats() {
             result.planning_stats.feasible_rollouts == expected &&
             result.planning_stats.fallback_updates == 0,
         "work counters must include nominal, sampled and weighted evaluations");
-  const auto output = Controller(c).compute(in);
+  const auto output = detail::Planner(c).compute(in);
   check(output.control_policy == ControlPolicy::Tracking && output.planning_stats.branches == 1 &&
             output.planning_stats.evaluated_rollouts == expected &&
             output.failure_reason == FailureReason::None,
@@ -351,7 +351,7 @@ void test_reusable_rollouts_and_planning_stats() {
   const auto a = optimizer.optimize(in, {}), b = copied.optimize(in, {});
   check(a.cost == b.cost && a.controls.front().vx == b.controls.front().vx,
         "copied optimizers must not alias each other's workspace");
-  Controller controller(c);
+  detail::Planner controller(c);
   in = input();
   controller.compute(in);
   check(controller.compute(in).failure_reason == FailureReason::NonmonotonicTime,
@@ -475,7 +475,7 @@ void test_extension_and_invalid_inputs() {
         "empty path must be safe at public optimizer boundary");
   in = input();
   in.vehicle.steering_angles[0] = 2;
-  check(Controller(c).compute(in).action == Action::SafeStop,
+  check(detail::Planner(c).compute(in).action == Action::SafeStop,
         "invalid joint feedback must stop the controller");
 }
 } // namespace

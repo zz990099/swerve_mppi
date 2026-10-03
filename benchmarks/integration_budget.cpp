@@ -37,7 +37,7 @@ int main(int argc, char **argv) {
         const auto output = controller.compute(input);
         if (output.failure_reason == FailureReason::ComputeTimeout)
           ++timeouts;
-        else if (output.action == Action::SafeStop)
+        else if (!output.command)
           ++other;
         CommandEnvelope packet{session,    static_cast<std::uint64_t>(iteration + 1),
                                now,        output,
@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
         if (installed) {
           if (!runner.sample(now, wall))
             ++other;
-        } else if (output.action != Action::SafeStop)
+        } else if (output.command.has_value())
           ++other;
         const double ms =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)

@@ -1,7 +1,7 @@
-# Simulation integration preparation (0.17)
+# Simulation integration preparation (0.18)
 
 This release supplies the feedback boundary, profile-consumer regressions and a
-production-budget measurement tool. The separate Gazebo package supplies an
+production-budget measurement tool, plus an actionless chassis command boundary. The separate Gazebo package supplies an
 independent guarded ros2_control endpoint. A ROS MPPI planning node and physical
 MPPI tracking acceptance remain integration work.
 
@@ -48,6 +48,24 @@ execution-start snapshot and current obstacles. Publish ONLY ProfileRunner sampl
 from a checked result. No sample, SafeStop, late compute or failed admission must
 stop refreshing the protected endpoint, causing its independent emergency stop.
 Never wrap an old profile in a fresh source stamp.
+
+## Chassis command boundary
+
+Controller returns `Output.command` with body target velocity and an optional
+immutable mode request; it publishes no joint angles, wheel speeds or action.
+Keep the complete command together with its envelope metadata and source task.
+TimedExecutor belongs to the lower chassis execution adapter: it compiles the body
+target using the shared DriveModel and actual encoders, validates the exact joint
+profile, and acknowledges the mode from measurements. Zero velocity cannot encode
+a mode request or fault; absent authorization must stop/latch rather than retain an
+old velocity. See [CHASSIS_COMMAND.md](CHASSIS_COMMAND.md).
+
+The protected Gazebo endpoint remains the final joint actuator boundary. It consumes
+ProfileRunner samples produced after body-command admission; do not send nominal
+body targets or frozen mode-entry intent directly to its joint packet. Existing
+Gazebo Twist control is not the complete timed/task/mode-acknowledgement protocol.
+A ROS chassis-command message and adapter still need implementation in the next
+integration stage. This release changes the portable core/execution boundary.
 
 ## Execution endpoint
 

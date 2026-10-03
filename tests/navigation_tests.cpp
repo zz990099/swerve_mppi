@@ -1,4 +1,4 @@
-#include "swerve_mppi/controller.hpp"
+#include "planner.hpp"
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -80,7 +80,7 @@ void test_short_paths_preserve_segment_order() {
       {{0, 0, 0}, {.4, 0, 0}, {.4, .04, 0}, {0, .04, 0}}};
   for (const auto &path : paths) {
     PathManager manager(c);
-    Controller controller(c);
+    detail::Planner controller(c);
     ControllerInput in;
     in.reference_path = path;
     in.vehicle.pose = {.01, .03, 0};
@@ -208,7 +208,7 @@ void test_replan_execution_boundaries() {
   Config c;
   c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   c.noise_v_mps = c.noise_w_radps = 0;
-  Controller controller(c);
+  detail::Planner controller(c);
   ControllerInput in;
   in.vehicle.stamp_s = 1;
   in.vehicle.time_in_mode_s = 2;
@@ -241,7 +241,7 @@ void test_replan_execution_boundaries() {
 void test_task_restart_and_stall() {
   Config c;
   c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
-  Controller controller(c);
+  detail::Planner controller(c);
   ControllerInput input;
   input.vehicle.stamp_s = 1;
   input.reference_path = {{0, 0, 0}};
@@ -293,4 +293,3 @@ int main() {
     return 1;
   }
 }
-

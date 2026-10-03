@@ -1,4 +1,4 @@
-#include "swerve_mppi/timing.hpp"
+#include "joint_timing.hpp"
 #include "swerve_mppi/feedback.hpp"
 #include "time_comparison.hpp"
 #include "validation.hpp"
@@ -97,26 +97,29 @@ void TimingGuard::reset(std::uint64_t new_session_id) {
   last_command_tick_s_ = -1;
   error_ = TimingError::None;
 }
-TimedExecutor::TimedExecutor(const Config &config, std::uint64_t session_id, DriveMode initial_mode,
-                             const TimingLimits &limits,
-                             std::shared_ptr<const TrajectoryValidator> validator)
+detail::JointTimedExecutor::JointTimedExecutor(const Config &config, std::uint64_t session_id,
+                                               DriveMode initial_mode, const TimingLimits &limits,
+                                               std::shared_ptr<const TrajectoryValidator> validator)
     : config_(config),
       validator_(validator ? std::move(validator) : std::make_shared<TrajectoryValidator>(config)),
       actuation_(config), rollout_(config), timing_(config, session_id, limits),
       executor_(config, initial_mode) {
   validator_->require_compatible(config_);
 }
-TrajectoryStatus TimedExecutor::check(const ControllerInput &latest, const ActuationPlan &plan) {
+TrajectoryStatus detail::JointTimedExecutor::check(const ControllerInput &latest,
+                                                   const ActuationPlan &plan) {
   rollout_.generate_execution(plan, trace_);
   return validator_->check(latest, trace_);
 }
-TimedExecutionResult TimedExecutor::update(const std::optional<CommandEnvelope> &command,
-                                           const ControllerInput &latest, double now_s) {
+TimedExecutionResult
+detail::JointTimedExecutor::update(const std::optional<JointCommandEnvelope> &command,
+                                   const ControllerInput &latest, double now_s) {
   const auto &measured = latest.vehicle;
   auto error = timing_.check_feedback(measured.stamp_s, now_s);
   if (error == TimingError::None)
-    error = timing_.check_command(command, now_s);
-  Output stop;
+    error = timing_.check_command(
+        command ? std::optional<CommandEnvelope>(timing_envelope(*command)) : std::nullopt, now_s);
+  JointCommand stop;
   stop.requested_mode = measured.actual_mode;
   if (error != TimingError::None)
     return {executor_.update(stop, measured), error, ExecutionSafetyError::None,
@@ -135,9 +138,17 @@ TimedExecutionResult TimedExecutor::update(const std::optional<CommandEnvelope> 
     return {executor_.update(stop, measured), error, ExecutionSafetyError::StateNotCurrent,
             TrajectoryStatus::Invalid, std::nullopt};
 
+  // Cancellation/fault is independent of task identity. Withheld authorization
+  // (or a malformed body packet compiled to SafeStop) must not become a healthy
+  // TaskMismatch fallback merely because its originating task was replaced.
+  if (command->command.action == Action::SafeStop)
+    return {executor_.update(stop, measured), error, ExecutionSafetyError::None,
+            TrajectoryStatus::Invalid, std::nullopt};
+
   // Collision validity alone does not authorize a command for a replaced task.
   // Check the source snapshot before any protocol preview can consume a request.
-  if (!command->source_task || !command->source_task->matches(latest))
+  const auto *source_task = command->task();
+  if (!source_task || !source_task->matches(latest))
     return reject_command(latest, ExecutionSafetyError::TaskMismatch, TrajectoryStatus::Invalid);
 
   // Preview protocol state transactionally. A rejected request must not consume
@@ -160,13 +171,13 @@ TimedExecutionResult TimedExecutor::update(const std::optional<CommandEnvelope> 
 
   return reject_command(latest, ExecutionSafetyError::CommandRejected, status);
 }
-TimedExecutionResult TimedExecutor::reject_command(const ControllerInput &latest,
-                                                   ExecutionSafetyError reason,
-                                                   TrajectoryStatus status) {
+TimedExecutionResult detail::JointTimedExecutor::reject_command(const ControllerInput &latest,
+                                                                ExecutionSafetyError reason,
+                                                                TrajectoryStatus status) {
   const auto &measured = latest.vehicle;
   // The command belongs to an obsolete task or its actual interval/stop is unsafe.
   // Only a freshly checked complete stop authorizes a non-latching fallback.
-  Output brake;
+  JointCommand brake;
   brake.action = Action::Brake;
   brake.requested_mode = measured.actual_mode;
   auto braking_executor = executor_;
@@ -176,12 +187,13 @@ TimedExecutionResult TimedExecutor::reject_command(const ControllerInput &latest
     executor_ = std::move(braking_executor);
     return {execution, TimingError::None, reason, status, std::move(plan)};
   }
-  Output stop;
+  JointCommand stop;
   stop.requested_mode = measured.actual_mode;
   return {executor_.update(stop, measured), TimingError::None,
           ExecutionSafetyError::UnsafeStoppingTrajectory, status, std::nullopt};
 }
-void TimedExecutor::reset(const VehicleState &recovered, std::uint64_t new_session_id) {
+void detail::JointTimedExecutor::reset(const VehicleState &recovered,
+                                       std::uint64_t new_session_id) {
   // Check session renewal before mutating execution state. Failed recovery must
   // leave both guards latched; ModeExecutor verifies actual stopped feedback.
   if (new_session_id <= timing_.session_id())

@@ -1,5 +1,5 @@
 #include "behavior_fixture.hpp"
-#include "swerve_mppi/controller.hpp"
+#include "planner.hpp"
 #include "swerve_mppi/executor.hpp"
 #include <algorithm>
 #include <cmath>
@@ -33,12 +33,12 @@ void feedback(VehicleState &s, const ModeFeedback &f) {
 }
 void actuate(VehicleState &s, const ExecutionResult &r, const Config &c) { test::actuate(s, r, c); }
 
-Output request(std::uint64_t id, DriveMode mode, const Config &c) {
-  Output out;
+JointCommand request(std::uint64_t id, DriveMode mode, const Config &c) {
+  JointCommand out;
   out.action = Action::RequestMode;
   out.requested_mode = mode;
   out.mode_request =
-      ModeRequest{id, mode, DriveModel(c).steering_for_entry(mode, intent(mode), {})};
+      JointModeRequest{id, mode, DriveModel(c).steering_for_entry(mode, intent(mode), {})};
   out.steering_targets = out.mode_request->steering_targets;
   return out;
 }
@@ -60,7 +60,7 @@ void test_all_directed_transitions() {
       ModeManager manager(c);
       ModeExecutor executor(c, from);
       manager.begin(to, intent(to), s);
-      std::optional<ModeRequest> frozen;
+      std::optional<JointModeRequest> frozen;
       bool finished = false;
       for (int tick = 0; tick < 40; ++tick) {
         auto command = manager.update(s);
@@ -175,7 +175,7 @@ void test_cancellation_recovery_and_invalid_commands() {
   s.stamp_s = 1;
   auto command = request(8, DriveMode::Crab, c);
   e.update(command, s);
-  Output stop;
+  JointCommand stop;
   s.stamp_s += .1;
   check(e.update(stop, s).feedback.fault, "SafeStop must cancel and latch an active transition");
   s.mode_request_id = 8;
@@ -236,7 +236,7 @@ void test_persistent_mode_and_unconfirmed_drive() {
   VehicleState s;
   s.actual_mode = DriveMode::Crab;
   s.stamp_s = 1;
-  Output hold;
+  JointCommand hold;
   hold.action = Action::Hold;
   hold.steering_targets = s.steering_angles;
   check(e.update(hold, s).feedback.actual_mode == DriveMode::Crab,
@@ -244,7 +244,7 @@ void test_persistent_mode_and_unconfirmed_drive() {
   auto command = request(1, DriveMode::Spin, c);
   s.stamp_s += .1;
   e.update(command, s);
-  Output drive;
+  JointCommand drive;
   drive.action = Action::Drive;
   drive.requested_mode = DriveMode::Spin;
   drive.body_command.wz = .5;
@@ -265,7 +265,7 @@ void test_boot_age_drive_consistency_and_preemption() {
   s.stamp_s = 1;
   s.time_in_mode_s = 4;
   ModeExecutor age(c);
-  Output hold;
+  JointCommand hold;
   hold.action = Action::Hold;
   check(age.update(hold, s).feedback.time_in_mode_s == 4,
         "startup mode age may precede the nonnegative clock origin");
@@ -274,7 +274,7 @@ void test_boot_age_drive_consistency_and_preemption() {
         "negative mode-entry time must not reinitialize age on each tick");
 
   ModeExecutor mismatch(c);
-  Output drive;
+  JointCommand drive;
   drive.action = Action::Drive;
   drive.body_command.vx = .2;
   drive.wheel_speed_targets.fill(.4);
@@ -347,7 +347,7 @@ void test_transition_protocol_tick_matrix() {
                 std::optional<std::size_t> confirmed_tick;
                 std::size_t actual = c.horizon_steps;
                 for (std::size_t tick = 0; tick < c.horizon_steps; ++tick) {
-                  Output command;
+                  JointCommand command;
                   command.action = Action::Hold;
                   command.requested_mode = state.actual_mode;
                   command.steering_targets = state.steering_angles;
@@ -512,7 +512,7 @@ void test_same_mode_alignment_decimal_deadline() {
     std::vector<Control> controls(c.horizon_steps, {0, .12, 0});
     check(RolloutEngine(c).generate(input.vehicle, {}, controls).valid,
           "same-mode prediction must admit its first Drive at the alignment deadline");
-    Controller controller(c);
+    detail::Planner controller(c);
     ModeExecutor executor(c, DriveMode::Crab);
     const auto alignment = controller.compute(input);
     check(alignment.action == Action::Hold,
@@ -539,7 +539,7 @@ void test_zero_delay_controller_capture_timing() {
   check(trace.valid && std::hypot(trace.poses[3].x, trace.poses[3].y) < 1e-9 &&
             std::hypot(trace.poses[4].x, trace.poses[4].y) > 1e-9,
         "zero-delay diagonal entry must reserve three stopped ticks before first motion");
-  Controller controller(c);
+  detail::Planner controller(c);
   ModeExecutor executor(c);
   for (int tick = 0; tick <= 3; ++tick) {
     const auto command = controller.compute(input);
@@ -559,7 +559,7 @@ void test_controller_executor_lateral_loop() {
   c.switch_cost = .05;
   c.switch_hysteresis = .01;
   c.noise_v_mps = c.noise_w_radps = 0;
-  Controller controller(c);
+  detail::Planner controller(c);
   ModeExecutor executor(c);
   ControllerInput input;
   input.vehicle.stamp_s = 1;
@@ -593,7 +593,7 @@ void test_measured_steering_tolerance() {
   const auto predicted = DriveModel(c).step(s, control, c.dt_s);
   check(predicted.valid && !predicted.aligning && predicted.state.velocity.vy != 0,
         "small measured steering error must produce a consistent nonideal body twist");
-  Output command;
+  JointCommand command;
   command.action = Action::Drive;
   command.body_command = predicted.state.velocity;
   command.steering_targets = predicted.steering_targets;
@@ -624,7 +624,7 @@ void test_nonfinite_drive_commands() {
         -std::numeric_limits<double>::infinity()}) {
     for (int axis = 0; axis < 3; ++axis) {
       ModeExecutor executor(c);
-      Output command;
+      JointCommand command;
       command.action = Action::Drive;
       command.wheel_speed_targets.fill(.1);
       command.body_command = {.1, 0, 0};
@@ -654,7 +654,7 @@ void test_frozen_controller_alignment() {
     in.reference_path = {{0, 0, 0}, {0, 1.4, 0}};
     return in;
   };
-  Controller controller(c);
+  detail::Planner controller(c);
   auto in = initial();
   const auto first = controller.compute(in);
   check(first.action == Action::Hold, "large same-mode steering must start stopped alignment");
@@ -682,7 +682,7 @@ void test_drive_steering_command_limits() {
     VehicleState s;
     s.actual_mode = DriveMode::Crab;
     s.stamp_s = 1;
-    Output command;
+    JointCommand command;
     command.action = Action::Drive;
     command.requested_mode = DriveMode::Crab;
     command.steering_targets.fill(delta);
@@ -713,7 +713,7 @@ void test_absolute_speed_and_drive_interpolation_limits() {
       const Control intent = mode == DriveMode::Spin ? Control{0, 0, maximum + excess}
                                                      : Control{maximum + excess, 0, 0};
       const auto joint = Kinematics(c).inverse(intent, state.steering_angles);
-      Output command;
+      JointCommand command;
       command.action = Action::Drive;
       command.requested_mode = mode;
       command.steering_targets = joint.angles;
@@ -728,7 +728,7 @@ void test_absolute_speed_and_drive_interpolation_limits() {
   state.stamp_s = 1;
   state.velocity.vx = .03;
   state.wheel_speeds.fill(.03);
-  Output command;
+  JointCommand command;
   command.action = Action::Drive;
   command.body_command.vx = -.04;
   command.wheel_speed_targets.fill(-.04);
@@ -742,7 +742,7 @@ void test_module_velocity_residuals() {
   state.stamp_s = 1;
   for (auto speeds :
        {std::array<double, 4>{.5, -.5, -.5, .5}, std::array<double, 4>{.5, -.5, .5, -.5}}) {
-    Output command;
+    JointCommand command;
     command.action = Action::Drive;
     command.wheel_speed_targets = speeds;
     command.body_command = Kinematics(c).forward(speeds, command.steering_targets);
@@ -754,7 +754,7 @@ void test_module_velocity_residuals() {
   state.wheel_speeds.fill(.2);
   state.velocity.vx = .2;
   for (double residual : {.01, .03}) {
-    Output command;
+    JointCommand command;
     command.action = Action::Drive;
     command.wheel_speed_targets = {.2 + residual, .2 - residual, .2 - residual, .2 + residual};
     command.body_command = {.2, 0, 0};
@@ -762,7 +762,7 @@ void test_module_velocity_residuals() {
           "per-module residual allowance must be explicit and bounded");
   }
   c.drive_kinematic_tolerance_mps = 0;
-  Output exact;
+  JointCommand exact;
   exact.action = Action::Drive;
   exact.wheel_speed_targets.fill(.2);
   exact.body_command = {.2, 0, 0};
@@ -776,7 +776,7 @@ void test_curved_ackermann_and_spin_drive() {
   c.samples_per_branch = 8;
   c.noise_v_mps = c.noise_w_radps = 0;
   for (auto mode : {DriveMode::DualAckermann, DriveMode::Spin}) {
-    Controller controller(c);
+    detail::Planner controller(c);
     ModeExecutor executor(c, mode);
     ControllerInput input;
     input.vehicle.actual_mode = mode;
@@ -828,7 +828,7 @@ void test_capture_alignment_commitment() {
   Config c;
   c.compute_budget_ratio = 0; // Functional regression; budgets have separate clock tests.
   for (bool corner : {false, true}) {
-    Controller controller(c);
+    detail::Planner controller(c);
     ControllerInput in;
     in.vehicle.actual_mode = DriveMode::Crab;
     in.vehicle.time_in_mode_s = 2;
@@ -850,7 +850,7 @@ void test_capture_alignment_commitment() {
               timeout.failure_reason == FailureReason::TransitionFault,
           "capture alignment must honor the same execution deadline as tracking");
   }
-  Controller controller(c);
+  detail::Planner controller(c);
   ControllerInput in;
   in.vehicle.stamp_s = 1;
   in.vehicle.time_in_mode_s = 2;
@@ -884,7 +884,7 @@ void test_stable_feedback_and_interior_speed() {
       const auto wheels = Kinematics(c).inverse(u, {});
       s.steering_angles = wheels.angles;
       ModeExecutor executor(c, mode);
-      Output hold;
+      JointCommand hold;
       hold.action = Action::Hold;
       hold.steering_targets = s.steering_angles;
       check(!executor.update(hold, s).feedback.fault,
@@ -894,7 +894,7 @@ void test_stable_feedback_and_interior_speed() {
         s.mode_confirmed = false;
       else
         s.actual_mode = mode == DriveMode::Spin ? DriveMode::Crab : DriveMode::Spin;
-      Output drive;
+      JointCommand drive;
       drive.action = Action::Drive;
       drive.requested_mode = mode;
       drive.body_command = {u.vx, u.vy, u.wz};
@@ -943,7 +943,7 @@ void test_stable_feedback_and_interior_speed() {
       intent = {c.max_crab_speed_mps, 0, 0};
     }
     s.velocity = Kinematics(c).forward(s.wheel_speeds, s.steering_angles);
-    Output drive;
+    JointCommand drive;
     drive.action = Action::Drive;
     drive.requested_mode = s.actual_mode;
     drive.steering_targets = target.angles;

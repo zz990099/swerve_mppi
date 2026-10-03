@@ -124,7 +124,7 @@ NoFeasiblePlan, ModelFailure (immediate drive prediction), and TransitionFault
 (deadline, handshake or request-ID failure). Version 0.7 adds UnsafeStoppingTrajectory
 for rejected/incomplete stopping predictions. NoFeasiblePlan can arise from an
 invalid rollout or a rejecting critic; it does not identify a particular obstacle
-or individual critic. These fields explain the action and do not replace the
+or individual critic. These fields explain the planning command and do not replace the
 executor's own latched fault/recovery contract.
 
 PlanningStats resets on every compute/optimize call:

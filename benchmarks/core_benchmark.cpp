@@ -1,4 +1,5 @@
 #include "behavior_fixture.hpp"
+#include "swerve_mppi/chassis_executor.hpp"
 #include "swerve_mppi/controller.hpp"
 #include <chrono>
 #include <cstdlib>
@@ -41,7 +42,7 @@ void run(const std::string &scenario, unsigned seed, double lookahead, double pa
   c.path_lookahead_m = lookahead;
   c.path_weight = path_weight;
   Controller controller(c);
-  ModeExecutor executor(c);
+  ChassisExecutor executor(c);
   auto input =
       scenario_input(scenario == "dense_curve" || scenario == "obstacles" ? "curve" : scenario);
   if (scenario == "dense_curve") {
@@ -85,7 +86,7 @@ void run(const std::string &scenario, unsigned seed, double lookahead, double pa
     waiting_calls += output.navigation_status == NavigationStatus::Waiting;
     max_error = std::max(max_error, output.cross_track_error_m);
     squared_error += output.cross_track_error_m * output.cross_track_error_m;
-    check(output.action != Action::SafeStop, "benchmark controller fault");
+    check(output.command.has_value(), "benchmark controller fault");
     if (output.goal_reached) {
       completion = tick;
       break;

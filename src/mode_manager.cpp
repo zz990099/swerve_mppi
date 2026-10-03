@@ -18,17 +18,18 @@ void ModeManager::begin(DriveMode target_mode, const Control &intent,
   const auto previous = std::max(last_request_id_, observed.mode_request_id);
   if (previous == std::numeric_limits<std::uint64_t>::max())
     throw std::overflow_error("mode request IDs exhausted");
-  request_ = {
-      previous + 1, target_mode,
-      DriveModel(config_).steering_for_entry(target_mode, intent, observed.steering_angles)};
+  request_ = {previous + 1,
+              target_mode,
+              DriveModel(config_).steering_for_entry(target_mode, intent, observed.steering_angles),
+              {intent.vx, intent.vy, intent.wz}};
   last_request_id_ = request_.id;
   start_s_ = observed.stamp_s;
   last_stamp_s_ = -1.0;
   phase_ = TransitionPhase::Braking;
 }
 
-Output ModeManager::update(const VehicleState &observed) {
-  Output out;
+JointCommand ModeManager::update(const VehicleState &observed) {
+  JointCommand out;
   out.phase = phase_;
   out.requested_mode = request_.mode;
   out.steering_targets = observed.steering_angles;

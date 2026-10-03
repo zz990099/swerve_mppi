@@ -1,4 +1,4 @@
-#include "swerve_mppi/controller.hpp"
+#include "planner.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -125,7 +125,7 @@ void test_mode_sampling_and_infeasibility() {
 
   auto input = make_input();
   input.obstacles.push_back({0.0, 0.0, 0.1});
-  Controller controller(config);
+  detail::Planner controller(config);
   check(controller.compute(input).action == Action::SafeStop,
         "collision at start must reject every rollout");
   controller.reset();
@@ -143,9 +143,9 @@ void test_controller_lateral_goal() {
   config.minimum_mode_dwell_s = 0.0;
   config.switch_cost = 0.05;
   config.switch_hysteresis = 0.01;
-  Controller controller(config);
+  detail::Planner controller(config);
   auto input = make_input();
-  const Output first = controller.compute(input);
+  const JointCommand first = controller.compute(input);
   check(first.action == Action::RequestMode && first.requested_mode == DriveMode::Crab,
         "lateral goal should select crab and request its confirmation");
   input.vehicle.stamp_s += config.dt_s;
@@ -160,7 +160,7 @@ void test_controller_lateral_goal() {
   check(controller.compute(input).action == Action::Hold,
         "acknowledgement must include a zero-command handover");
   input.vehicle.stamp_s += config.dt_s;
-  const Output drive = controller.compute(input);
+  const JointCommand drive = controller.compute(input);
   check(drive.action == Action::Drive && drive.body_command.vy > 0,
         "direction-aware confirmed entry should permit lateral motion directly");
 }

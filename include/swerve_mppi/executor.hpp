@@ -20,7 +20,7 @@ struct ExecutionResult {
 class ModeExecutor {
 public:
   explicit ModeExecutor(const Config &config, DriveMode initial_mode = DriveMode::DualAckermann);
-  ExecutionResult update(const Output &command, const VehicleState &measured);
+  ExecutionResult update(const JointCommand &command, const VehicleState &measured);
   // Deliberate recovery: requires independently verified stopped, confirmed state.
   // Preserves the request high-water mark to reject delayed pre-reset requests.
   void reset(const VehicleState &recovered);
@@ -29,7 +29,7 @@ private:
   Config config_;
   DriveMode actual_mode_;
   TransitionPhase phase_ = TransitionPhase::Stable;
-  std::optional<ModeRequest> request_;
+  std::optional<JointModeRequest> request_;
   std::uint64_t last_request_id_ = 0;
   double last_stamp_s_ = -1.0;
   double start_s_ = 0.0;

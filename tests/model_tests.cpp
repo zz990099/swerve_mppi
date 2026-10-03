@@ -1,5 +1,5 @@
 #include "behavior_fixture.hpp"
-#include "swerve_mppi/controller.hpp"
+#include "planner.hpp"
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -119,7 +119,7 @@ void test_reversal_time_budget() {
   in.vehicle.velocity.vx = .03;
   in.vehicle.wheel_speeds.fill(.03);
   in.reference_path = {{0, 0, 0}, {-.2, 0, 0}};
-  const auto out = Controller(c).compute(in);
+  const auto out = detail::Planner(c).compute(in);
   check(out.action == Action::Drive && out.body_command.vx >= .02 - 1e-8,
         "reverse capture must brake within the configured time budget before reversing");
 }
@@ -172,7 +172,7 @@ void test_analytic_stopping_motion() {
   RolloutEngine(c).generate_stop(in.vehicle, stop);
   check(close(stop.final_state.pose.x, .005) &&
             TrajectoryValidator(c).check(in, stop) == TrajectoryStatus::Collision &&
-            Controller(c).compute(in).action == Action::SafeStop,
+            detail::Planner(c).compute(in).action == Action::SafeStop,
         "an obstacle inside the analytic braking distance must reject the stop");
 }
 void test_curved_stop_and_reversal_enclosures() {

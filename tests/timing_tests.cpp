@@ -1,5 +1,6 @@
 #include "behavior_fixture.hpp"
-#include "swerve_mppi/controller.hpp"
+#include "joint_timing.hpp"
+#include "planner.hpp"
 #include "swerve_mppi/timing.hpp"
 #include <iostream>
 #include <limits>
@@ -7,12 +8,16 @@
 using namespace swerve_mppi;
 using namespace swerve_mppi::test;
 namespace {
-CommandEnvelope command(double now, std::uint64_t sequence = 1, std::uint64_t session = 10) {
-  Output output;
+detail::JointCommandEnvelope command(double now, std::uint64_t sequence = 1,
+                                     std::uint64_t session = 10) {
+  JointCommand output;
   output.action = Action::Hold;
   ControllerInput source;
   source.reference_path = {{0, 0, 0}};
   return {session, sequence, now, output, now, now, now + .15, CommandTask::capture(source)};
+}
+CommandEnvelope timing_command(double now, std::uint64_t sequence = 1) {
+  return detail::timing_envelope(command(now, sequence));
 }
 VehicleState measured(double stamp) {
   VehicleState state;
@@ -20,7 +25,8 @@ VehicleState measured(double stamp) {
   state.time_in_mode_s = 2;
   return state;
 }
-TimedExecutionResult execute(TimedExecutor &executor, const std::optional<CommandEnvelope> &command,
+TimedExecutionResult execute(detail::JointTimedExecutor &executor,
+                             const std::optional<detail::JointCommandEnvelope> &command,
                              const VehicleState &state, double now) {
   ControllerInput latest;
   latest.vehicle = state;
@@ -29,7 +35,7 @@ TimedExecutionResult execute(TimedExecutor &executor, const std::optional<Comman
 }
 void test_regular_and_jittered_ticks() {
   Config c;
-  TimedExecutor executor(c, 10);
+  detail::JointTimedExecutor executor(c, 10);
   for (int tick = 0; tick < 20; ++tick) {
     const double now = 1 + tick * c.dt_s + (tick % 2 == 0 ? 0 : .01);
     const auto result = execute(executor, command(now, tick + 1), measured(now), now);
@@ -42,7 +48,7 @@ void test_feedback_and_clock_failures() {
   for (auto expected :
        {TimingError::ClockDiscontinuity, TimingError::OffPeriod, TimingError::FeedbackTimeout,
         TimingError::NonmonotonicFeedback, TimingError::InvalidTime}) {
-    TimedExecutor executor(c, 10);
+    detail::JointTimedExecutor executor(c, 10);
     execute(executor, command(1), measured(1), 1);
     double now = 1.1, stamp = 1.1;
     if (expected == TimingError::ClockDiscontinuity)
@@ -78,12 +84,12 @@ void test_command_expiry_replay_and_loss() {
     drive.command.action = Action::Drive;
     drive.command.body_command.vx = .09;
     drive.command.wheel_speed_targets.fill(.09);
-    TimedExecutor driving(c, 10);
+    detail::JointTimedExecutor driving(c, 10);
     check(execute(driving, drive, measured(1), 1).execution.action == Action::Drive,
           "watchdog test must begin with an accepted positive drive");
     drive.sequence = 2;
     drive.issued_at_s = 1.1;
-    std::optional<CommandEnvelope> next = drive;
+    std::optional<detail::JointCommandEnvelope> next = drive;
     if (expected == TimingError::CommandTimeout)
       next->issued_at_s = .9;
     if (expected == TimingError::CommandReplay)
@@ -103,14 +109,14 @@ void test_command_expiry_replay_and_loss() {
   }
   TimingGuard guard(c, 10);
   guard.check_feedback(1, 1);
-  guard.check_command(command(1), 1);
+  guard.check_command(timing_command(1), 1);
   guard.check_feedback(1.1, 1.1);
-  check(guard.check_command(command(.99, 2), 1.1) == TimingError::CommandReplay,
+  check(guard.check_command(timing_command(.99, 2), 1.1) == TimingError::CommandReplay,
         "a newer sequence cannot authorize an older issued timestamp");
 }
 void test_clock_reset_requires_new_session_and_verified_stop() {
   Config c;
-  TimedExecutor executor(c, 10);
+  detail::JointTimedExecutor executor(c, 10);
   execute(executor, command(1), measured(1), 1);
   execute(executor, command(.1, 2), measured(.1), .1);
   auto recovered = measured(.1);
@@ -142,11 +148,11 @@ void test_clock_reset_requires_new_session_and_verified_stop() {
 }
 void test_mode_ids_survive_timing_recovery() {
   Config c;
-  TimedExecutor executor(c, 10);
+  detail::JointTimedExecutor executor(c, 10);
   auto envelope = command(1);
   envelope.command.action = Action::RequestMode;
   envelope.command.requested_mode = DriveMode::Crab;
-  envelope.command.mode_request = ModeRequest{
+  envelope.command.mode_request = JointModeRequest{
       7, DriveMode::Crab, DriveModel(c).steering_for_entry(DriveMode::Crab, {0, .2, 0}, {})};
   check(!execute(executor, envelope, measured(1), 1).execution.feedback.fault,
         "valid mode request must begin under the timing guard");
@@ -176,23 +182,23 @@ void test_timing_limits_and_boundaries() {
   }
   TimingGuard guard(c, 10);
   check(guard.check_feedback(.85, 1) == TimingError::None &&
-            guard.check_command(command(.85), 1) == TimingError::None,
+            guard.check_command(timing_command(.85), 1) == TimingError::None,
         "feedback/command age exactly at the configured bound must be accepted");
   guard.check_feedback(.95, 1.1);
-  check(guard.check_command(command(.95, 2), 1.1) == TimingError::None,
+  check(guard.check_command(timing_command(.95, 2), 1.1) == TimingError::None,
         "fixed-age delayed feedback must remain valid at regular periods");
-  check(guard.check_command(command(1, 3), 1.1) == TimingError::CommandReplay,
+  check(guard.check_command(timing_command(1, 3), 1.1) == TimingError::CommandReplay,
         "two commands cannot be accepted for the same model tick");
 }
 void test_guarded_closed_loop_and_idempotent_requests() {
   Config c;
   c.samples_per_branch = 8;
-  Controller controller(c);
-  TimedExecutor executor(c, 10);
+  detail::Planner controller(c);
+  detail::JointTimedExecutor executor(c, 10);
   ControllerInput in;
   in.vehicle = measured(1);
   in.reference_path = {{0, 0, 0}, {0, .15, 0}};
-  std::optional<ModeRequest> request;
+  std::optional<JointModeRequest> request;
   bool complete = false;
   for (int tick = 0; tick < 100; ++tick) {
     const auto output = controller.compute(in);
@@ -203,9 +209,14 @@ void test_guarded_closed_loop_and_idempotent_requests() {
                 request->steering_targets == output.mode_request->steering_targets,
             "mode retries retain payload while transport sequence advances");
     }
-    CommandEnvelope envelope{10, static_cast<std::uint64_t>(tick + 1), in.vehicle.stamp_s, output,
-                             in.vehicle.stamp_s, in.vehicle.stamp_s, in.vehicle.stamp_s + .025,
-                             CommandTask::capture(in)};
+    detail::JointCommandEnvelope envelope{10,
+                                          static_cast<std::uint64_t>(tick + 1),
+                                          in.vehicle.stamp_s,
+                                          output,
+                                          in.vehicle.stamp_s,
+                                          in.vehicle.stamp_s,
+                                          in.vehicle.stamp_s + .025,
+                                          CommandTask::capture(in)};
     const auto result = executor.update(envelope, in, in.vehicle.stamp_s);
     check(result.timing_error == TimingError::None &&
               result.safety_error == ExecutionSafetyError::None && result.actuation &&
@@ -222,7 +233,7 @@ void test_guarded_closed_loop_and_idempotent_requests() {
 
 void test_fresh_unconfirmed_feedback() {
   Config c;
-  TimedExecutor executor(c, 10);
+  detail::JointTimedExecutor executor(c, 10);
   execute(executor, command(1), measured(1), 1);
   auto state = measured(1.1);
   state.mode_confirmed = false;

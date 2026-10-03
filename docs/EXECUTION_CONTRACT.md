@@ -1,20 +1,23 @@
-# Standalone execution protocol (0.16)
+# Standalone execution protocol (0.18)
 
 This contract is independent of ROS, Nav2 and Gazebo. TimedExecutor is the guarded
 integration entry point; execute only its returned ActuationPlan, sampled at the
 actuator rate. ModeExecutor is a low-level protocol supervisor used by that entry
-point and by core tests. Its endpoint arrays alone are not a complete checked
+point and by core tests. ChassisExecutor is the synchronous body-command reference
+entry point; it omits the timed/context trajectory guards. Its endpoint arrays alone are not a complete checked
 actuator reference. Neither class simulates actuators or certifies physical tracking.
 
 ## Request and feedback
 
 | Field | Meaning |
 | --- | --- |
-| Output::action | Drive, Brake, RequestMode, Hold or SafeStop. |
-| Output::mode_request | Present only for RequestMode; complete immutable request. |
+| Output::command | Optional ChassisCommand; absent means cancellation/fault and independent stop. |
+| ChassisCommand::target_velocity | Nominal body-frame vx/vy (m/s), wz (rad/s); valid zero is ordinary braking/holding. |
+| ChassisCommand::mode | Explicit selected mode; ordinary velocity requires the measured actual mode. |
+| ChassisCommand::mode_request | Optional complete immutable request; target_velocity must be exactly zero. |
 | ModeRequest::id | Nonzero, monotonically increasing per serialized executor session. |
 | ModeRequest::mode | Explicit desired mode; never inferred from zero/nonzero twist. |
-| ModeRequest::steering_targets | Frozen FL/FR/RL/RR mechanical angles derived from entry intent. |
+| ModeRequest::entry_velocity | Frozen body intent defining entry geometry; never authorizes drive. |
 | ModeFeedback::actual_mode | Last successfully completed mode, retained throughout a switch. |
 | ModeFeedback::request_id | Executor's active/last accepted ID; completion also requires confirmed. |
 | ModeFeedback::confirmed | Stable mode, with transition stop/alignment checks completed. |
@@ -28,6 +31,11 @@ above both its own high-water mark and VehicleState::mode_request_id. Both
 manager and executor retain high-water marks across reset. A restarted process
 must establish a fresh, drained transport session and obtain executor feedback
 before enabling control; this is not a cross-process UUID protocol.
+
+See [CHASSIS_COMMAND.md](CHASSIS_COMMAND.md) for command construction and migration.
+TimedExecutor compiles a target with the shared DriveModel at the execution snapshot,
+then validates that actual compiled interval and its complete stop. It does not
+interpret the planner target as endpoint FK or allow a Twist-only mode switch.
 
 ## Cycle
 
@@ -167,9 +175,13 @@ alignment minimum, while retaining the original overall deadline. The reported
 mode changes only at confirmation. Controller/ModeManager then verifies mode,
 ID, stopped measurements and steering, and emits one stopped handover cycle.
 
-## Actions, timing and cancellation
+## Internal actions, timing and cancellation
 
-| Action | Stable execution | During a committed transition |
+The following actions describe JointCommand/ExecutionResult in the lower execution
+layer. Controller output has no action; the compiler derives these states from
+target velocity, the explicit request, measured feedback and command presence.
+
+| Internal action | Stable execution | During a committed transition |
 | --- | --- | --- |
 | Drive | Require fresh confirmed measured feedback matching the executor actual mode, finite twist/wheel targets, bounded moving-steering steps and consistency of the complete joint target step within mode limits. | Mask drive and continue the committed stop/alignment. |
 | Brake | Zero drive targets, retain measured steering. | Continue the committed transition. |
@@ -188,8 +200,8 @@ not require a measured slipping wheel pair to become an ideal kinematic pair.
 The allowance bounds target interpolation error; it is not a tire-slip model or
 proof that the chassis will follow those targets.
 
-SafeStop is the explicit cancellation operation. An empty or invalid path also
-causes Controller to emit SafeStop. Hold or a different DriveMode request cannot
+An absent Output::command is the public cancellation/fault signal and compiles
+to internal SafeStop. An empty or invalid path also withholds command authorization. Hold or a different DriveMode request cannot
 cancel a committed transition or recover a fault.
 Malformed measurements, nonincreasing timestamps and execution faults also latch
 SafeStop. Executor fault outputs retain the last valid measured steering and
@@ -224,10 +236,10 @@ fault is cleared merely because a late acknowledgement or target angle appears.
 NoFeasiblePlan is not itself an execution fault. Controller checks a complete
 zero-control stopping trace through its hard TrajectoryValidator, including the
 current footprint and every swept segment. If valid and stopped at its end, it
-emits Brake/Hold with Waiting/Blocked, retains measured steering and permits fresh
+emits a valid zero body target with Waiting/Blocked, retains measured steering and permits fresh
 replanning. Warm start and local alignment are cleared. If stopping is rejected
-or cannot finish within stopping_horizon_steps, UnsafeStoppingTrajectory emits SafeStop.
-Invalid inputs, model failures and handshake failures also remain SafeStop.
+or cannot finish within stopping_horizon_steps, UnsafeStoppingTrajectory withholds authorization.
+Invalid inputs, model failures and handshake failures also withhold authorization.
 These predictive checks do not establish braking safety for uncalibrated actuators
 or tire slip.
 
@@ -383,11 +395,13 @@ mode transitions retain their original protocol identity/deadline; task mismatch
 not introduce a cancellation operation. TimingGuard alone remains a transport guard
 and cannot check task identity without current ControllerInput.
 
-For a matching task, TimedExecutor previews ModeExecutor and builds an
-ActuationPlan for its actual result. RolloutEngine::generate_execution validates the
+For a matching task, TimedExecutor compiles target_velocity with DriveModel at
+the latest measured state, then previews ModeExecutor and builds an ActuationPlan
+for its actual result. Frozen mode-entry joints are cached only on admission. RolloutEngine::generate_execution validates the
 exact wheel/steering interval followed by a complete stop, using the latest context
-and the same stopping_horizon_steps budget. It does not treat body_command as a new
-ideal control and rerun DriveModel, which could change the checked joint targets.
+and the same stopping_horizon_steps budget. After compilation it does not reinterpret
+the joint-level body_command FK as a new ideal control; validation uses the exact
+compiled joint targets. The public target_velocity is the original nominal intent.
 A valid preview commits once. A rejected well-formed interval/continuation tries a
 separate checked stopping preview. Success returns CommandRejected, the rejected
 TrajectoryStatus and a healthy actuator profile; a later safe command may recover

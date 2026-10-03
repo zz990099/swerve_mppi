@@ -82,11 +82,12 @@ struct Control {
   double wz = 0.0;
 };
 
-struct ModeRequest {
+struct JointModeRequest {
   std::uint64_t id = 0;
   DriveMode mode = DriveMode::DualAckermann;
   // Frozen mechanical positions, including the intended Crab entry direction.
   std::array<double, 4> steering_targets{};
+  Twist2d entry_velocity; // Frozen body intent used by the chassis interface.
 };
 
 struct ModeFeedback {
@@ -120,16 +121,8 @@ struct PlanningStats {
   bool budget_exhausted = false;
 };
 
-struct Output {
-  Action action = Action::SafeStop;
-  DriveMode requested_mode = DriveMode::DualAckermann;
+struct PlanningDiagnostics {
   TransitionPhase phase = TransitionPhase::Stable;
-  // Drive: endpoint forward kinematics; joints interpolate over the full tick.
-  Twist2d body_command;
-  std::array<double, 4> steering_targets{};
-  std::array<double, 4> wheel_speed_targets{};
-  // Present on RequestMode only; retries preserve every field.
-  std::optional<ModeRequest> mode_request;
   double selected_cost = 0.0;
   double keep_cost = 0.0;
   std::size_t feasible_rollouts = 0;
@@ -147,6 +140,36 @@ struct Output {
   double cross_track_error_m = 0.0;
   double goal_distance_m = 0.0;
   double goal_yaw_error_rad = 0.0;
+};
+
+// Joint-level execution/model representation. Controller never returns this type.
+struct JointCommand : PlanningDiagnostics {
+  Action action = Action::SafeStop;
+  DriveMode requested_mode = DriveMode::DualAckermann;
+  // Drive: endpoint forward kinematics; joints interpolate over the full tick.
+  Twist2d body_command;
+  Twist2d velocity_intent; // Nominal target, not the FK endpoint after rate limiting.
+  std::array<double, 4> steering_targets{};
+  std::array<double, 4> wheel_speed_targets{};
+  // Present on RequestMode only; retries preserve every field.
+  std::optional<JointModeRequest> mode_request;
+};
+
+// Body-frame entry intent specifies alignment geometry; it never authorizes Drive.
+struct ModeRequest {
+  std::uint64_t id = 0;
+  DriveMode mode = DriveMode::DualAckermann;
+  Twist2d entry_velocity;
+};
+struct ChassisCommand {
+  DriveMode mode = DriveMode::DualAckermann;
+  Twist2d target_velocity; // Body-frame target: m/s, m/s, rad/s.
+  std::optional<ModeRequest> mode_request;
+};
+struct Output : PlanningDiagnostics {
+  // A valid zero target requests a nominal stop and retains the mode. Absence
+  // means no authorized command: the consumer must stop/latch, never reuse Drive.
+  std::optional<ChassisCommand> command;
 };
 
 } // namespace swerve_mppi

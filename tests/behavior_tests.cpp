@@ -1,4 +1,5 @@
 #include "profile_fixture.hpp"
+#include "swerve_mppi/chassis_executor.hpp"
 #include "swerve_mppi/controller.hpp"
 #include "swerve_mppi/feedback_adapter.hpp"
 #include "swerve_mppi/timing.hpp"
@@ -16,7 +17,7 @@ void run(const std::string &scenario, unsigned seed, bool timed, bool profile) {
   c.compute_budget_ratio = 0; // Behavior assertions are independent of host speed.
   c.random_seed = seed;
   Controller controller(c);
-  ModeExecutor executor(c);
+  ChassisExecutor executor(c);
   TimedExecutor timed_executor(c, 1);
   ProfileRunner runner(c);
   FeedbackAdapter feedback(c);
@@ -36,10 +37,9 @@ void run(const std::string &scenario, unsigned seed, bool timed, bool profile) {
     auto previous_mode = input.vehicle.actual_mode;
     const auto command = controller.compute(input);
     if (tick == 0 && short_path)
-      check(command.action == Action::Drive && command.body_command.vx > 0 &&
-                std::abs(command.body_command.vy) < 1e-9,
+      check(command.command && command.command->target_velocity.vx > 0 &&
+                std::abs(command.command->target_velocity.vy) < 1e-9,
             "short paths must first drive toward the uncaptured forward corner");
-    hold += command.action == Action::Hold;
     max_tracking_error = std::max(max_tracking_error, command.cross_track_error_m);
     if (command.goal_reached && completed_tick < 0) {
       if (short_path)
@@ -52,12 +52,14 @@ void run(const std::string &scenario, unsigned seed, bool timed, bool profile) {
             "completion must satisfy both pose tolerances");
     }
     if (completed_tick >= 0) {
-      check(command.goal_reached && command.action == Action::Hold,
+      check(command.goal_reached && command.command && command.command->target_velocity.vx == 0 &&
+                command.command->target_velocity.vy == 0 &&
+                command.command->target_velocity.wz == 0,
             "completed task must remain stopped without stochastic resampling");
       if (tick - completed_tick >= 10)
         break;
     }
-    check(command.action != Action::SafeStop, "controller unexpectedly stopped");
+    check(command.command.has_value(), "controller unexpectedly stopped");
     ExecutionResult result;
     if (timed || profile) {
       const double now = input.vehicle.stamp_s;
@@ -76,15 +78,14 @@ void run(const std::string &scenario, unsigned seed, bool timed, bool profile) {
     if (result.feedback.fault) {
       std::cerr << "fault scenario=" << scenario << " seed=" << seed << " tick=" << tick
                 << " mode=" << static_cast<int>(input.vehicle.actual_mode)
-                << " action=" << static_cast<int>(command.action)
-                << " body=" << command.body_command.vx << "," << command.body_command.vy << ","
-                << command.body_command.wz << '\n';
+                << " action=" << static_cast<int>(result.action) << '\n';
       for (std::size_t i = 0; i < 4; ++i)
-        std::cerr << input.vehicle.steering_angles[i] << "->" << command.steering_targets[i]
-                  << " speed=" << command.wheel_speed_targets[i] << '\n';
+        std::cerr << input.vehicle.steering_angles[i] << "->" << result.steering_targets[i]
+                  << " speed=" << result.wheel_speed_targets[i] << '\n';
     }
     check(!result.feedback.fault, "execution fault in default noisy closed loop");
-    if (command.action == Action::Drive)
+    hold += result.action == Action::Hold;
+    if (result.action == Action::Drive)
       check(input.vehicle.mode_confirmed, "drive preceded actual mode confirmation");
     const auto from = input.vehicle.pose;
     if (profile)

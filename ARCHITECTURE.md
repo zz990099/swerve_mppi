@@ -8,14 +8,15 @@ Nav2 controller plugin belong in separate adapter packages.
 
 | Component | Responsibility |
 | --- | --- |
-| Controller | Validate input, coordinate path/goal state, continue committed transitions and emit one action. |
+| Controller | Validate input, coordinate path/goal state, continue committed transitions and emit a body-velocity command or withhold authorization. |
 | PathManager | Monotonic arc progress, bounded matching, local reference, effective target and terminal eligibility. |
 | GoalManager | Pose acquisition, measured-stop settling, completion latch and progress diagnostics. |
 | ModeScheduler | Enumerate keep/single-switch branches; enforce dwell and switch hysteresis before selection. |
 | ModeManager | Commit a frozen entry request; gate handover on its matching ID and measured state. |
+| ChassisExecutor | Compile body velocity and immutable mode-entry intent with DriveModel; synchronous reference supervision without transport/obstacle guards. |
 | ModeExecutor | Persist actual mode; supervise braking/alignment, acknowledge requests and latch execution faults. |
 | TimingGuard | Check clock/cadence, observation and command age, source/scheduled execution metadata and ordered envelopes. |
-| TimedExecutor | Transactionally preview execution, validate its exact joint interval/full stop against current context, commit or use checked braking; latch timing/protocol/unsafe-stop faults. |
+| TimedExecutor | Compile the body command at current measured state, transactionally preview execution, validate its exact joint interval/full stop against current context, commit or use checked braking; latch timing/protocol/unsafe-stop faults. |
 | ActuationModel / ActuationPlan | Build a checked actuator reference and expose affine Drive or proportional braking followed by stationary alignment samples. |
 | ProfileRunner | Serial high-rate sampling, joint-unit conversion and latched application/wall-clock expiry; leaves mode protocol to TimedExecutor. |
 | FeedbackCheck / PlanningBudget | Admit mutually consistent body/joint observations and share one cooperative steady-clock budget across all branches. |
@@ -27,6 +28,14 @@ Nav2 controller plugin belong in separate adapter packages.
 | TransitionModel | Predict braking, mode-entry steering and confirmation delay. |
 | CriticManager | Combine path distance/heading, circle-obstacle, goal, effort, smoothness and switch objectives. |
 | TrajectoryValidator | Enforce finite trajectories, swept circular collision checks and injected hard constraints across motion policies. |
+
+Controller hides its joint prediction in a private implementation; its public
+Output contains optional ChassisCommand and PlanningDiagnostics only. A valid zero
+velocity is a normal stop; absence cancels and latches execution. Explicit mode
+requests freeze a body entry intent, not wheel angles. Execution compiles the
+intent with the same model and retains the resulting joint geometry for retries.
+Action and JointCommand are lower-layer representations, never planner output.
+See docs/CHASSIS_COMMAND.md for migration and ownership.
 
 All configuration-bearing components store values instead of references into
 other objects. Models and stateful controllers can therefore be constructed from
@@ -232,15 +241,16 @@ direction; Ackermann can enter its planned curvature. Zero intent uses the
 canonical mode geometry. Predicted transitions exceeding the execution deadline
 are infeasible, even when they fit inside the planning horizon.
 
-ModeExecutor is an optional standalone reference supervisor, not a dynamics
-model. It consumes Output and measured VehicleState, returns joint targets and
+ChassisExecutor is the synchronous body-command reference entry point. It compiles
+Output with DriveModel at measured VehicleState, then uses the low-level ModeExecutor
+to supervise the resulting JointCommand. The latter returns joint targets and
 ModeFeedback, and never substitutes predicted state for actual confirmation.
 It blocks drive during transitions, retains steering while braking, persists
 mode on zero drive, rejects changed/replayed requests and latches SafeStop.
 The actuator layer owns rate limiting, encoder sampling and command watchdogs.
 See docs/EXECUTION_CONTRACT.md for the API and reset protocol.
 
-Every Drive policy uses Controller::apply_control's first-Drive plus complete-stop
+Every Drive policy uses the private planner's apply_control first-Drive plus complete-stop
 gate before output and warm-start acceptance. RolloutEngine::generate_continuation
 retains committed entry/alignment intent until that first Drive, then brakes fully
 to zero. If the preferred continuation is rejected, up to
@@ -280,8 +290,8 @@ RequestMode to an ordinary zero Twist or report confirmation from elapsed time a
 TimingGuard and TimedExecutor provide reusable checks for cadence, feedback ages,
 command expiry/replay and session renewal without transport/ROS dependencies.
 They cannot detect process silence without calls; actuators need an independent
-watchdog. Direct ModeExecutor is the synchronous reference entry point, without
-command envelopes. See docs/EXECUTION_CONTRACT.md for the guarded API.
+watchdog. Direct ChassisExecutor is the synchronous body-command reference entry point,
+without command envelopes or independent trajectory admission. See docs/EXECUTION_CONTRACT.md for the guarded API.
 
 The next adapter should own message/TF conversion, feedback timestamps, simulation time,
 task IDs, transport for the mode command/feedback protocol and deliberate recovery.

@@ -29,7 +29,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.17 CONFIG REQUIRED)
+find_package(swerve_mppi 0.18 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -56,31 +56,26 @@ period ratios are not supported yet.
 - time_in_mode_s is the age of the actual confirmed mode, not the requested
   mode. mode_confirmed and mode_request_id must come from the execution layer.
   Startup uses request ID zero; subsequent IDs increase within an execution session.
-- RequestMode carries Output::mode_request with a nonzero ID, explicit target
-  mode and frozen steering targets. Retries preserve the complete payload. The
-  executor brakes, aligns and echoes the ID before confirming. A zero velocity
-  message cannot encode this action.
-- Brake requests controlled stopping while retaining steering.
-  Hold completes proportional braking with measured steering, then aligns using
-  only the remaining stopped time in that tick.
-  SafeStop disables drive; its numeric targets must not be interpreted as a
-  mode change or a recovery request.
-- SafeStop cancels execution and latches a fault in ModeExecutor. After deliberate
-  recovery, reset the executor with independently verified stopped state and reset
-  the controller. Request ID high-water marks survive reset.
-- NoFeasiblePlan returns Brake/Hold only after a complete stopping trajectory
-  passes the shared hard validator. It reports Waiting/Blocked and retries on fresh
-  input. UnsafeStoppingTrajectory, invalid input and execution faults still use
-  latched SafeStop.
-- Every Drive passes a shared first-command plus complete-stop check before
-  publication or warm-start acceptance. `stopping_horizon_steps` (default 200)
-  bounds this safety work independently of the MPPI horizon. Budget exhaustion
-  rejects Drive; an unsafe or incomplete current stop produces SafeStop.
-- Zero intent emits Brake/Hold with zero wheel targets and measured steering,
-  including measured wheel pairs outside the Drive residual allowance.
-- Every healthy Brake, Hold and pending RequestMode also passes the stopping
-  validator against fresh constraints. Normal terminal braking keeps its navigation
-  status; rejection reports UnsafeStoppingTrajectory and cancels the request.
+- `Output::command` is an optional `ChassisCommand`: explicit mode, body-frame
+  `target_velocity` (`vx`, `vy`, `wz`) and optional `mode_request`. The planning
+  output has no action or joint targets. See [docs/CHASSIS_COMMAND.md](docs/CHASSIS_COMMAND.md).
+- A valid zero target requests normal braking/holding and retains the actual mode.
+  An absent command cancels execution and latches a fault; never reuse old velocity.
+  Independently stop/verify the plant before resetting execution and Controller.
+- A mode request carries a nonzero ID, target mode and frozen body `entry_velocity`.
+  Its target_velocity is exactly zero. Entry intent specifies alignment geometry,
+  never permission to drive. Retries preserve the entire request; execution confirms
+  the matching ID/mode using stopped body/joints and measured steering.
+- Target velocity is the nominal intent, rather than FK of rate-limited joint
+  endpoints. The execution layer compiles it at the current snapshot with the same
+  DriveModel used in prediction. Large steering changes still require stop/alignment.
+- NoFeasiblePlan returns a valid zero command only after a complete stopping
+  trajectory passes the shared hard validator, with Waiting/Blocked diagnostics.
+  UnsafeStoppingTrajectory, invalid input and execution faults withhold authorization.
+- Every driving intent passes a first-command plus complete-stop check before
+  publication or warm-start acceptance. `stopping_horizon_steps` bounds this work
+  independently of the MPPI horizon. Normal stops and pending requests also pass
+  fresh stopping/steering checks. Joint feedback remains required input.
 - Use TimedExecutor for queued commands. Pass the current ControllerInput, not just
   VehicleState. It rechecks the exact joint interval and full stopping continuation
   against current obstacles and injected hard constraints before committing execution.
@@ -113,6 +108,14 @@ See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for commands and measurement limi
 The optional allocation regression runs in CI; wall-clock timing is not a CI gate.
 
 ## Current status
+
+Version 0.18 replaces the public joint/action output with optional chassis velocity
+and explicit mode requests. Controller hides its prediction implementation;
+ChassisExecutor provides a synchronous body-command reference supervisor and
+TimedExecutor compiles body targets before guarded execution. Rebuild consumers
+and migrate field access using [docs/CHASSIS_COMMAND.md](docs/CHASSIS_COMMAND.md).
+All behavior, profile, benchmark and installed-consumer paths use the new interface.
+The following release notes describe older interfaces where indicated.
 
 Version 0.17.1 adds exact integer-nanosecond snapshot admission for ROS ingress
 and permits only floating conversion roundoff in the portable seconds API.
@@ -262,7 +265,7 @@ stop/align policy. This parameter represents an actuator capability assumption
 and must be calibrated before hardware deployment. Mechanical hard stops always
 use direct joint distances; equivalent wheel directions never bypass them.
 
-**0.4 execution migration:** a Drive's `body_command` is the forward kinematics
+**Historical 0.4 execution migration (joint layer):** a Drive's `body_command` is the forward kinematics
 of its **wheel-speed targets and steering targets**, not the old measured angles.
 Drive steering targets are the bounded next joint step, not an unrestricted final
 angle. Update custom execution supervisors accordingly; do not reconstruct wheel

@@ -1,4 +1,5 @@
 #include "behavior_fixture.hpp"
+#include "joint_timing.hpp"
 #include "swerve_mppi/actuation.hpp"
 #include "swerve_mppi/timing.hpp"
 #include <iostream>
@@ -7,9 +8,7 @@
 using namespace swerve_mppi;
 using namespace swerve_mppi::test;
 namespace {
-bool close(double a, double b, double tolerance = 1e-9) {
-  return std::abs(a - b) <= tolerance;
-}
+bool close(double a, double b, double tolerance = 1e-9) { return std::abs(a - b) <= tolerance; }
 ControllerInput input(double stamp = 1) {
   ControllerInput in;
   in.vehicle.stamp_s = stamp;
@@ -17,10 +16,10 @@ ControllerInput input(double stamp = 1) {
   in.reference_path = {{0, 0, 0}, {5, 0, 0}};
   return in;
 }
-Output drive(const VehicleState &state, const Config &c, const Control &intent) {
+JointCommand drive(const VehicleState &state, const Config &c, const Control &intent) {
   const auto step = DriveModel(c).step(state, intent, c.dt_s);
   check(step.valid && !step.aligning, "test Drive must have a feasible joint interval");
-  Output out;
+  JointCommand out;
   out.action = Action::Drive;
   out.requested_mode = state.actual_mode;
   out.body_command = step.state.velocity;
@@ -28,10 +27,16 @@ Output drive(const VehicleState &state, const Config &c, const Control &intent) 
   out.wheel_speed_targets = step.wheel_speed_targets;
   return out;
 }
-CommandEnvelope envelope(const ControllerInput &origin, const Output &out, double source,
-                         double issued, double application,
-                         std::uint64_t sequence = 1) {
-  return {10, sequence, issued, out, source, application, application + .025,
+detail::JointCommandEnvelope envelope(const ControllerInput &origin, const JointCommand &out,
+                                      double source, double issued, double application,
+                                      std::uint64_t sequence = 1) {
+  return {10,
+          sequence,
+          issued,
+          out,
+          source,
+          application,
+          application + .025,
           CommandTask::capture(origin)};
 }
 // Independent encoder field, not Kinematics::forward or DriveModel integration.
@@ -56,14 +61,16 @@ void test_drive_profile_and_independent_motion() {
   for (auto mode : {DriveMode::DualAckermann, DriveMode::Crab, DriveMode::Spin}) {
     auto in = input();
     in.vehicle.actual_mode = mode;
-    const Control before = mode == DriveMode::Spin ? Control{0, 0, .2}
-                           : mode == DriveMode::Crab ? Control{.2, .1, 0} : Control{.4, 0, .2};
+    const Control before = mode == DriveMode::Spin   ? Control{0, 0, .2}
+                           : mode == DriveMode::Crab ? Control{.2, .1, 0}
+                                                     : Control{.4, 0, .2};
     const auto joints = Kinematics(c).inverse(before, {});
     in.vehicle.steering_angles = joints.angles;
     in.vehicle.wheel_speeds = joints.speeds;
     in.vehicle.velocity = {before.vx, before.vy, before.wz};
-    const Control intent = mode == DriveMode::Spin ? Control{0, 0, .3}
-                           : mode == DriveMode::Crab ? Control{.3, .14, 0} : Control{.45, 0, .3};
+    const Control intent = mode == DriveMode::Spin   ? Control{0, 0, .3}
+                           : mode == DriveMode::Crab ? Control{.3, .14, 0}
+                                                     : Control{.45, 0, .3};
     const auto command = drive(in.vehicle, c, intent);
     ModeExecutor executor(c, mode);
     const auto execution = executor.update(command, in.vehicle);
@@ -73,10 +80,12 @@ void test_drive_profile_and_independent_motion() {
       const auto targets = plan->sample(fraction * c.dt_s);
       check(targets.has_value(), "in-interval Drive samples must exist");
       for (std::size_t i = 0; i < 4; ++i) {
-        check(close(targets->wheel_speeds[i], joints.speeds[i] + fraction *
-                        (execution.wheel_speed_targets[i] - joints.speeds[i])) &&
-                  close(targets->steering_angles[i], joints.angles[i] + fraction *
-                        (execution.steering_targets[i] - joints.angles[i])),
+        check(close(targets->wheel_speeds[i],
+                    joints.speeds[i] +
+                        fraction * (execution.wheel_speed_targets[i] - joints.speeds[i])) &&
+                  close(targets->steering_angles[i],
+                        joints.angles[i] +
+                            fraction * (execution.steering_targets[i] - joints.angles[i])),
               "Drive must reach each target by affine full-tick interpolation");
       }
     }
@@ -94,19 +103,21 @@ void test_drive_profile_and_independent_motion() {
       const auto &to = plan->endpoint().state.pose;
       const double dx = to.x - from.x, dy = to.y - from.y;
       const double length2 = dx * dx + dy * dy;
-      const double fraction = length2 > 0 ? std::clamp(
-          ((oracle.x - from.x) * dx + (oracle.y - from.y) * dy) / length2, 0.0, 1.0) : 0;
-      check(std::hypot(oracle.x - from.x - fraction * dx,
-                       oracle.y - from.y - fraction * dy) <= plan->endpoint().sweep_margin_m + 1e-8,
+      const double fraction =
+          length2 > 0 ? std::clamp(((oracle.x - from.x) * dx + (oracle.y - from.y) * dy) / length2,
+                                   0.0, 1.0)
+                      : 0;
+      check(std::hypot(oracle.x - from.x - fraction * dx, oracle.y - from.y - fraction * dy) <=
+                plan->endpoint().sweep_margin_m + 1e-8,
             "independent intermediate motion must stay inside the certified swept enclosure");
       check(std::hypot(velocity.vx, velocity.vy) <=
-                std::max(c.max_vx_mps, c.max_crab_speed_mps) + 1e-9 &&
+                    std::max(c.max_vx_mps, c.max_crab_speed_mps) + 1e-9 &&
                 std::abs(velocity.wz) <= std::max(c.max_yaw_rate_radps, c.max_spin_radps) + 1e-9,
             "sampled physical encoder field must stay inside speed caps");
     }
     const auto &end = plan->endpoint();
     check(std::hypot(end.state.pose.x - oracle.x, end.state.pose.y - oracle.y) <=
-              end.integration_error_m + 1e-8 &&
+                  end.integration_error_m + 1e-8 &&
               std::abs(angle_distance(end.state.pose.yaw, oracle.yaw)) < 1e-8,
           "checked interval must enclose the independently integrated sample stream");
     check(!plan->sample(-.001) && !plan->sample(c.dt_s + .001) &&
@@ -127,7 +138,7 @@ void test_proportional_brake_and_phased_alignment() {
   in.vehicle.wheel_speeds = {.3, .1, -.2, .4};
   in.vehicle.steering_angles = {.2, -.2, .3, -.3};
   in.vehicle.velocity = encoder({in.vehicle.steering_angles, in.vehicle.wheel_speeds}, c);
-  Output brake;
+  JointCommand brake;
   brake.action = Action::Brake;
   ModeExecutor executor(c);
   const auto plan = model.plan(in.vehicle, executor.update(brake, in.vehicle));
@@ -145,7 +156,7 @@ void test_proportional_brake_and_phased_alignment() {
   in = input();
   in.vehicle.wheel_speeds.fill(.004);
   in.vehicle.velocity.vx = .004;
-  Output hold;
+  JointCommand hold;
   hold.action = Action::Hold;
   hold.steering_targets.fill(.4);
   ModeExecutor holder(c);
@@ -190,12 +201,13 @@ void test_planning_stop_preserves_feedback_and_full_braking() {
       check(plan.has_value(), "unconfirmed feedback must permit nominal non-driving checks");
       Trajectory trace;
       rollout.generate_execution(*plan, trace);
-      const double expected_angle = action != Action::Brake && speed <= c.stopped_wheel_speed_mps
-          ? std::min(.4, c.max_steer_rate_radps * (c.dt_s - speed / c.max_linear_decel_mps2))
-          : 0;
+      const double expected_angle =
+          action != Action::Brake && speed <= c.stopped_wheel_speed_mps
+              ? std::min(.4, c.max_steer_rate_radps * (c.dt_s - speed / c.max_linear_decel_mps2))
+              : 0;
       const auto end = plan->sample(c.dt_s);
-      check(trace.valid && close(trace.final_state.pose.x, speed * speed /
-                                  (2 * c.max_linear_decel_mps2)) &&
+      check(trace.valid &&
+                close(trace.final_state.pose.x, speed * speed / (2 * c.max_linear_decel_mps2)) &&
                 trace.final_state.wheel_speeds == std::array<double, 4>{} &&
                 close(end->steering_angles[0], expected_angle) &&
                 close(trace.final_state.steering_angles[0], expected_angle) &&
@@ -227,7 +239,7 @@ void test_delayed_drive_revalidated_at_latest_pose() {
   old.vehicle.wheel_speeds.fill(.8);
   old.obstacles = {{1.01, 0, .05}};
   const auto command = drive(old.vehicle, c, {.8, 0, 0});
-  TimedExecutor executor(c, 10);
+  detail::JointTimedExecutor executor(c, 10);
   const auto first = executor.update(envelope(old, command, 1, 1, 1), old, 1);
   check(first.actuation && first.execution.action == Action::Drive,
         "old position must authorize the independently safe first Drive");
@@ -263,7 +275,7 @@ void test_latest_obstacles_and_unsafe_stop_latch() {
   const auto command = drive(in.vehicle, c, {.2, 0, 0});
   const auto queued = envelope(in, command, 1, 1, 1);
   in.obstacles = {{.606, 0, .05}};
-  TimedExecutor executor(c, 10);
+  detail::JointTimedExecutor executor(c, 10);
   const auto blocked = executor.update(queued, in, 1);
   check(blocked.safety_error == ExecutionSafetyError::CommandRejected && blocked.actuation &&
             blocked.execution.action == Action::Brake,
@@ -273,7 +285,7 @@ void test_latest_obstacles_and_unsafe_stop_latch() {
   in.vehicle.wheel_speeds.fill(.8);
   in.vehicle.pose.x = .12;
   in.obstacles = {{1.01, 0, .05}};
-  TimedExecutor unsafe(c, 10);
+  detail::JointTimedExecutor unsafe(c, 10);
   const auto fault = unsafe.update(envelope(in, drive(in.vehicle, c, {.8, 0, 0}), 1, 1, 1), in, 1);
   check(fault.safety_error == ExecutionSafetyError::UnsafeStoppingTrajectory &&
             fault.execution.action == Action::SafeStop && fault.execution.feedback.fault &&
@@ -285,9 +297,9 @@ void test_latest_obstacles_and_unsafe_stop_latch() {
   check(later.execution.feedback.fault && !later.actuation,
         "fresh obstacles or commands must not clear an unsafe-stop fault");
   c.stopping_horizon_steps = 2;
-  TimedExecutor bounded(c, 10);
-  const auto exhausted = bounded.update(
-      envelope(in, drive(in.vehicle, c, {.8, 0, 0}), 1.1, 1.1, 1.1), in, 1.1);
+  detail::JointTimedExecutor bounded(c, 10);
+  const auto exhausted =
+      bounded.update(envelope(in, drive(in.vehicle, c, {.8, 0, 0}), 1.1, 1.1, 1.1), in, 1.1);
   check(exhausted.safety_error == ExecutionSafetyError::UnsafeStoppingTrajectory,
         "execution stopping-budget exhaustion must fail closed");
 }
@@ -334,14 +346,15 @@ void test_commands_bound_to_originating_task() {
     // Every obsolete command remains mechanically and collision valid. The
     // rejection must come from task identity, not an incidental safety failure.
     ModeExecutor preview(c);
-    const auto plan = ActuationModel(c).plan(origin.vehicle, preview.update(output, origin.vehicle));
+    const auto plan =
+        ActuationModel(c).plan(origin.vehicle, preview.update(output, origin.vehicle));
     check(plan.has_value(), "stale task reproduction must have valid Drive targets");
     Trajectory trace;
     RolloutEngine(c).generate_execution(*plan, trace);
     check(TrajectoryValidator(c).check(origin, trace) == TrajectoryStatus::Valid,
           "collision checks alone must permit the stale task reproduction");
     const double obsolete_stop_x = trace.final_state.pose.x;
-    TimedExecutor executor(c, 10);
+    detail::JointTimedExecutor executor(c, 10);
     const auto rejected = executor.update(queued, origin, 1.1);
     check(rejected.timing_error == TimingError::None &&
               rejected.safety_error == ExecutionSafetyError::TaskMismatch &&
@@ -355,7 +368,7 @@ void test_commands_bound_to_originating_task() {
               trace.final_state.pose.x < obsolete_stop_x,
           "a replaced task may execute only its separately checked stopping fallback");
     origin.vehicle = rejected.actuation->endpoint().state;
-    Output hold;
+    JointCommand hold;
     hold.action = Action::Hold;
     const double now = origin.vehicle.stamp_s;
     const auto fresh = executor.update(envelope(origin, hold, now, now, now, 2), origin, now);
@@ -367,16 +380,16 @@ void test_commands_bound_to_originating_task() {
 void test_stale_task_request_does_not_commit() {
   Config c;
   auto old = input();
-  Output request;
+  JointCommand request;
   request.action = Action::RequestMode;
   request.requested_mode = DriveMode::Crab;
-  request.mode_request = ModeRequest{7, DriveMode::Crab,
-      DriveModel(c).steering_for_entry(DriveMode::Crab, {0, .2, 0}, {})};
+  request.mode_request = JointModeRequest{
+      7, DriveMode::Crab, DriveModel(c).steering_for_entry(DriveMode::Crab, {0, .2, 0}, {})};
   const auto queued = envelope(old, request, 1, 1.03, 1.1);
   auto latest = old;
   latest.vehicle.stamp_s = 1.1;
   ++latest.path_id;
-  TimedExecutor executor(c, 10);
+  detail::JointTimedExecutor executor(c, 10);
   const auto rejected = executor.update(queued, latest, 1.1);
   check(rejected.safety_error == ExecutionSafetyError::TaskMismatch && rejected.actuation &&
             rejected.execution.feedback.request_id == 0 &&
@@ -396,7 +409,7 @@ void test_stale_task_request_does_not_commit() {
   unsafe.vehicle.stamp_s = 1.15;
   unsafe.vehicle.pose.x = .12;
   unsafe.obstacles = {{1.01, 0, .05}};
-  TimedExecutor fail_closed(c, 10);
+  detail::JointTimedExecutor fail_closed(c, 10);
   const auto fault = fail_closed.update(
       envelope(old, drive(old.vehicle, c, {.8, 0, 0}), 1, 1.1, 1.15), unsafe, 1.15);
   check(fault.safety_error == ExecutionSafetyError::UnsafeStoppingTrajectory &&
@@ -407,13 +420,13 @@ void test_request_rejection_is_transactional() {
   Config c;
   auto validator = std::make_shared<TrajectoryValidator>(c);
   validator->add(std::make_shared<GateSteering>());
-  TimedExecutor executor(c, 10, DriveMode::DualAckermann, {}, validator);
+  detail::JointTimedExecutor executor(c, 10, DriveMode::DualAckermann, {}, validator);
   auto in = input();
-  Output request;
+  JointCommand request;
   request.action = Action::RequestMode;
   request.requested_mode = DriveMode::Crab;
-  request.mode_request = ModeRequest{7, DriveMode::Crab,
-      DriveModel(c).steering_for_entry(DriveMode::Crab, {0, .2, 0}, {})};
+  request.mode_request = JointModeRequest{
+      7, DriveMode::Crab, DriveModel(c).steering_for_entry(DriveMode::Crab, {0, .2, 0}, {})};
   const auto blocked = executor.update(envelope(in, request, 1, 1, 1), in, 1);
   check(blocked.safety_error == ExecutionSafetyError::CommandRejected &&
             blocked.execution.feedback.request_id == 0 &&
@@ -429,8 +442,8 @@ void test_request_rejection_is_transactional() {
   auto incompatible = c;
   incompatible.robot_radius_m += .1;
   try {
-    TimedExecutor mismatch(c, 10, DriveMode::DualAckermann, {},
-                           std::make_shared<TrajectoryValidator>(incompatible));
+    detail::JointTimedExecutor mismatch(c, 10, DriveMode::DualAckermann, {},
+                                        std::make_shared<TrajectoryValidator>(incompatible));
   } catch (const std::invalid_argument &) {
     rejected = true;
   }
@@ -438,7 +451,7 @@ void test_request_rejection_is_transactional() {
 }
 void test_scheduling_metadata_and_current_state() {
   Config c;
-  Output hold;
+  JointCommand hold;
   hold.action = Action::Hold;
   for (auto expected : {TimingError::InvalidPlanTime, TimingError::SourceTimeout,
                         TimingError::NotYetExecutable, TimingError::ExecutionExpired}) {
@@ -455,30 +468,31 @@ void test_scheduling_metadata_and_current_state() {
       queued.execute_at_s = .99;
       queued.valid_until_s = .999;
     }
-    TimedExecutor executor(c, 10);
+    detail::JointTimedExecutor executor(c, 10);
     const auto result = executor.update(queued, input(), 1);
     check(result.timing_error == expected && result.execution.feedback.fault && !result.actuation,
           "invalid scheduling/source timestamps must fail closed with a distinct reason");
   }
   for (int field = 0; field < 3; ++field) {
     auto queued = envelope(input(), hold, 1, 1, 1);
-    (field == 0 ? queued.source_stamp_s : field == 1 ? queued.execute_at_s : queued.valid_until_s) =
-        std::numeric_limits<double>::quiet_NaN();
-    TimedExecutor executor(c, 10);
+    (field == 0   ? queued.source_stamp_s
+     : field == 1 ? queued.execute_at_s
+                  : queued.valid_until_s) = std::numeric_limits<double>::quiet_NaN();
+    detail::JointTimedExecutor executor(c, 10);
     check(executor.update(queued, input(), 1).timing_error == TimingError::InvalidPlanTime,
           "every required plan timestamp must be finite");
   }
-  TimedExecutor missing(c, 10);
-  check(missing.update(CommandEnvelope{10, 1, 1, hold}, input(), 1).timing_error ==
+  detail::JointTimedExecutor missing(c, 10);
+  check(missing.update(detail::JointCommandEnvelope{10, 1, 1, hold}, input(), 1).timing_error ==
             TimingError::InvalidPlanTime,
         "legacy envelopes without source/scheduling metadata must not authorize motion");
-  TimedExecutor stale(c, 10);
+  detail::JointTimedExecutor stale(c, 10);
   const auto raw = stale.update(envelope(input(.99), hold, .99, 1, 1), input(.99), 1);
   check(raw.timing_error == TimingError::None &&
             raw.safety_error == ExecutionSafetyError::StateNotCurrent &&
             raw.execution.feedback.fault,
         "a recent raw observation must not be silently treated as the execution-start pose");
-  TimedExecutor invalid(c, 10);
+  detail::JointTimedExecutor invalid(c, 10);
   auto bad = input();
   bad.obstacles.push_back({0, 0, -1});
   check(invalid.update(envelope(bad, hold, 1, 1, 1), bad, 1).safety_error ==

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "swerve_mppi/trajectory_validator.hpp"
+#include <memory>
 
 namespace swerve_mppi {
 struct TimingLimits {
@@ -98,20 +99,15 @@ public:
   TimedExecutor(const Config &config, std::uint64_t session_id,
                 DriveMode initial_mode = DriveMode::DualAckermann, const TimingLimits &limits = {},
                 std::shared_ptr<const TrajectoryValidator> validator = nullptr);
+  ~TimedExecutor();
+  TimedExecutor(TimedExecutor &&) noexcept;
+  TimedExecutor &operator=(TimedExecutor &&) noexcept;
   TimedExecutionResult update(const std::optional<CommandEnvelope> &command,
                               const ControllerInput &latest, double now_s);
   void reset(const VehicleState &recovered, std::uint64_t new_session_id);
 
 private:
-  TrajectoryStatus check(const ControllerInput &latest, const ActuationPlan &plan);
-  TimedExecutionResult reject_command(const ControllerInput &latest,
-                                     ExecutionSafetyError reason, TrajectoryStatus status);
-  Config config_;
-  std::shared_ptr<const TrajectoryValidator> validator_;
-  ActuationModel actuation_;
-  RolloutEngine rollout_;
-  Trajectory trace_;
-  TimingGuard timing_;
-  ModeExecutor executor_;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 } // namespace swerve_mppi
