@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 #include "safety/detail/validation.hpp"
@@ -26,6 +27,7 @@ struct EncoderSample
 {
   Twist2d velocity;
   Twist2d derivative;  // Derivative with respect to the tick fraction.
+  std::array<std::array<double, 2>, 4> rolling_vectors{};
 };
 inline EncoderSample encoder_sample(
   const VehicleState & start, const VehicleState & end, const Config & c, double f)
@@ -41,6 +43,7 @@ inline EncoderSample encoder_sample(
     const double speed = start.wheel_speeds[i] + f * ds;
     const double cosine = std::cos(angle), sine = std::sin(angle);
     const double vx = speed * cosine, vy = speed * sine;
+    out.rolling_vectors[i] = {vx, vy};
     const double dx = ds * cosine - speed * da * sine;
     const double dy = ds * sine + speed * da * cosine;
     out.velocity.vx += vx / 4;
@@ -51,6 +54,89 @@ inline EncoderSample encoder_sample(
     out.derivative.wz += (x[i] * dy - y[i] * dx) / moment;
   }
   return out;
+}
+// Certify each rolling vector against the instantaneous least-squares rigid
+// body field over the whole affine joint interval, including its start. The
+// residual is a linear projection of the encoder vectors. If module i has
+// second-derivative bound B_i and their mean bound is B, its residual bound is
+// B_i + 2*B (translation plus rotation at the common module radius).
+inline bool drive_residual_admissible(
+  const VehicleState & start, const VehicleState & end, const Config & c)
+{
+  using Residuals = std::array<std::array<double, 2>, 4>;
+  const double x[] = {c.wheelbase_m / 2, c.wheelbase_m / 2, -c.wheelbase_m / 2, -c.wheelbase_m / 2};
+  const double y[] = {c.track_m / 2, -c.track_m / 2, c.track_m / 2, -c.track_m / 2};
+  const auto sample = [&](double f) {
+    const auto encoded = encoder_sample(start, end, c, f);
+    Residuals residuals;
+    for (std::size_t i = 0; i < 4; ++i) {
+      residuals[i] = {
+        encoded.rolling_vectors[i][0] - (encoded.velocity.vx - encoded.velocity.wz * y[i]),
+        encoded.rolling_vectors[i][1] - (encoded.velocity.vy + encoded.velocity.wz * x[i])};
+    }
+    return residuals;
+  };
+  const double limit = c.drive_kinematic_tolerance_mps + 1e-9;
+  const auto within = [&](const Residuals & values) {
+    for (const auto & value : values) {
+      if (!(std::hypot(value[0], value[1]) <= limit)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const auto first = sample(0), last = sample(1);
+  if (!within(first) || !within(last)) {
+    return false;
+  }
+  if (start.steering_angles == end.steering_angles) {
+    return true;  // Affine residual vectors; their norm is convex.
+  }
+  bool common_translation = true;
+  for (std::size_t i = 1; i < 4; ++i) {
+    common_translation =
+      common_translation && start.steering_angles[i] == start.steering_angles[0] &&
+      end.steering_angles[i] == end.steering_angles[0] &&
+      start.wheel_speeds[i] == start.wheel_speeds[0] && end.wheel_speeds[i] == end.wheel_speeds[0];
+  }
+  if (common_translation) {
+    return true;  // Identical vectors remain a rigid translation, even while steering.
+  }
+  std::array<double, 4> second{};
+  double mean_second = 0;
+  for (std::size_t i = 0; i < 4; ++i) {
+    const double ds = end.wheel_speeds[i] - start.wheel_speeds[i];
+    const double da = end.steering_angles[i] - start.steering_angles[i];
+    const double speed = std::max(std::abs(start.wheel_speeds[i]), std::abs(end.wheel_speeds[i]));
+    second[i] = std::hypot(2 * ds * da, speed * da * da);
+    mean_second += second[i] / 4;
+  }
+  for (double & bound : second) {
+    bound += 2 * mean_second;
+  }
+  std::size_t budget = 4096;
+  auto certify = [&](
+                   auto && self, double a, const Residuals & va, double b, const Residuals & vb,
+                   std::size_t depth) -> bool {
+    if (budget == 0) {
+      return false;
+    }
+    --budget;
+    const double h = b - a;
+    bool enclosed = true;
+    for (std::size_t i = 0; i < 4; ++i) {
+      const double peak = std::max(std::hypot(va[i][0], va[i][1]), std::hypot(vb[i][0], vb[i][1]));
+      enclosed = enclosed && peak + second[i] * h * h / 8 <= limit;
+    }
+    if (enclosed) {
+      return true;
+    }
+    const double middle = (a + b) / 2;
+    const auto vm = sample(middle);
+    return within(vm) && depth < 14 && self(self, a, va, middle, vm, depth + 1) &&
+           self(self, middle, vm, b, vb, depth + 1);
+  };
+  return certify(certify, 0, first, 1, last, 0);
 }
 // Certify absolute speeds over the entire affine joint interval. Triangle
 // bounds handle ordinary capped Crab/Spin motion cheaply. Adaptive chord
@@ -184,7 +270,8 @@ inline bool drive_rates_admissible(
 inline bool drive_interpolation_admissible(
   const VehicleState & start, const VehicleState & end, const Config & c, double dt)
 {
-  return drive_speed_admissible(start, end, c) && drive_rates_admissible(start, end, c, dt);
+  return drive_residual_admissible(start, end, c) && drive_speed_admissible(start, end, c) &&
+         drive_rates_admissible(start, end, c, dt);
 }
 // Shared by the protocol supervisor and the checked actuator reference.
 inline bool drive_targets_admissible(
@@ -209,9 +296,7 @@ inline bool drive_targets_admissible(
   end.velocity = kinematics.forward(speeds, angles);
   if (
     !within_body_limits(end.velocity, start.actual_mode, c) ||
-    !drive_interpolation_admissible(start, end, c, c.dt_s) ||
-    kinematics.max_module_residual(speeds, angles, end.velocity) >
-      c.drive_kinematic_tolerance_mps + 1e-9) {
+    !drive_interpolation_admissible(start, end, c, c.dt_s)) {
     return false;
   }
   const auto projected =

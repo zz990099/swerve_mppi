@@ -173,7 +173,9 @@ angles within steering_tolerance_rad and at least alignment_min_s since entering
 alignment. If wheels/body move again, it returns to braking and restarts the
 alignment minimum, while retaining the original overall deadline. The reported
 mode changes only at confirmation. Controller/ModeManager then verifies mode,
-ID, stopped measurements and steering, and emits one stopped handover cycle.
+ID, stopped measurements and equivalent rolling-line geometry modulo pi, and
+emits one stopped handover cycle retaining measured steering. The executor's
+own confirmation still requires its exact frozen mechanical targets.
 
 ## Internal actions, timing and cancellation
 
@@ -192,13 +194,19 @@ target velocity, the explicit request, measured feedback and command presence.
 For every Drive, the executor checks each module's rolling vector against
 (vx - wz*y_i, vy + wz*x_i), in addition to encoder/body agreement and mode limits.
 The largest residual must not exceed drive_kinematic_tolerance_mps (default
-0.02 m/s, nonnegative; zero requires ideal kinematics within numerical tolerance).
+0.02 m/s, nonnegative; zero permits only the 1e-9 m/s numerical allowance).
+Since 0.19.1 this covers the entire affine Drive interval, including measured
+start and every interior instant, rather than its target endpoint alone.
+Prediction, ModeExecutor and ActuationModel share the bounded analytic certifier;
+an observed excess or certification exhaustion rejects Drive. Moving steering
+may be reduced or rejected with a zero/very small residual envelope. Fixed-angle
+ideal motion and exact common translating wheel vectors remain admissible.
 Aggregate least-squares agreement alone cannot validate mutually opposing wheels.
 DriveModel applies the same residual envelope to nonzero, ready Drive steps while
 limiting wheel/steering changes jointly. Braking keeps measured steering and does
 not require a measured slipping wheel pair to become an ideal kinematic pair.
-The allowance bounds target interpolation error; it is not a tire-slip model or
-proof that the chassis will follow those targets.
+The allowance bounds the complete reference interpolation error; it is not a
+tire-slip model or proof that the chassis will follow those targets.
 
 An absent Output::command is the public cancellation/fault signal and compiles
 to internal SafeStop. An empty or invalid path also withholds command authorization. Hold or a different DriveMode request cannot

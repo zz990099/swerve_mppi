@@ -12,6 +12,12 @@ header migration and the official ROS Rolling formatting/checking workflow.
 
 ## Build, test and install
 
+Version 0.19.1 fixes queued mode acknowledgement when execution selects an
+equivalent signed wheel geometry, and certifies module residuals throughout the
+complete Drive interval. See [docs/BOUNDARY_REVIEW_VALIDATION.md](docs/BOUNDARY_REVIEW_VALIDATION.md)
+for the regressions, bounds and validation. The 0.19 module-qualified include
+paths and actionless chassis command interface are retained.
+
 Requirements: CMake 3.20 or newer and a C++17 compiler. CMake is the only supported
 build entry point; no workspace activation script or ROS environment is required.
 

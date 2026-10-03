@@ -57,6 +57,14 @@ Retries cannot renew deadlines. After confirmation, the planner observes matchin
 actual mode, confirmed flag, request ID and stopped/aligned feedback before sending
 its stopped handover and subsequent ordinary body target.
 
+In 0.19.1, planner acknowledgement accepts mechanically legal equivalent rolling
+lines (angles modulo pi), because first accepted execution may choose a different
+signed wheel representation than the earlier planning snapshot. The executor
+still freezes exact mechanical positions and checks retries against those positions.
+Acknowledgement preserves measured steering during the handover; it never commands
+a wrapped motion across a mechanical stop. Non-equivalent geometry, an incorrect
+ID, unconfirmed mode or moving feedback cannot complete the request.
+
 ## Execution ownership
 
 Controller's private planner checks predictions and complete stopping continuations

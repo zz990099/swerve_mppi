@@ -9,6 +9,25 @@
 
 namespace swerve_mppi
 {
+namespace
+{
+bool entry_geometry_aligned(
+  const std::array<double, 4> & measured, const std::array<double, 4> & planned,
+  const Config & config)
+{
+  // The chassis executor chooses and freezes mechanical positions at first
+  // accepted application. A queued body request may select a different signed
+  // wheel representation than prediction. Acknowledgement checks the same
+  // rolling lines; it never commands a wrapped shortcut across a hard stop.
+  constexpr double pi = 3.14159265358979323846;
+  for (std::size_t i = 0; i < measured.size(); ++i) {
+    if (std::abs(std::remainder(measured[i] - planned[i], pi)) > config.steering_tolerance_rad) {
+      return false;
+    }
+  }
+  return true;
+}
+}  // namespace
 ModeManager::ModeManager(const Config & config) : config_(config) { validate(config_); }
 void ModeManager::begin(
   DriveMode target_mode, const Control & intent, const VehicleState & observed)
@@ -73,7 +92,7 @@ JointCommand ModeManager::update(const VehicleState & observed)
   } else if (
     observed.actual_mode == request_.mode && observed.mode_confirmed &&
     observed.mode_request_id == request_.id && is_stopped(observed, config_) &&
-    detail::steering_aligned(observed.steering_angles, request_.steering_targets, config_)) {
+    entry_geometry_aligned(observed.steering_angles, request_.steering_targets, config_)) {
     phase_ = TransitionPhase::Stable;
     out.phase = phase_;
     out.action = Action::Hold;

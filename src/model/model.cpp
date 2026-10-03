@@ -211,9 +211,7 @@ StepResult DriveModel::step(const VehicleState & start, const Control & u, doubl
     }
     state.velocity = kinematics_.forward(state.wheel_speeds, state.steering_angles);
     profile = detail::motion_profile(initial, state, start, config_);
-    const bool module_consistent =
-      kinematics_.max_module_residual(state.wheel_speeds, state.steering_angles, state.velocity) <=
-      config_.drive_kinematic_tolerance_mps + 1e-9;
+    const bool module_consistent = detail::drive_residual_admissible(start, state, config_);
     const bool speed_ok = detail::drive_speed_admissible(start, state, config_);
     if (
       module_consistent && speed_ok && detail::drive_rates_admissible(start, state, config_, dt) &&

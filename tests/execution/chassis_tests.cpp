@@ -3,10 +3,11 @@
 #include <type_traits>
 #include <utility>
 
-#include "behavior_fixture.hpp"
+#include "profile_fixture.hpp"
 #include "swerve_mppi/execution/chassis_executor.hpp"
 #include "swerve_mppi/execution/timing.hpp"
 #include "swerve_mppi/planning/controller.hpp"
+#include "swerve_mppi/planning/mode.hpp"
 
 using namespace swerve_mppi;
 using namespace swerve_mppi::test;
@@ -271,6 +272,118 @@ CommandEnvelope envelope(
   const auto t = input.vehicle.stamp_s;
   return {1, sequence, t, output, t, t, t + .025, CommandTask::capture(input)};
 }
+void test_queued_request_equivalent_geometry()
+{
+  Config c;
+  c.compute_budget_ratio = 0;
+  for (double sign : {-1., 1.}) {
+    Controller controller(c);
+    TimedExecutor executor(c, 1);
+    ProfileRunner runner(c);
+    ControllerInput input;
+    input.vehicle = stopped();
+    input.vehicle.steering_angles.fill(sign * .01);
+    input.reference_path = {{0, 0, 0}, {0, sign * .2, 0}};
+    auto output = controller.compute(input);
+    check(output.command && output.command->mode_request, "near lateral goal must request Crab");
+    const auto frozen = *output.command->mode_request;
+    check(frozen.mode == DriveMode::Crab, "queued regression must enter Crab");
+    // A valid execution snapshot changes the nearest equivalent mechanical
+    // representation before the first request is accepted.
+    input.vehicle.steering_angles.fill(-sign * .01);
+    input.vehicle.stamp_s += c.dt_s;
+    bool drove = false, complete = false;
+    double wall = 10;
+    for (std::uint64_t tick = 0; tick < 60; ++tick) {
+      const double now = input.vehicle.stamp_s;
+      if (output.command && output.command->mode_request) {
+        const auto & retry = *output.command->mode_request;
+        check(
+          retry.id == frozen.id && retry.mode == frozen.mode &&
+            retry.entry_velocity.vx == frozen.entry_velocity.vx &&
+            retry.entry_velocity.vy == frozen.entry_velocity.vy &&
+            retry.entry_velocity.wz == frozen.entry_velocity.wz,
+          "queued retries must retain the complete original body intent");
+      }
+      CommandEnvelope packet{
+        1,   tick + 1,   tick == 0 ? 1.05 : now,     output, tick == 0 ? 1 : now,
+        now, now + .025, CommandTask::capture(input)};
+      const auto guarded = executor.update(packet, input, now);
+      check(
+        guarded.timing_error == TimingError::None &&
+          guarded.safety_error == ExecutionSafetyError::None && guarded.actuation &&
+          !guarded.execution.feedback.fault,
+        "equivalent queued entry must not fault planning or guarded execution");
+      if (tick == 0) {
+        check(
+          sign * guarded.execution.steering_targets[0] < -1.5,
+          "execution must freeze the opposite signed representation");
+      }
+      drove = drove || guarded.execution.action == Action::Drive;
+      check(runner.install(guarded, now, wall), "queued profile must install");
+      actuate_profile(input.vehicle, runner, guarded.execution.feedback, c, wall, {});
+      wall += c.dt_s;
+      output = controller.compute(input);
+      check(output.command.has_value(), "queued equivalent entry must never cancel on timeout");
+      if (output.goal_reached) {
+        complete = true;
+        break;
+      }
+    }
+    check(
+      drove && complete && controller.transition_phase() == TransitionPhase::Stable,
+      "both signed lateral entries must hand over, drive and complete");
+  }
+}
+void test_equivalent_acknowledgement_guards()
+{
+  Config c;
+  c.steering_limit_rad = 3.14159265358979323846;
+  for (auto mode : {DriveMode::DualAckermann, DriveMode::Crab, DriveMode::Spin}) {
+    auto s = stopped(mode == DriveMode::DualAckermann ? DriveMode::Crab : DriveMode::DualAckermann);
+    ModeManager manager(c);
+    const Control intent = mode == DriveMode::Spin   ? Control{0, 0, .3}
+                           : mode == DriveMode::Crab ? Control{.2, .2, 0}
+                                                     : Control{.3, 0, .1};
+    manager.begin(mode, intent, s);
+    const auto request = manager.update(s);
+    for (std::size_t i = 0; i < 4; ++i) {
+      const double angle = request.steering_targets[i];
+      s.steering_angles[i] = angle + (angle > 0 ? -c.steering_limit_rad : c.steering_limit_rad);
+    }
+    const auto equivalent = s.steering_angles;
+    s.stamp_s += c.dt_s;
+    s.actual_mode = mode;
+    s.mode_request_id = request.mode_request->id + 1;
+    check(manager.update(s).action == Action::RequestMode, "equivalence cannot bypass request ID");
+    s.mode_request_id = request.mode_request->id;
+    s.actual_mode = mode == DriveMode::DualAckermann ? DriveMode::Crab : DriveMode::DualAckermann;
+    s.stamp_s += c.dt_s;
+    check(
+      manager.update(s).action == Action::RequestMode, "equivalence still needs the target mode");
+    s.actual_mode = mode;
+    s.mode_confirmed = false;
+    s.stamp_s += c.dt_s;
+    check(manager.update(s).action == Action::RequestMode, "equivalence still needs confirmation");
+    s.mode_confirmed = true;
+    s.steering_angles[0] += s.steering_angles[0] > 0 ? -.1 : .1;
+    s.stamp_s += c.dt_s;
+    check(manager.update(s).action == Action::RequestMode, "a different rolling line must wait");
+    s.steering_angles = equivalent;
+    s.wheel_speeds.fill(.01);
+    s.velocity = Kinematics(c).forward(s.wheel_speeds, s.steering_angles);
+    s.stamp_s += c.dt_s;
+    check(manager.update(s).action == Action::RequestMode, "equivalent moving joints must wait");
+    s.wheel_speeds.fill(0);
+    s.velocity = {};
+    s.stamp_s += c.dt_s;
+    const auto handover = manager.update(s);
+    check(
+      handover.action == Action::Hold && !manager.active() &&
+        handover.steering_targets == equivalent,
+      "all modes must acknowledge equivalent measured lines without re-steering");
+  }
+}
 void test_guarded_public_pipeline()
 {
   Config c;
@@ -362,6 +475,8 @@ int main()
     test_zero_absence_and_recovery();
     test_mode_request_immutability();
     test_all_directed_mode_transitions();
+    test_queued_request_equivalent_geometry();
+    test_equivalent_acknowledgement_guards();
     test_malformed_commands_and_feedback();
     test_guarded_public_pipeline();
     test_public_planner_state_and_budget();

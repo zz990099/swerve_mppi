@@ -62,6 +62,157 @@ Twist2d encoder(const ActuatorTargets & joints, const Config & c)
   out.wz /= denominator;
   return out;
 }
+double module_residual(const ActuatorTargets & joints, const Config & c)
+{
+  const auto v = encoder(joints, c);
+  const double x[] = {c.wheelbase_m / 2, c.wheelbase_m / 2, -c.wheelbase_m / 2, -c.wheelbase_m / 2};
+  const double y[] = {c.track_m / 2, -c.track_m / 2, c.track_m / 2, -c.track_m / 2};
+  double maximum = 0;
+  for (std::size_t i = 0; i < 4; ++i) {
+    maximum = std::max(
+      maximum,
+      std::hypot(
+        joints.wheel_speeds[i] * std::cos(joints.steering_angles[i]) - (v.vx - v.wz * y[i]),
+        joints.wheel_speeds[i] * std::sin(joints.steering_angles[i]) - (v.vy + v.wz * x[i])));
+  }
+  return maximum;
+}
+void check_profile_residual(const ActuationPlan & plan, const Config & c)
+{
+  for (int tick = 0; tick <= 200; ++tick) {
+    const auto targets = plan.sample(plan.duration_s() * tick / 200.);
+    check(
+      targets && module_residual(*targets, c) <= c.drive_kinematic_tolerance_mps + 1.001e-9,
+      "every independently evaluated Drive sample must satisfy the residual envelope");
+  }
+}
+void test_full_interval_module_residual()
+{
+  for (double limit : {0., .0001, .002}) {
+    Config c;
+    c.compute_budget_ratio = 0;
+    c.drive_kinematic_tolerance_mps = limit;
+    auto in = input();
+    in.vehicle.wheel_speeds.fill(.4);
+    in.vehicle.velocity.vx = .4;
+    const Control target{.4, 0, .1};
+    const auto joints = Kinematics(c).inverse(target, in.vehicle.steering_angles);
+    const ActuatorTargets start{in.vehicle.steering_angles, in.vehicle.wheel_speeds};
+    const ActuatorTargets end{joints.angles, joints.speeds};
+    ActuatorTargets middle;
+    for (std::size_t i = 0; i < 4; ++i) {
+      middle.steering_angles[i] = (start.steering_angles[i] + end.steering_angles[i]) / 2;
+      middle.wheel_speeds[i] = (start.wheel_speeds[i] + end.wheel_speeds[i]) / 2;
+    }
+    check(
+      module_residual(start, c) < 1e-12 && module_residual(end, c) < 1e-12 &&
+        module_residual(middle, c) > .0004,
+      "independent oracle must expose residual hidden by ideal endpoints");
+    ExecutionResult raw;
+    raw.action = Action::Drive;
+    raw.steering_targets = joints.angles;
+    raw.wheel_speed_targets = joints.speeds;
+    const auto raw_plan = ActuationModel(c).plan(in.vehicle, raw);
+    check(
+      raw_plan.has_value() == (limit == .002),
+      "raw actuator admission must reject an over-limit interior residual");
+    JointCommand command;
+    command.action = Action::Drive;
+    command.body_command = Kinematics(c).forward(joints.speeds, joints.angles);
+    command.steering_targets = joints.angles;
+    command.wheel_speed_targets = joints.speeds;
+    check(
+      ModeExecutor(c).update(command, in.vehicle).feedback.fault == (limit != .002),
+      "supervisor must share the whole-period residual check");
+    const auto predicted = DriveModel(c).step(in.vehicle, target, c.dt_s);
+    check(predicted.valid && !predicted.aligning, "bounded steering must retain a valid Drive");
+    raw.steering_targets = predicted.steering_targets;
+    raw.wheel_speed_targets = predicted.wheel_speed_targets;
+    const auto bounded_plan = ActuationModel(c).plan(in.vehicle, raw);
+    check(bounded_plan.has_value(), "model-generated bounded profile must pass admission");
+    check_profile_residual(*bounded_plan, c);
+    Output body;
+    body.command = ChassisCommand{DriveMode::DualAckermann, {.4, 0, .1}, std::nullopt};
+    CommandEnvelope packet{10, 1, 1, body, 1, 1, 1.025, CommandTask::capture(in)};
+    const auto guarded = TimedExecutor(c, 10).update(packet, in, 1);
+    check(
+      guarded.actuation && !guarded.execution.feedback.fault &&
+        guarded.safety_error == ExecutionSafetyError::None,
+      "public body target must compile to a bounded checked interval");
+    check_profile_residual(*guarded.actuation, c);
+  }
+  Config c;
+  c.drive_kinematic_tolerance_mps = 0;
+  auto in = input();
+  in.vehicle.actual_mode = DriveMode::Crab;
+  in.vehicle.wheel_speeds.fill(.2);
+  in.vehicle.velocity.vx = .2;
+  const auto step =
+    DriveModel(c).step(in.vehicle, {.3 * std::cos(.1), .3 * std::sin(.1), 0}, c.dt_s);
+  check(step.valid && !step.aligning, "zero residual must allow exact translating moving steering");
+  ExecutionResult translation;
+  translation.action = Action::Drive;
+  translation.feedback.actual_mode = DriveMode::Crab;
+  translation.steering_targets = step.steering_targets;
+  translation.wheel_speed_targets = step.wheel_speed_targets;
+  const auto plan = ActuationModel(c).plan(in.vehicle, translation);
+  check(plan.has_value(), "exact common translation must remain admissible");
+  check_profile_residual(*plan, c);
+  in = input();
+  in.vehicle.wheel_speeds = {.401, .399, .399, .401};
+  in.vehicle.velocity.vx = .4;
+  translation.feedback.actual_mode = DriveMode::DualAckermann;
+  translation.steering_targets.fill(0);
+  translation.wheel_speed_targets.fill(.4);
+  check(
+    !ActuationModel(c).plan(in.vehicle, translation),
+    "an incompatible measured start cannot authorize Drive toward an ideal endpoint");
+  const auto braking = ActuationModel(c).plan_stopping(in.vehicle, Action::Brake, {});
+  check(
+    braking.has_value(), "measured residual cannot disable the independently checked Brake path");
+}
+void test_residual_peak_between_samples()
+{
+  Config c;
+  c.dt_s = .3;
+  auto in = input();
+  const auto first = Kinematics(c).inverse({.2, 0, -.08}, {});
+  const auto last = Kinematics(c).inverse({.4, 0, .09}, first.angles);
+  in.vehicle.steering_angles = first.angles;
+  in.vehicle.wheel_speeds = first.speeds;
+  in.vehicle.velocity = Kinematics(c).forward(first.speeds, first.angles);
+  const auto interpolate = [&](double f) {
+    ActuatorTargets out;
+    for (std::size_t i = 0; i < 4; ++i) {
+      out.steering_angles[i] = first.angles[i] + f * (last.angles[i] - first.angles[i]);
+      out.wheel_speeds[i] = first.speeds[i] + f * (last.speeds[i] - first.speeds[i]);
+    }
+    return out;
+  };
+  c.drive_kinematic_tolerance_mps = .007821828;
+  check(
+    module_residual(interpolate(0), c) < 1e-12 && module_residual(interpolate(1), c) < 1e-12 &&
+      module_residual(interpolate(.5), c) < c.drive_kinematic_tolerance_mps,
+    "endpoint and midpoint samples alone must appear admissible");
+  double peak = 0;
+  for (int tick = 0; tick <= 10000; ++tick) {
+    peak = std::max(peak, module_residual(interpolate(tick / 10000.), c));
+  }
+  check(
+    peak > c.drive_kinematic_tolerance_mps + 5e-8,
+    "independent dense oracle must expose an off-midpoint peak");
+  ExecutionResult raw;
+  raw.action = Action::Drive;
+  raw.steering_targets = last.angles;
+  raw.wheel_speed_targets = last.speeds;
+  check(
+    !ActuationModel(c).plan(in.vehicle, raw),
+    "an unsampled peak must not pass whole-interval admission");
+  c.drive_kinematic_tolerance_mps = .008;
+  const auto permitted = ActuationModel(c).plan(in.vehicle, raw);
+  check(permitted.has_value(), "the same interval must pass with a sufficient residual allowance");
+  check_profile_residual(*permitted, c);
+}
 void test_drive_profile_and_independent_motion()
 {
   Config c;
@@ -585,6 +736,8 @@ void test_scheduling_metadata_and_current_state()
 int main()
 {
   try {
+    test_full_interval_module_residual();
+    test_residual_peak_between_samples();
     test_drive_profile_and_independent_motion();
     test_proportional_brake_and_phased_alignment();
     test_planning_stop_preserves_feedback_and_full_braking();

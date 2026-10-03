@@ -111,6 +111,13 @@ cycle before drive resumes. Retries cannot change the committed steering or rene
 the deadline. Request IDs remain monotonic across deliberate recovery.
 Timeout covers the entire committed transition, including braking.
 
+The public body-entry request is immutable, while execution freezes its exact
+mechanical representation at first accepted application. ModeManager acknowledges
+legal equivalent rolling lines modulo pi if execution selected different wheel
+signs than prediction. ModeExecutor still requires its exact frozen positions.
+The stopped handover retains measured steering; equivalence never authorizes a
+wrapped actuator motion across a hard stop.
+
 ## Continuous optimization
 
 The proposal is the nominal sequence plus stationary AR(1) Gaussian perturbations,
