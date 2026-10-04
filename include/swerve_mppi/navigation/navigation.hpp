@@ -33,10 +33,13 @@ class PathManager
 {
 public:
   explicit PathManager(const Config & config);
+  // Reject unrepresentable derived geometry with invalid_argument and clear
+  // partial matching state. Returned references and errors are finite.
   PathReference update(const ControllerInput & input);
   void reset();
 
 private:
+  PathReference update_impl(const ControllerInput & input);
   Pose2d interpolate(double distance) const;
   Config config_;
   std::vector<Pose2d> path_;

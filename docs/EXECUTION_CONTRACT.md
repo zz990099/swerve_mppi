@@ -203,6 +203,15 @@ avoids overflow for opposite finite extremes. GoalManager rejects nonfinite deri
 position/yaw errors before changing its settling clock; Controller returns absent
 command with `InvalidInput`. Finite input alone cannot authorize a nonfinite result.
 
+Since 0.20.1, PathManager also checks derived segment lengths, projection bounds,
+observed displacement, interpolated references, cross-track error and local-target
+distance. Normalized projections and turn vectors avoid unnecessary squared-length
+and dot/cross-product overflow. An unrepresentable result throws `invalid_argument`
+and clears partial matching state; Controller returns absent authorization with
+`InvalidPath` and finite default navigation diagnostics. Such input does not become
+a recoverable `NoFeasiblePlan` zero-velocity command. See
+[PATH_NUMERICAL_VALIDATION.md](PATH_NUMERICAL_VALIDATION.md) for boundary regressions.
+
 ## Internal actions, timing and cancellation
 
 The following actions describe JointCommand/ExecutionResult in the lower execution

@@ -12,6 +12,45 @@ namespace swerve_mppi
 {
 namespace
 {
+double checked_finite(double value)
+{
+  if (!std::isfinite(value)) {
+    throw std::invalid_argument("nonfinite derived path geometry");
+  }
+  return value;
+}
+double distance(const Pose2d & a, const Pose2d & b)
+{
+  return checked_finite(std::hypot(checked_finite(a.x - b.x), checked_finite(a.y - b.y)));
+}
+double projection(const Pose2d & point, const Pose2d & from, double dx, double dy, double length)
+{
+  // Normalize before multiplying: length squared and unscaled dot products
+  // may overflow even when the segment and its local projection are finite.
+  const double x = checked_finite(point.x - from.x), y = checked_finite(point.y - from.y);
+  const double scale = std::max(std::abs(x), std::abs(y));
+  if (scale == 0) {
+    return 0;
+  }
+  const double dot = (x / scale) * (dx / length) + (y / scale) * (dy / length);
+  const double ratio = scale / length;
+  // If the ratio overflows, apply the directional cancellation first. A very
+  // remote perpendicular observation can still have exactly zero projection.
+  return checked_finite(std::isfinite(ratio) ? dot * ratio : (dot * scale) / length);
+}
+double turn_angle(double ax, double ay, double bx, double by)
+{
+  const double a = checked_finite(std::hypot(ax, ay));
+  const double b = checked_finite(std::hypot(bx, by));
+  if (a == 0 || b == 0) {
+    return 0;
+  }
+  ax /= a;
+  ay /= a;
+  bx /= b;
+  by /= b;
+  return checked_finite(std::atan2(ax * by - ay * bx, ax * bx + ay * by));
+}
 bool same_path(const std::vector<Pose2d> & a, const std::vector<Pose2d> & b)
 {
   if (a.size() != b.size()) {
@@ -26,18 +65,17 @@ bool same_path(const std::vector<Pose2d> & a, const std::vector<Pose2d> & b)
 }
 double distance_to_motion(const Pose2d & point, const Pose2d & from, const Pose2d & to)
 {
-  const double dx = to.x - from.x, dy = to.y - from.y;
-  const double length2 = dx * dx + dy * dy;
+  const double dx = checked_finite(to.x - from.x), dy = checked_finite(to.y - from.y);
+  const double length = checked_finite(std::hypot(dx, dy));
   const double t =
-    length2 > 1e-12
-      ? std::clamp(((point.x - from.x) * dx + (point.y - from.y) * dy) / length2, 0.0, 1.0)
-      : 0.0;
-  return std::hypot(point.x - from.x - t * dx, point.y - from.y - t * dy);
+    length > 1e-6 ? std::clamp(projection(point, from, dx, dy, length), 0.0, 1.0) : 0.0;
+  return distance(point, {checked_finite(from.x + t * dx), checked_finite(from.y + t * dy), 0});
 }
 }  // namespace
 PathManager::PathManager(const Config & config) : config_(config) { validate(config); }
 Pose2d PathManager::interpolate(double distance) const
 {
+  checked_finite(distance);
   if (distance >= lengths_.back()) {
     return path_.back();
   }
@@ -46,17 +84,28 @@ Pose2d PathManager::interpolate(double distance) const
   if (i == 0) {
     return path_.front();
   }
-  const double t = (distance - lengths_[i - 1]) / (lengths_[i] - lengths_[i - 1]);
+  const double t = checked_finite((distance - lengths_[i - 1]) / (lengths_[i] - lengths_[i - 1]));
   return {
-    path_[i - 1].x + t * (path_[i].x - path_[i - 1].x),
-    path_[i - 1].y + t * (path_[i].y - path_[i - 1].y),
-    wrap_angle(wrap_angle(path_[i - 1].yaw) + t * angle_distance(path_[i].yaw, path_[i - 1].yaw))};
+    checked_finite(path_[i - 1].x + t * (path_[i].x - path_[i - 1].x)),
+    checked_finite(path_[i - 1].y + t * (path_[i].y - path_[i - 1].y)),
+    checked_finite(wrap_angle(
+      wrap_angle(path_[i - 1].yaw) + t * angle_distance(path_[i].yaw, path_[i - 1].yaw)))};
 }
 PathReference PathManager::update(const ControllerInput & input)
 {
   if (!detail::valid_input(input, config_)) {
     throw std::invalid_argument("invalid path input");
   }
+  try {
+    return update_impl(input);
+  } catch (const std::invalid_argument &) {
+    // Failed derivations must not leave a partially advanced matching cache.
+    reset();
+    throw;
+  }
+}
+PathReference PathManager::update_impl(const ControllerInput & input)
+{
   PathReference out;
   out.changed = path_id_ != input.path_id || heading_policy_ != input.heading_policy ||
                 !same_path(path_, input.reference_path);
@@ -64,12 +113,7 @@ PathReference PathManager::update(const ControllerInput & input)
     path_ = input.reference_path;
     lengths_.assign(path_.size(), 0);
     for (std::size_t i = 1; i < path_.size(); ++i) {
-      lengths_[i] =
-        lengths_[i - 1] + std::hypot(path_[i].x - path_[i - 1].x, path_[i].y - path_[i - 1].y);
-      if (!std::isfinite(lengths_[i])) {
-        reset();
-        throw std::invalid_argument("path length overflow");
-      }
+      lengths_[i] = checked_finite(lengths_[i - 1] + distance(path_[i], path_[i - 1]));
     }
     path_id_ = input.path_id;
     heading_policy_ = input.heading_policy;
@@ -81,12 +125,13 @@ PathReference PathManager::update(const ControllerInput & input)
     previous_pose_ = input.vehicle.pose;
   }
   const auto & pose = input.vehicle.pose;
-  const double displacement = std::hypot(pose.x - previous_pose_.x, pose.y - previous_pose_.y);
-  const double window =
-    out.changed
-      ? config_.path_search_window_m
-      : std::min(config_.path_search_window_m, displacement + config_.path_progress_slack_m);
-  const double upper = std::min(lengths_.back(), progress_ + window);
+  const double displacement = distance(pose, previous_pose_);
+  const double window = out.changed
+                          ? config_.path_search_window_m
+                          : std::min(
+                              config_.path_search_window_m,
+                              checked_finite(displacement + config_.path_progress_slack_m));
+  const double upper = std::min(lengths_.back(), checked_finite(progress_ + window));
   // Match the current segment first. A later segment becomes eligible only
   // after measured motion captures/passes their shared endpoint, in waypoint
   // order. Initial matching stays on the first nonzero segment even for short
@@ -97,25 +142,26 @@ PathReference PathManager::update(const ControllerInput & input)
       segment_ = i + 1;
       continue;
     }
-    const double low = std::max(0.0, (progress_ - lengths_[i - 1]) / length);
-    const double high = std::min(1.0, (upper - lengths_[i - 1]) / length);
+    const double low = std::max(0.0, checked_finite((progress_ - lengths_[i - 1]) / length));
+    const double high = std::min(1.0, checked_finite((upper - lengths_[i - 1]) / length));
+    if (low > high) {
+      throw std::invalid_argument("invalid derived path projection interval");
+    }
     const double dx = path_[i].x - path_[i - 1].x, dy = path_[i].y - path_[i - 1].y;
-    const double projection =
-      ((pose.x - path_[i - 1].x) * dx + (pose.y - path_[i - 1].y) * dy) / (length * length);
-    const double t = std::clamp(projection, low, high);
-    progress_ = std::max(progress_, lengths_[i - 1] + t * length);
+    const double projected = projection(pose, path_[i - 1], dx, dy, length);
+    const double t = std::clamp(projected, low, high);
+    progress_ = std::max(progress_, checked_finite(lengths_[i - 1] + t * length));
     std::size_t next = i + 1;
     while (next < path_.size() && lengths_[next] - lengths_[i] < 1e-12) {
       ++next;
     }
     const double bx = next < path_.size() ? path_[next].x - path_[i].x : dx;
     const double by = next < path_.size() ? path_[next].y - path_[i].y : dy;
-    const bool sharp =
-      std::abs(std::atan2(dx * by - dy * bx, dx * bx + dy * by)) > config_.path_lookahead_turn_rad;
+    const bool sharp = std::abs(turn_angle(dx, dy, bx, by)) > config_.path_lookahead_turn_rad;
     // Smooth sampling points are passed by crossing their endpoint plane; they
     // are not mandatory precision waypoints. Sharp corners still need XY
     // capture.
-    const bool passed = !sharp && projection >= 1.0;
+    const bool passed = !sharp && projected >= 1.0;
     const bool captured = !out.changed && lengths_[i] <= upper + 1e-9 &&
                           lengths_[i] - progress_ <= config_.goal_position_tolerance_m &&
                           (passed || distance_to_motion(path_[i], previous_pose_, pose) <=
@@ -126,7 +172,7 @@ PathReference PathManager::update(const ControllerInput & input)
     progress_ = lengths_[i];
     segment_ = i + 1;
   }
-  double end = std::min(lengths_.back(), progress_ + config_.path_lookahead_m);
+  double end = std::min(lengths_.back(), checked_finite(progress_ + config_.path_lookahead_m));
   // Do not look through a reversal or sharp corner: its distant endpoint can
   // point backwards before the corner has actually been reached.
   double accumulated_turn = 0;
@@ -146,14 +192,14 @@ PathReference PathManager::update(const ControllerInput & input)
     if (std::hypot(ax, ay) < 1e-12 || std::hypot(bx, by) < 1e-12) {
       continue;
     }
-    accumulated_turn += std::abs(std::atan2(ax * by - ay * bx, ax * bx + ay * by));
+    accumulated_turn = checked_finite(accumulated_turn + std::abs(turn_angle(ax, ay, bx, by)));
     if (accumulated_turn > config_.path_lookahead_turn_rad) {
       if (
         lengths_[i] - progress_ <= config_.goal_position_tolerance_m &&
-        std::hypot(pose.x - path_[i].x, pose.y - path_[i].y) <= config_.goal_position_tolerance_m) {
+        distance(pose, path_[i]) <= config_.goal_position_tolerance_m) {
         progress_ = lengths_[i];
         segment_ = next;
-        end = std::min(lengths_.back(), progress_ + config_.path_lookahead_m);
+        end = std::min(lengths_.back(), checked_finite(progress_ + config_.path_lookahead_m));
         accumulated_turn = 0;
       } else {
         end = lengths_[i];
@@ -163,7 +209,7 @@ PathReference PathManager::update(const ControllerInput & input)
     }
   }
   const auto nearest = interpolate(progress_);
-  out.cross_track_error_m = std::hypot(pose.x - nearest.x, pose.y - nearest.y);
+  out.cross_track_error_m = distance(pose, nearest);
   out.local_path.push_back(nearest);
   const auto local_begin =
     std::upper_bound(lengths_.begin(), lengths_.end(), progress_ + 1e-9) - lengths_.begin();
@@ -180,6 +226,8 @@ PathReference PathManager::update(const ControllerInput & input)
   out.terminal = end >= lengths_.back() - 1e-9;
   out.goal_eligible = out.terminal && !out.corner_target;
   out.target = out.local_path.back();
+  // Planner consumes this distance before the global goal error check.
+  distance(pose, out.target);
   out.target_remaining_m = end - progress_;
   out.target_kind = out.corner_target   ? PathTargetKind::Corner
                     : out.goal_eligible ? PathTargetKind::Goal

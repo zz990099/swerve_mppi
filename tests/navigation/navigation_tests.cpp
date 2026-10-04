@@ -394,9 +394,97 @@ void test_large_angles_and_derived_errors()
   input.reference_path = {{large, 0, 0}};
   const auto invalid = Controller(c).compute(input);
   check(
-    !invalid.command && invalid.failure_reason == FailureReason::InvalidInput &&
+    !invalid.command && invalid.failure_reason == FailureReason::InvalidPath &&
       std::isfinite(invalid.goal_distance_m) && std::isfinite(invalid.goal_yaw_error_rad),
     "nonfinite derived distance must withhold authorization without leaking NaN diagnostics");
+}
+void test_path_numerical_boundaries()
+{
+  Config c;
+  c.compute_budget_ratio = 0;
+  const double large = std::numeric_limits<double>::max();
+  for (const auto & input : std::vector<ControllerInput>{
+         {{{1e308, 0, 0}}, {{-1e308, 0, 0}, {0, 0, 0}}},
+         {{{0, -1e308, 0}}, {{0, 1e308, 0}, {0, 0, 0}}},
+         {{{1e308, 0, 0}}, {{0, 0, 0}, {.25, 0, 0}}},
+         {{{large, large, 0}}, {{0, 0, 0}}}}) {
+    bool rejected = false;
+    try {
+      PathManager(c).update(input);
+    } catch (const std::invalid_argument &) {
+      rejected = true;
+    }
+    check(rejected, "unrepresentable path errors must be rejected by the public path manager");
+    const auto out = Controller(c).compute(input);
+    check(
+      !out.command && out.failure_reason == FailureReason::InvalidPath &&
+        out.navigation_status == NavigationStatus::Fault && !out.goal_reached &&
+        std::isfinite(out.selected_cost) && std::isfinite(out.keep_cost) &&
+        std::isfinite(out.path_progress_m) && std::isfinite(out.remaining_path_m) &&
+        std::isfinite(out.cross_track_error_m) && std::isfinite(out.goal_distance_m) &&
+        std::isfinite(out.goal_yaw_error_rad),
+      "path overflow must withhold authorization with finite fault diagnostics");
+  }
+  // A squared segment length can overflow while its length, projection and
+  // local reference are all representable. Preserve the ordinary local result.
+  for (double sign : {-1., 1.}) {
+    ControllerInput input;
+    input.vehicle.pose = {sign * .5, .1, 0};
+    input.reference_path = {{0, 0, 0}, {sign * 1e160, 0, 0}};
+    const auto path = PathManager(c).update(input);
+    check(
+      std::abs(path.progress_m - .5) < 1e-9 && std::abs(path.cross_track_error_m - .1) < 1e-9 &&
+        std::abs(path.target.x - sign * 1.5) < 1e-9 && std::isfinite(path.remaining_m),
+      "representable projection must not depend on squaring the segment length");
+  }
+  Config long_lookahead = c;
+  long_lookahead.path_lookahead_m = 4e160;
+  ControllerInput corner;
+  corner.reference_path = {{0, 0, 0}, {1e160, 1e160, 0}, {0, 2e160, 0}};
+  const auto reference = PathManager(long_lookahead).update(corner);
+  check(
+    reference.corner_target && !reference.goal_eligible && reference.target.x == 1e160 &&
+      reference.target.y == 1e160,
+    "overflowing unscaled dot/cross products cannot hide a blocking corner");
+
+  ControllerInput perpendicular;
+  perpendicular.vehicle.pose = {1e308, 0, 0};
+  perpendicular.reference_path = {{0, 0, 0}, {0, 2e-12, 0}};
+  const auto orthogonal = PathManager(c).update(perpendicular);
+  check(
+    orthogonal.progress_m == 0 && orthogonal.cross_track_error_m == 1e308,
+    "a finite perpendicular projection must survive an overflowing offset-to-length ratio");
+
+  long_lookahead.path_lookahead_m = 1e308;
+  ControllerInput remote_target;
+  remote_target.vehicle.pose = {1e308, 0, 0};
+  remote_target.reference_path = {{0, 0, 0}, {-1e308, 0, 0}};
+  bool rejected = false;
+  try {
+    PathManager(long_lookahead).update(remote_target);
+  } catch (const std::invalid_argument &) {
+    rejected = true;
+  }
+  check(rejected, "finite nearest error cannot authorize an overflowing local-target distance");
+
+  PathManager manager(c);
+  ControllerInput input;
+  input.reference_path = {{-1e308, 0, 0}};
+  input.vehicle.pose = input.reference_path.front();
+  manager.update(input);
+  input.vehicle.pose = {1e308, 0, 0};
+  rejected = false;
+  try {
+    manager.update(input);
+  } catch (const std::invalid_argument &) {
+    rejected = true;
+  }
+  check(rejected, "overflowing displacement on a cached path must be rejected");
+  input.vehicle.pose = input.reference_path.front();
+  const auto recovered = manager.update(input);
+  check(
+    recovered.changed && recovered.progress_m == 0 && recovered.cross_track_error_m == 0,
+    "derived-error rejection must clear partial matching state before the next valid observation");
 }
 int main()
 {
@@ -410,6 +498,7 @@ int main()
     test_short_paths_preserve_segment_order();
     test_dense_segment_capture();
     test_replan_execution_boundaries();
+    test_path_numerical_boundaries();
     test_large_angles_and_derived_errors();
     std::cout << "Navigation regressions passed\n";
     return 0;

@@ -12,7 +12,12 @@ header migration and the official ROS Rolling formatting/checking workflow.
 
 ## Build, test and install
 
-Version 0.20.0 adds executor-owned accepted entry geometry to mode feedback, so
+Version 0.20.1 rejects unrepresentable derived path geometry with `InvalidPath`,
+absent command authorization and finite diagnostics. Normalized projection and
+turn calculations preserve representable geometry without overflowing squared
+lengths or dot/cross products. See [docs/PATH_NUMERICAL_VALIDATION.md](docs/PATH_NUMERICAL_VALIDATION.md).
+
+Version 0.20 added executor-owned accepted entry geometry to mode feedback, so
 pending-request safety checks follow the actual committed steering interval.
 It also makes nonzero entry geometry independent of velocity amplitude and avoids
 finite-yaw subtraction overflow. See [docs/ENTRY_FEEDBACK_VALIDATION.md](docs/ENTRY_FEEDBACK_VALIDATION.md)
