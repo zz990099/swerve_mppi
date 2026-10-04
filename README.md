@@ -12,6 +12,11 @@ header migration and the official ROS Rolling formatting/checking workflow.
 
 ## Build, test and install
 
+Version 0.20.2 enters checked terminal translation for a GoalOnly task that starts
+in Spin, preventing finite-horizon switch costs from retaining a mode that cannot
+advance position. Mode dwell, measured stopping, full transition and complete-stop
+validation still apply. See [docs/SPIN_TRANSLATION_VALIDATION.md](docs/SPIN_TRANSLATION_VALIDATION.md).
+
 Version 0.20.1 rejects unrepresentable derived path geometry with `InvalidPath`,
 absent command authorization and finite diagnostics. Normalized projection and
 turn calculations preserve representable geometry without overflowing squared

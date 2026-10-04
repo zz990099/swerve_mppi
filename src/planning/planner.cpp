@@ -124,6 +124,12 @@ JointCommand Planner::compute_impl(const ControllerInput & input, const Planning
     stop.failure_reason = FailureReason::InvalidInput;
     return stop;
   }
+  // GoalOnly terminal translation cannot advance in Spin. A finite horizon
+  // plus switch cost can otherwise prefer yaw-only motion indefinitely. The
+  // capture path still checks dwell and full switch/stop trajectories.
+  const bool spin_terminal_translation = path.goal_eligible &&
+                                         input.heading_policy == PathHeadingPolicy::GoalOnly &&
+                                         input.vehicle.actual_mode == DriveMode::Spin;
   JointCommand out;
   if (mode_manager_.active()) {
     out = mode_manager_.update(input.vehicle);
@@ -141,9 +147,10 @@ JointCommand Planner::compute_impl(const ControllerInput & input, const Planning
     out = continue_alignment(prepared);
     out.control_policy = ControlPolicy::Alignment;
   } else if (
-    goal.complete || (path.goal_eligible && (goal.position_acquired ||
-                                             (path.remaining_m < config_.goal_docking_distance_m &&
-                                              distance < config_.goal_docking_distance_m)))) {
+    goal.complete || spin_terminal_translation ||
+    (path.goal_eligible &&
+     (goal.position_acquired || (path.remaining_m < config_.goal_docking_distance_m &&
+                                 distance < config_.goal_docking_distance_m)))) {
     optimizer_.clear_warm_start();
     out = compute_goal(prepared, goal);
     out.control_policy = goal.complete ? ControlPolicy::Stopped : ControlPolicy::Capture;

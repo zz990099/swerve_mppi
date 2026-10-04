@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.20.1 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.20.2 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -66,7 +66,7 @@ if(SWERVE_MPPI_BUILD_TESTS)
   target_include_directories(swerve_mppi_behavior_tests PRIVATE tests/fixtures)
   foreach(scenario
     straight lateral curve spin reverse final_yaw scurve scurve_duplicates
-    cusp loop short_cusp short_loop short_corner near_obstacles
+    cusp loop short_cusp short_loop short_corner near_obstacles spin_translation
   )
     add_test(NAME behavior_${scenario} COMMAND swerve_mppi_behavior_tests ${scenario})
     add_test(NAME timed_behavior_${scenario} COMMAND swerve_mppi_behavior_tests ${scenario} --timed)

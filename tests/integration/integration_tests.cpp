@@ -30,6 +30,23 @@ int main()
   try {
     Config c;
     c.compute_budget_ratio = 0;
+    {
+      auto terminal = test::scenario_input("spin_translation");
+      terminal.vehicle.time_in_mode_s = 0;
+      Controller dwell(c);
+      const auto wait = dwell.compute(terminal);
+      check(
+        wait.command && !wait.command->mode_request && wait.command->target_velocity.vx == 0 &&
+          wait.command->target_velocity.vy == 0 && wait.command->target_velocity.wz == 0,
+        "Spin terminal translation cannot bypass minimum mode dwell");
+      terminal.vehicle.time_in_mode_s = 2;
+      Controller blocked(c);
+      terminal.obstacles.push_back({terminal.vehicle.pose.x, terminal.vehicle.pose.y, .1});
+      const auto unsafe = blocked.compute(terminal);
+      check(
+        !unsafe.command && unsafe.failure_reason == FailureReason::UnsafeStoppingTrajectory,
+        "Spin terminal translation cannot bypass current-footprint collision rejection");
+    }
     FeedbackAdapter adapter(c, "bot_");
     VehicleState s;
     s.stamp_s = 1;

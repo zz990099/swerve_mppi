@@ -128,6 +128,19 @@ inline ControllerInput scenario_input(const std::string & scenario)
     input.reference_path = {{0, 0, 0}, {0, 1.4, 0}};
   } else if (scenario == "spin") {
     input.reference_path = {{0, 0, 0}, {0, 0, 1.8}};
+  } else if (scenario == "spin_translation") {
+    input.vehicle.actual_mode = DriveMode::Spin;
+    input.vehicle.pose = {.93, .21, .49};
+    const double angle = std::atan2(.6, .5);
+    input.vehicle.steering_angles = {-angle, angle, angle, -angle};
+    input.reference_path = {{.93, .21, .49}, {1.43, .21, .89}};
+    input.heading_policy = PathHeadingPolicy::GoalOnly;
+    for (double a : {.18, .42}) {
+      for (double offset : {-.9, .9}) {
+        input.obstacles.push_back(
+          {(2 + offset) * std::sin(a), 2 - (2 + offset) * std::cos(a), .08});
+      }
+    }
   } else if (scenario == "cusp") {
     input.reference_path = {{0, 0, 0}, {1, 0, 0}, {0, 0, 0}};
   } else if (scenario == "loop") {

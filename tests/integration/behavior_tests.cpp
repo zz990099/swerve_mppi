@@ -19,13 +19,13 @@ void run(const std::string & scenario, unsigned seed, bool timed, bool profile)
   Config c;
   c.compute_budget_ratio = 0;  // Behavior assertions are independent of host speed.
   c.random_seed = seed;
+  auto input = scenario_input(scenario);
   Controller controller(c);
-  ChassisExecutor executor(c);
-  TimedExecutor timed_executor(c, 1);
+  ChassisExecutor executor(c, input.vehicle.actual_mode);
+  TimedExecutor timed_executor(c, 1, input.vehicle.actual_mode);
   ProfileRunner runner(c);
   FeedbackAdapter feedback(c);
   double actuator_wall_s = 10;
-  auto input = scenario_input(scenario);
   const auto goal = input.reference_path.back();
   int hold = 0, stalled = 0, max_stalled = 0, switches = 0;
   int completed_tick = -1;
