@@ -33,8 +33,9 @@ The dense probe uses 4096 points. On this shared host the final 128-circle
 ordinary row recorded 2/50 timeouts and the dense rows 0/4/3 timeouts for 0/40/128
 circles. The strict probes consequently returned failure despite much lower
 median work than the audit baseline (128 ordinary circles: 50/50 timeouts).
-These results must not be described as a passed target-host real-time gate. These are host-specific observations, not a
-real-time guarantee for another CPU. Deadline exits truncate work and must be
+These results must not be described as a passed target-host real-time gate.
+These are host-specific observations, not a real-time guarantee for another CPU.
+Deadline exits truncate work and must be
 read alongside timeout/overrun counts, never as complete solve measurements.
 See PERFORMANCE.md for strict target-host commands.
 
@@ -43,3 +44,23 @@ nominal physical probes and a 25% mass perturbation with unchanged control limit
 Physical model errors must satisfy its documented nominal envelope and per-mode /
 braking truth-coverage gates. Slip/friction, servo-lag, independent localization,
 Nav2 and hardware calibration remain outside this bounded acceptance.
+
+## CI evidence (2026-10-05)
+
+Commit `275983c9906dc526e67050a34eddb7eb37cfb448` passed
+[run 37299099233](https://github.com/zz990099/swerve_mppi/actions/runs/37299099233):
+61/61 tests in both Debug and Release, including formatting and the installed
+consumer. Its integration-budget artifact contains 50 cold full-pipeline calls
+for each of the six 41/4096-point and 0/40/128-circle groups. All 300 calls
+completed without timeout, whole-pipeline overrun or functional failure. The
+128-circle P95 times were 41.698 ms for 41 points and 48.134 ms for 4096 points.
+This successful shared-runner observation supplements, rather than replaces,
+the failed local strict probes above and the required target-host admission.
+
+The simulator's pinned core is this exact tested commit. Its
+[run 37303043481](https://github.com/zz990099/swerve_gazebo_sim/actions/runs/37303043481)
+passed both ROS/Gazebo families, including repeated runs, slow diagnostic readers,
+payload, corridor and publisher-loss scenarios. The simulator documents earlier
+intermittent transport/scheduling stalls separately; a passed bounded run does
+not establish a hard real-time guarantee or eliminate the need for long-duration
+target-platform testing.
