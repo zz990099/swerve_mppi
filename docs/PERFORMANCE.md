@@ -203,3 +203,21 @@ and capture safety semantics; it does not claim preservation of every 0.6 comple
 tick or reuse its timing values as new measurements. Its allocation smoke gate and
 behavior matrix are rerun; see PRE_SIMULATION_VALIDATION.md.
 Version 0.8 has a fresh committed measurement matrix; see CORE_REVIEW_VALIDATION.md.
+
+## 0.21 live-workload acceptance
+
+The ROS node uses a 0.6 compute ratio (60 ms at the fixed 100 ms model tick).
+CI records both ordinary and 4096-point contexts, each at 0/40/128 circles,
+50 cold repetitions. Shared runners record timing rather than claiming a
+hardware real-time guarantee. On the actual deployment CPU run both gates:
+
+```sh
+./build/swerve_mppi_integration_budget 200 --budget-ratio 0.6 --strict
+./build/swerve_mppi_integration_budget 200 --budget-ratio 0.6 --path-points 4096 --strict
+```
+
+The CSV includes path_points, timeout and whole-pipeline overrun counts.
+An exhausted cooperative solve is rejected; its time is not an unconstrained
+solve-time measurement. Geometry preparation is inside the budget and shared
+across all branches. No obstacles/path points are silently dropped. Middleware
+latency, CPU contention and plant settling require the separate ROS probes.

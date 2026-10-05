@@ -75,6 +75,37 @@ void test_trajectory_anchor()
     validator.check(in, trace) == TrajectoryStatus::Collision,
     "anchored single-pose holds must check current collision");
 }
+void test_extreme_collision_geometry()
+{
+  Config c;
+  TrajectoryValidator validator(c);
+  auto in = straight();
+  Trajectory trace;
+  trace.valid = true;
+  trace.poses = {{0, 0, 0}, {1e200, 0, 0}};
+  in.obstacles = {{1e100, 0, .1}};
+  check(
+    validator.check(in, trace) == TrajectoryStatus::Invalid,
+    "overflowing segment products must never authorize a crossing trace");
+  CriticManager critics(c);
+  check(!std::isfinite(critics.score(in, trace)), "public critics must also fail closed");
+  trace.poses = {{0, 0, 0}, {2, 0, 0}};
+  const double inflated = c.robot_radius_m + c.collision_margin_m + .1;
+  for (double y : {0.0, inflated, std::nextafter(inflated, 0.0)}) {
+    in.obstacles = {{1, y, .1}};
+    check(
+      validator.check(in, trace) == TrajectoryStatus::Collision,
+      "crossing and tangent circles must survive conservative broad-phase filtering");
+  }
+  in.obstacles = {{1, inflated + 1e-8, .1}};
+  check(
+    validator.check(in, trace) == TrajectoryStatus::Valid,
+    "a genuinely separated circle must remain admissible");
+  trace.sweep_margins_m = {.2};
+  check(
+    validator.check(in, trace) == TrajectoryStatus::Collision,
+    "curve-to-chord margins must participate in broad-phase queries");
+}
 void test_validator_configuration_contract()
 {
   const Config c;
@@ -722,6 +753,7 @@ int main()
 {
   try {
     test_trajectory_anchor();
+    test_extreme_collision_geometry();
     test_residual_hold_obstacle();
     test_drive_requires_complete_stopping_continuation();
     test_first_drive_deceleration_matches_execution();

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <stdexcept>
 
+#include "common/detail/spatial_index.hpp"
 #include "safety/detail/validation.hpp"
 
 namespace swerve_mppi
@@ -38,75 +39,93 @@ void TrajectoryValidator::add(std::shared_ptr<const TrajectoryConstraint> constr
 TrajectoryStatus TrajectoryValidator::check(
   const ControllerInput & input, const Trajectory & trajectory) const
 {
-  if (
-    !trajectory.valid || trajectory.poses.empty() ||
-    trajectory.poses.size() > 4097 ||  // Absolute public trace cap, including the initial pose.
-    !detail::valid_input(input, config_) ||
-    (!trajectory.sweep_margins_m.empty() &&
-     trajectory.sweep_margins_m.size() + 1 != trajectory.poses.size())) {
-    return TrajectoryStatus::Invalid;
-  }
-  for (const auto & pose : trajectory.poses) {
-    if (!std::isfinite(pose.x) || !std::isfinite(pose.y) || !std::isfinite(pose.yaw)) {
+  return check_indexed(input, trajectory, nullptr);
+}
+TrajectoryStatus TrajectoryValidator::check_indexed(
+  const ControllerInput & input, const Trajectory & trajectory,
+  const detail::SpatialIndex * obstacles) const
+{
+  try {
+    if (
+      !trajectory.valid || trajectory.poses.empty() ||
+      trajectory.poses.size() > 4097 ||  // Absolute public trace cap, including the initial pose.
+      (!obstacles && !detail::valid_input(input, config_)) ||
+      (!trajectory.sweep_margins_m.empty() &&
+       trajectory.sweep_margins_m.size() + 1 != trajectory.poses.size())) {
       return TrajectoryStatus::Invalid;
     }
-  }
-  for (double margin : trajectory.sweep_margins_m) {
-    if (!std::isfinite(margin) || margin < 0) {
-      return TrajectoryStatus::Invalid;
-    }
-  }
-  const auto & current = input.vehicle.pose;
-  const auto & initial = trajectory.poses.front();
-  constexpr double anchor_tolerance = 1e-9;
-  const double yaw_error = angle_distance(initial.yaw, current.yaw);
-  if (
-    !std::isfinite(yaw_error) ||
-    std::hypot(initial.x - current.x, initial.y - current.y) > anchor_tolerance ||
-    std::abs(yaw_error) > anchor_tolerance) {
-    return TrajectoryStatus::Invalid;
-  }
-  // Check the exact measured footprint even when the anchor differs by
-  // roundoff.
-  for (const auto & obstacle : input.obstacles) {
-    const double clearance = std::hypot(current.x - obstacle.x, current.y - obstacle.y) -
-                             obstacle.radius - config_.robot_radius_m - config_.collision_margin_m;
-    if (!std::isfinite(clearance)) {
-      return TrajectoryStatus::Invalid;
-    }
-    if (clearance <= 0) {
-      return TrajectoryStatus::Collision;
-    }
-  }
-  for (std::size_t i = 0; i < trajectory.poses.size(); ++i) {
-    const double margin =
-      i == 0 || trajectory.sweep_margins_m.empty() ? 0 : trajectory.sweep_margins_m[i - 1];
-    const auto & from = trajectory.poses[i == 0 ? 0 : i - 1];
-    const auto & to = trajectory.poses[i];
-    const double dx = to.x - from.x, dy = to.y - from.y;
-    const double length2 = dx * dx + dy * dy;
-    for (const auto & obstacle : input.obstacles) {
-      const double t =
-        length2 > 0
-          ? std::clamp(
-              ((obstacle.x - from.x) * dx + (obstacle.y - from.y) * dy) / length2, 0.0, 1.0)
-          : 0.0;
-      const double clearance =
-        std::hypot(from.x + t * dx - obstacle.x, from.y + t * dy - obstacle.y) - obstacle.radius -
-        config_.robot_radius_m - config_.collision_margin_m - margin;
-      if (!std::isfinite(clearance)) {
+    for (const auto & pose : trajectory.poses) {
+      if (!std::isfinite(pose.x) || !std::isfinite(pose.y) || !std::isfinite(pose.yaw)) {
         return TrajectoryStatus::Invalid;
       }
-      if (clearance <= 0) {
-        return TrajectoryStatus::Collision;
+    }
+    for (double margin : trajectory.sweep_margins_m) {
+      if (!std::isfinite(margin) || margin < 0) {
+        return TrajectoryStatus::Invalid;
       }
     }
-  }
-  for (const auto & constraint : constraints_) {
-    if (!constraint->allows(input, trajectory)) {
-      return TrajectoryStatus::Rejected;
+    const auto & current = input.vehicle.pose;
+    const auto & initial = trajectory.poses.front();
+    constexpr double anchor_tolerance = 1e-9;
+    const double yaw_error = angle_distance(initial.yaw, current.yaw);
+    if (
+      !std::isfinite(yaw_error) ||
+      std::hypot(initial.x - current.x, initial.y - current.y) > anchor_tolerance ||
+      std::abs(yaw_error) > anchor_tolerance) {
+      return TrajectoryStatus::Invalid;
     }
+    const auto check_segment = [&](const Pose2d & from, const Pose2d & to, double margin) {
+      // Even an obstacle-free public trace must have representable derivatives.
+      detail::finite_geometry(to.x - from.x);
+      detail::finite_geometry(to.y - from.y);
+      const double padding =
+        detail::finite_geometry(config_.robot_radius_m + config_.collision_margin_m + margin);
+      const auto query = detail::Bounds::segment(from, to, padding);
+      auto status = TrajectoryStatus::Valid;
+      const auto inspect = [&](std::size_t index) {
+        const auto & o = input.obstacles[index];
+        if (
+          !obstacles &&
+          !query.overlaps(detail::Bounds::segment({o.x, o.y, 0}, {o.x, o.y, 0}, o.radius))) {
+          return true;
+        }
+        const auto match = detail::segment_distance({o.x, o.y, 0}, from, to);
+        const double clearance = detail::finite_geometry(match.distance - o.radius - padding);
+        if (clearance <= 0) {
+          status = TrajectoryStatus::Collision;
+          return false;
+        }
+        return true;
+      };
+      if (obstacles) {
+        obstacles->visit(query, inspect);
+      } else {
+        for (std::size_t j = 0; j < input.obstacles.size() && inspect(j); ++j) {
+        }
+      }
+      return status;
+    };
+    // Check the exact measured footprint even when the anchor differs by roundoff.
+    auto status = check_segment(current, current, 0);
+    if (status != TrajectoryStatus::Valid) {
+      return status;
+    }
+    for (std::size_t i = 0; i < trajectory.poses.size(); ++i) {
+      const double margin =
+        i == 0 || trajectory.sweep_margins_m.empty() ? 0 : trajectory.sweep_margins_m[i - 1];
+      status = check_segment(trajectory.poses[i == 0 ? 0 : i - 1], trajectory.poses[i], margin);
+      if (status != TrajectoryStatus::Valid) {
+        return status;
+      }
+    }
+    for (const auto & constraint : constraints_) {
+      if (!constraint->allows(input, trajectory)) {
+        return TrajectoryStatus::Rejected;
+      }
+    }
+    return TrajectoryStatus::Valid;
+  } catch (const std::invalid_argument &) {
+    return TrajectoryStatus::Invalid;
   }
-  return TrajectoryStatus::Valid;
 }
 }  // namespace swerve_mppi

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "common/detail/geometry.hpp"
 #include "safety/detail/validation.hpp"
 #include "swerve_mppi/feedback/feedback.hpp"
 
@@ -71,6 +72,12 @@ std::vector<Control> Optimizer::seed(
 Solution Optimizer::optimize(
   const ControllerInput & input, const Branch & branch, const PlanningBudget * budget)
 {
+  return optimize(input, branch, budget, false);
+}
+Solution Optimizer::optimize(
+  const ControllerInput & input, const Branch & branch, const PlanningBudget * budget,
+  bool geometry_prepared)
+{
   PlanningBudget local_budget(budget ? 0 : config_.dt_s * config_.compute_budget_ratio);
   const auto & active_budget = budget ? *budget : local_budget;
   Solution result;
@@ -81,32 +88,16 @@ Solution Optimizer::optimize(
     return result;
   }
   if (
-    !detail::valid_input(input, config_) ||
-    check_model_feedback(input.vehicle, config_).status != FeedbackStatus::Valid) {
+    !geometry_prepared &&
+    (!detail::valid_input(input, config_) ||
+     check_model_feedback(input.vehicle, config_).status != FeedbackStatus::Valid)) {
     return result;
   }
-  // Anticipate the yaw-rate budget of the ordered local curve. A horizon with
-  // limited steering cannot track a tight bend at the straight-line speed cap.
-  double curvature = 0;
-  Pose2d a = input.reference_path.front(), b = a;
-  bool have_segment = false;
-  for (std::size_t i = 1; i < input.reference_path.size(); ++i) {
-    const auto & d = input.reference_path[i];
-    const double bx = d.x - b.x, by = d.y - b.y;
-    const double second = std::hypot(bx, by);
-    if (second <= 1e-9) {
-      continue;
-    }
-    if (have_segment) {
-      const double ax = b.x - a.x, ay = b.y - a.y;
-      curvature = std::max(
-        curvature, std::abs(std::atan2(ax * by - ay * bx, ax * bx + ay * by)) /
-                     ((std::hypot(ax, ay) + second) / 2));
-    }
-    a = b;
-    b = d;
-    have_segment = true;
+  if (!geometry_prepared && !prepare(input)) {
+    return result;
   }
+  // One immutable, validated geometry frame is shared by this compute's branches.
+  const double curvature = critics_.prepared_curvature();
   const auto constrain = [&](Control u, std::size_t t) {
     const auto mode =
       branch.switches && t >= branch.switch_step ? branch.mode : input.vehicle.actual_mode;
@@ -142,7 +133,7 @@ Solution Optimizer::optimize(
   auto evaluate = [&](const std::vector<Control> & controls) {
     rollout_.generate(input.vehicle, branch, controls, proposal_);
     ++stats.evaluated_rollouts;
-    const double cost = critics_.score(input, proposal_);
+    const double cost = critics_.score_prepared(input, proposal_);
     stats.feasible_rollouts += std::isfinite(cost);
     return cost;
   };

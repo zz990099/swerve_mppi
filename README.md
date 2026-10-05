@@ -12,6 +12,12 @@ header migration and the official ROS Rolling formatting/checking workflow.
 
 ## Build, test and install
 
+Version 0.21.0 adds shared fail-closed segment geometry and exact immutable spatial
+indices reused across every branch of a planning call. Public scoring and execution
+still validate fresh inputs independently. Live-budget probes now cover the ROS
+60 ms budget and up to 4096 path points without truncating obstacles or paths.
+See [docs/READINESS_VALIDATION.md](docs/READINESS_VALIDATION.md) for acceptance scope.
+
 Version 0.20.3 adds configurable live-budget measurement and an opt-in target-host
 timeout gate to `swerve_mppi_integration_budget`; control semantics remain 0.20.2.
 The companion `swerve_gazebo_sim` repository now supplies the ROS planning node,
@@ -58,7 +64,7 @@ CI builds Debug and Release configurations through CMake.
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(swerve_mppi 0.20 CONFIG REQUIRED)
+find_package(swerve_mppi 0.21 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 

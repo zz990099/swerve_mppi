@@ -1,7 +1,9 @@
 #include <cmath>
 #include <iostream>
+#include <random>
 #include <stdexcept>
 
+#include "common/detail/spatial_index.hpp"
 #include "planning/detail/planner.hpp"
 using namespace swerve_mppi;
 namespace
@@ -19,6 +21,70 @@ ControllerInput input()
   in.vehicle.time_in_mode_s = 2;
   in.reference_path = {{0, 0, 0}, {1, 0, 0}};
   return in;
+}
+void test_exact_spatial_queries()
+{
+  std::mt19937 rng(7);
+  std::uniform_real_distribution<double> value(-4, 4);
+  std::vector<Pose2d> path;
+  std::vector<detail::Bounds> boxes;
+  for (int i = 0; i < 1024; ++i) {
+    path.push_back({value(rng), value(rng), 0});
+    if (i > 0) {
+      boxes.push_back(detail::Bounds::segment(path[i - 1], path[i]));
+    }
+  }
+  detail::SpatialIndex index(std::move(boxes));
+  for (int sample = 0; sample < 64; ++sample) {
+    const Pose2d p{value(rng), value(rng), 0};
+    long double oracle = std::numeric_limits<long double>::infinity();
+    for (std::size_t i = 1; i < path.size(); ++i) {
+      const long double dx = (long double)path[i].x - path[i - 1].x;
+      const long double dy = (long double)path[i].y - path[i - 1].y;
+      const long double x = (long double)p.x - path[i - 1].x;
+      const long double y = (long double)p.y - path[i - 1].y;
+      const long double t = std::clamp((x * dx + y * dy) / (dx * dx + dy * dy), 0.0L, 1.0L);
+      oracle = std::min(oracle, std::hypot(x - t * dx, y - t * dy));
+    }
+    double best = std::numeric_limits<double>::infinity();
+    index.nearest(p, best, [&](std::size_t i, double & distance) {
+      distance = std::min(distance, detail::segment_distance(p, path[i], path[i + 1]).distance);
+    });
+    check(
+      std::abs(best - oracle) < 1e-12,
+      "indexed nearest query must match the independent exhaustive oracle");
+  }
+}
+void test_prepared_scoring_context()
+{
+  Config c;
+  c.compute_budget_ratio = 0;
+  c.samples_per_branch = 4;
+  c.noise_v_mps = c.noise_w_radps = 0;
+  Optimizer optimizer(c);
+  CriticManager reference(c);
+  for (int points : {2, 401, 4096, 2}) {
+    auto in = input();
+    in.reference_path.clear();
+    for (int i = 0; i < points; ++i) {
+      const double a = .5 * i / (points - 1);
+      in.reference_path.push_back({2 * std::sin(a), 2 * (1 - std::cos(a)), a});
+    }
+    for (int i = 0; i < 128; ++i) {
+      const double a = 2 * std::acos(-1.0) * i / 128;
+      in.obstacles.push_back({2 * std::cos(a), 2 * std::sin(a), .05});
+    }
+    auto solution = optimizer.optimize(in, {DriveMode::DualAckermann, 0, false});
+    const double exhaustive = reference.score(in, solution.trajectory);
+    check(
+      std::isfinite(exhaustive) && std::abs(solution.cost - exhaustive) < 1e-10,
+      "prepared scoring must preserve exhaustive cost across path/context changes");
+    auto copied = optimizer;
+    in.obstacles = {{0, 0, .1}};
+    check(
+      !std::isfinite(copied.optimize(in, {DriveMode::DualAckermann, 0, false}).cost),
+      "a copied optimizer must prepare its own fresh obstacle context");
+  }
 }
 void test_hysteresis_selection()
 {
@@ -573,6 +639,8 @@ void test_extension_and_invalid_inputs()
 int main()
 {
   try {
+    test_exact_spatial_queries();
+    test_prepared_scoring_context();
     test_hysteresis_selection();
     test_rollout_and_swept_collision();
     test_effective_noise_and_disabled_noise();

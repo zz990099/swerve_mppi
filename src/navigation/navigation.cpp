@@ -5,6 +5,7 @@
 #include <limits>
 #include <stdexcept>
 
+#include "common/detail/geometry.hpp"
 #include "common/detail/time_comparison.hpp"
 #include "safety/detail/validation.hpp"
 
@@ -23,34 +24,8 @@ double distance(const Pose2d & a, const Pose2d & b)
 {
   return checked_finite(std::hypot(checked_finite(a.x - b.x), checked_finite(a.y - b.y)));
 }
-double projection(const Pose2d & point, const Pose2d & from, double dx, double dy, double length)
-{
-  // Normalize before multiplying: length squared and unscaled dot products
-  // may overflow even when the segment and its local projection are finite.
-  const double x = checked_finite(point.x - from.x), y = checked_finite(point.y - from.y);
-  const double scale = std::max(std::abs(x), std::abs(y));
-  if (scale == 0) {
-    return 0;
-  }
-  const double dot = (x / scale) * (dx / length) + (y / scale) * (dy / length);
-  const double ratio = scale / length;
-  // If the ratio overflows, apply the directional cancellation first. A very
-  // remote perpendicular observation can still have exactly zero projection.
-  return checked_finite(std::isfinite(ratio) ? dot * ratio : (dot * scale) / length);
-}
-double turn_angle(double ax, double ay, double bx, double by)
-{
-  const double a = checked_finite(std::hypot(ax, ay));
-  const double b = checked_finite(std::hypot(bx, by));
-  if (a == 0 || b == 0) {
-    return 0;
-  }
-  ax /= a;
-  ay /= a;
-  bx /= b;
-  by /= b;
-  return checked_finite(std::atan2(ax * by - ay * bx, ax * bx + ay * by));
-}
+using detail::geometry_turn;
+using detail::segment_projection;
 bool same_path(const std::vector<Pose2d> & a, const std::vector<Pose2d> & b)
 {
   if (a.size() != b.size()) {
@@ -68,7 +43,7 @@ double distance_to_motion(const Pose2d & point, const Pose2d & from, const Pose2
   const double dx = checked_finite(to.x - from.x), dy = checked_finite(to.y - from.y);
   const double length = checked_finite(std::hypot(dx, dy));
   const double t =
-    length > 1e-6 ? std::clamp(projection(point, from, dx, dy, length), 0.0, 1.0) : 0.0;
+    length > 1e-6 ? std::clamp(segment_projection(point, from, dx, dy, length), 0.0, 1.0) : 0.0;
   return distance(point, {checked_finite(from.x + t * dx), checked_finite(from.y + t * dy), 0});
 }
 }  // namespace
@@ -148,7 +123,7 @@ PathReference PathManager::update_impl(const ControllerInput & input)
       throw std::invalid_argument("invalid derived path projection interval");
     }
     const double dx = path_[i].x - path_[i - 1].x, dy = path_[i].y - path_[i - 1].y;
-    const double projected = projection(pose, path_[i - 1], dx, dy, length);
+    const double projected = segment_projection(pose, path_[i - 1], dx, dy, length);
     const double t = std::clamp(projected, low, high);
     progress_ = std::max(progress_, checked_finite(lengths_[i - 1] + t * length));
     std::size_t next = i + 1;
@@ -157,7 +132,7 @@ PathReference PathManager::update_impl(const ControllerInput & input)
     }
     const double bx = next < path_.size() ? path_[next].x - path_[i].x : dx;
     const double by = next < path_.size() ? path_[next].y - path_[i].y : dy;
-    const bool sharp = std::abs(turn_angle(dx, dy, bx, by)) > config_.path_lookahead_turn_rad;
+    const bool sharp = std::abs(geometry_turn(dx, dy, bx, by)) > config_.path_lookahead_turn_rad;
     // Smooth sampling points are passed by crossing their endpoint plane; they
     // are not mandatory precision waypoints. Sharp corners still need XY
     // capture.
@@ -192,7 +167,7 @@ PathReference PathManager::update_impl(const ControllerInput & input)
     if (std::hypot(ax, ay) < 1e-12 || std::hypot(bx, by) < 1e-12) {
       continue;
     }
-    accumulated_turn = checked_finite(accumulated_turn + std::abs(turn_angle(ax, ay, bx, by)));
+    accumulated_turn = checked_finite(accumulated_turn + std::abs(geometry_turn(ax, ay, bx, by)));
     if (accumulated_turn > config_.path_lookahead_turn_rad) {
       if (
         lengths_[i] - progress_ <= config_.goal_position_tolerance_m &&

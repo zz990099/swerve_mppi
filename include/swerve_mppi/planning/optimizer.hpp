@@ -7,6 +7,10 @@
 
 namespace swerve_mppi
 {
+namespace detail
+{
+class Planner;
+}
 class Optimizer
 {
 public:
@@ -24,6 +28,11 @@ public:
   CriticManager & critics() { return critics_; }
 
 private:
+  friend class detail::Planner;
+  bool prepare(const ControllerInput & input) { return critics_.prepare(input); }
+  Solution optimize(
+    const ControllerInput & input, const Branch & branch, const PlanningBudget * budget,
+    bool geometry_prepared);
   std::vector<Control> seed(
     const ControllerInput & input, const Branch & branch, bool use_warm = true) const;
   struct Sample

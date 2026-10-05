@@ -195,8 +195,11 @@ JointCommand Planner::compute_tracking(const ControllerInput & input, const Plan
   PlanningStats stats;
   std::vector<Solution> solutions;
   solutions.reserve(branches.size());
+  if (!optimizer_.prepare(input)) {
+    return planning_stop(input);
+  }
   for (const auto & branch : branches) {
-    solutions.push_back(optimizer_.optimize(input, branch, &budget));
+    solutions.push_back(optimizer_.optimize(input, branch, &budget, true));
     const auto & work = solutions.back().planning_stats;
     stats.branches += work.branches;
     stats.evaluated_rollouts += work.evaluated_rollouts;

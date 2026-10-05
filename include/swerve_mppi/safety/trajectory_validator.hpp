@@ -6,6 +6,10 @@
 
 namespace swerve_mppi
 {
+namespace detail
+{
+class SpatialIndex;
+}
 enum class TrajectoryStatus
 {
   Valid,
@@ -37,6 +41,12 @@ public:
   TrajectoryStatus check(const ControllerInput & input, const Trajectory & trajectory) const;
 
 private:
+  friend class CriticManager;
+  // Internal prepared contexts have already passed complete input validation.
+  // Public check() always validates its own input and never reuses this token.
+  TrajectoryStatus check_indexed(
+    const ControllerInput & input, const Trajectory & trajectory,
+    const detail::SpatialIndex * obstacles) const;
   Config config_;
   std::vector<std::shared_ptr<const TrajectoryConstraint>> constraints_;
 };

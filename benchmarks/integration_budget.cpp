@@ -13,11 +13,19 @@ int main(int argc, char ** argv)
     int repetitions = 50;
     double budget_ratio = .8;
     bool strict = false;
+    int path_points = 0;
     bool have_repetitions = false;
     for (int i = 1; i < argc; ++i) {
       const std::string argument = argv[i];
       if (argument == "--strict") {
         strict = true;
+      } else if (argument == "--path-points" && i + 1 < argc) {
+        const std::string value = argv[++i];
+        std::size_t used = 0;
+        path_points = std::stoi(value, &used);
+        if (used != value.size() || path_points < 2 || path_points > 4096) {
+          throw std::invalid_argument("path points must be 2..4096");
+        }
       } else if (argument == "--budget-ratio" && i + 1 < argc) {
         const std::string value = argv[++i];
         std::size_t used = 0;
@@ -34,7 +42,8 @@ int main(int argc, char ** argv)
         have_repetitions = true;
       } else {
         throw std::invalid_argument(
-          "usage: integration_budget [repetitions] [--budget-ratio ratio] [--strict]");
+          "usage: integration_budget [repetitions] [--budget-ratio ratio] [--path-points count] "
+          "[--strict]");
       }
     }
     if (!std::isfinite(budget_ratio) || budget_ratio <= 0 || budget_ratio > 1) {
@@ -43,7 +52,7 @@ int main(int argc, char ** argv)
     if (repetitions < 2 || repetitions > 10000) {
       throw std::invalid_argument("repetitions must be 2..10000");
     }
-    std::cout << "obstacles,repetitions,budget_ms,p50_ms,p95_ms,p99_ms,max_ms,"
+    std::cout << "path_points,obstacles,repetitions,budget_ms,p50_ms,p95_ms,p99_ms,max_ms,"
                  "min_headroom_ms,"
                  "compute_timeouts,total_overruns,other_failures\n";
     int failures = 0;
@@ -51,6 +60,13 @@ int main(int argc, char ** argv)
       Config c;  // Production budget enabled. Never disable it for this probe.
       c.compute_budget_ratio = budget_ratio;
       auto input = test::scenario_input("curve");
+      if (path_points) {
+        input.reference_path.clear();
+        for (int i = 0; i < path_points; ++i) {
+          const double a = .5 * i / (path_points - 1);
+          input.reference_path.push_back({2 * std::sin(a), 2 * (1 - std::cos(a)), a});
+        }
+      }
       input.obstacles.clear();
       for (int i = 0; i < count; ++i) {
         const double angle = 6.283185307179586 * i / std::max(1, count);
@@ -103,10 +119,10 @@ int main(int argc, char ** argv)
         return times[static_cast<std::size_t>(std::ceil(p * times.size())) - 1];
       };
       const double budget_ms = c.dt_s * c.compute_budget_ratio * 1000;
-      std::cout << count << ',' << repetitions << ',' << budget_ms << ',' << percentile(.5) << ','
-                << percentile(.95) << ',' << percentile(.99) << ',' << times.back() << ','
-                << budget_ms - times.back() << ',' << timeouts << ',' << overruns << ',' << other
-                << '\n';
+      std::cout << input.reference_path.size() << ',' << count << ',' << repetitions << ','
+                << budget_ms << ',' << percentile(.5) << ',' << percentile(.95) << ','
+                << percentile(.99) << ',' << times.back() << ',' << budget_ms - times.back() << ','
+                << timeouts << ',' << overruns << ',' << other << '\n';
       failures += other + (strict ? timeouts + overruns : 0);
     }
     // CI records timing; an operator can opt into a target-host acceptance gate.

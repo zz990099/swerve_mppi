@@ -191,6 +191,16 @@ still require confirmed feedback. Stopping checks do not optimize motion.
 
 ## Workspaces and diagnostics
 
+Planning builds one immutable geometry frame per compute: exact segment and circle
+AABB trees plus local curvature. All mode branches reuse it. Prepared scoring
+validates the complete context once, checks every new trajectory/anchor/sweep and
+runs every injected hard constraint. The token is private to the synchronous
+planning call; public CriticManager::score and TrajectoryValidator::check always
+validate their own context. Copies may share immutable indices, never mutable
+workspace. Tree queries preserve ordered ties, all segments and all circles;
+there is no geometric simplification or lossy obstacle filtering. AABBs round
+outwards. Nonrepresentable narrow-phase geometry fails closed.
+
 Optimizer preallocates proposal noise, active masks, candidate/weighted controls
 and reuses one rollout trace. It copies trajectory data only for nominal/weighted
 results or an improved safety fallback, preserving value ownership. RolloutEngine
@@ -202,8 +212,8 @@ Controller retains RolloutEngine, a shared hard validator and control storage fo
 capture/alignment safety checks. It copies only the pruned path into planning
 input. PathManager starts geometry scans with arc-length binary lookup and stops
 at the match/lookahead bounds; full input validation and geometry identity checks
-still scan the supplied task path. PathCritic compares squared distances and
-interpolates body yaw only at the nearest segment.
+still scan the supplied task path. PathCritic uses exact branch-and-bound nearest-segment queries and interpolates
+body yaw only at the earliest nearest segment.
 
 Output::control_policy identifies Tracking, Alignment, Capture, ModeTransition,
 Stopped, Blocked or Fault. FailureReason separates invalid data, clock/path/feedback
