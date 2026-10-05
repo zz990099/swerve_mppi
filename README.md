@@ -12,6 +12,14 @@ header migration and the official ROS Rolling formatting/checking workflow.
 
 ## Build, test and install
 
+Version 0.20.3 adds configurable live-budget measurement and an opt-in target-host
+timeout gate to `swerve_mppi_integration_budget`; control semantics remain 0.20.2.
+The companion `swerve_gazebo_sim` repository now supplies the ROS planning node,
+explicit execution controller and physical closed-loop regressions on
+Humble/Fortress and Jazzy/Harmonic. Those results apply to the bundled nominal
+plant; independent localization, slip uncertainty and hardware calibration remain
+integration work. Older release notes below describe historical milestones.
+
 Version 0.20.2 enters checked terminal translation for a GoalOnly task that starts
 in Spin, preventing finite-horizon switch costs from retaining a mode that cannot
 advance position. Mode dwell, measured stopping, full transition and complete-stop

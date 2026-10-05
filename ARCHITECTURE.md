@@ -316,7 +316,14 @@ They cannot detect process silence without calls; actuators need an independent
 watchdog. Direct ChassisExecutor is the synchronous body-command reference entry point,
 without command envelopes or independent trajectory admission. See docs/EXECUTION_CONTRACT.md for the guarded API.
 
-The next adapter should own message/TF conversion, feedback timestamps, simulation time,
+The companion `swerve_gazebo_sim` repository implements the ROS planning node,
+physics-stamped execution boundary, mode protocol, watchdogs and bounded physical
+closed-loop tests. Its shared safety configuration binds the collision envelope
+to model geometry; installed-profile forecasts support independent plant-error
+measurement. These nominal simulator checks do not certify arbitrary plants.
+Independent localization/TF and Nav2 lifecycle support remain subsequent work.
+
+A production adapter must own message/TF conversion, feedback timestamps, simulation time,
 task IDs, transport for the mode command/feedback protocol and deliberate recovery.
 A later Nav2 adapter adds lifecycle/cancellation handling, path frame transforms
 and costmap/footprint queries. Core PathManager now owns ordered path progress and

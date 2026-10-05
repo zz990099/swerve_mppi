@@ -1,4 +1,33 @@
-# Core workspaces, diagnostics and measurement (0.13)
+# Core workspaces, diagnostics and measurement (0.20.3)
+
+## Target-host live-budget acceptance
+
+`swerve_mppi_integration_budget` measures cold MPPI planning, execution admission
+and profile installation/sampling for 0, 40 and 128 nearby static obstacles.
+Use the same live compute ratio as the ROS planner, on the intended CPU and with
+the normal competing workload. The ROS node currently uses 0.6, or 60 ms per
+100 ms model interval:
+
+```bash
+./build-release/swerve_mppi_integration_budget 200 --budget-ratio 0.6 > budget.csv
+./build-release/swerve_mppi_integration_budget 200 --budget-ratio 0.6 --strict > acceptance.csv
+```
+
+Each row reports P50/P95/P99/max pipeline time, minimum headroom, controller
+timeouts, total-pipeline budget overruns and other failures. `--strict` returns
+nonzero for any timeout, overrun or functional failure. Without it, timeout and
+overrun counts are recorded while functional failures still return nonzero.
+Ratios must be finite and in (0,1]; zero cannot disable the live measurement.
+The old positional repetition-count command remains supported.
+
+This is a fixed cold-start workload, not a ROS transport benchmark or a hard
+real-time proof. Input count limits bound work but do not guarantee throughput.
+Choose supported obstacle density from measurements, keeping a transport and
+execution margin. Physical tests in the companion simulator additionally export
+one-interval relative-motion prediction error against independent Gazebo truth.
+
+The following sections include historical measurement results; rerun the tools
+for the current source rather than treating old CSVs as current performance.
 
 Stage 3 covers standalone core performance and observability. No simulator,
 ROS adapter, transport protocol or hardware integration was added. Tracking

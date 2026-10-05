@@ -10,7 +10,36 @@ using namespace swerve_mppi;
 int main(int argc, char ** argv)
 {
   try {
-    const int repetitions = argc == 2 ? std::stoi(argv[1]) : 50;
+    int repetitions = 50;
+    double budget_ratio = .8;
+    bool strict = false;
+    bool have_repetitions = false;
+    for (int i = 1; i < argc; ++i) {
+      const std::string argument = argv[i];
+      if (argument == "--strict") {
+        strict = true;
+      } else if (argument == "--budget-ratio" && i + 1 < argc) {
+        const std::string value = argv[++i];
+        std::size_t used = 0;
+        budget_ratio = std::stod(value, &used);
+        if (used != value.size()) {
+          throw std::invalid_argument("invalid budget ratio");
+        }
+      } else if (!have_repetitions && argument.rfind("--", 0) != 0) {
+        std::size_t used = 0;
+        repetitions = std::stoi(argument, &used);
+        if (used != argument.size()) {
+          throw std::invalid_argument("invalid repetition count");
+        }
+        have_repetitions = true;
+      } else {
+        throw std::invalid_argument(
+          "usage: integration_budget [repetitions] [--budget-ratio ratio] [--strict]");
+      }
+    }
+    if (!std::isfinite(budget_ratio) || budget_ratio <= 0 || budget_ratio > 1) {
+      throw std::invalid_argument("budget ratio must be finite and in (0, 1]");
+    }
     if (repetitions < 2 || repetitions > 10000) {
       throw std::invalid_argument("repetitions must be 2..10000");
     }
@@ -20,6 +49,7 @@ int main(int argc, char ** argv)
     int failures = 0;
     for (int count : {0, 40, 128}) {
       Config c;  // Production budget enabled. Never disable it for this probe.
+      c.compute_budget_ratio = budget_ratio;
       auto input = test::scenario_input("curve");
       input.obstacles.clear();
       for (int i = 0; i < count; ++i) {
@@ -77,10 +107,10 @@ int main(int argc, char ** argv)
                 << percentile(.95) << ',' << percentile(.99) << ',' << times.back() << ','
                 << budget_ms - times.back() << ',' << timeouts << ',' << overruns << ',' << other
                 << '\n';
-      failures += other;
+      failures += other + (strict ? timeouts + overruns : 0);
     }
-    return failures ? 1 : 0;  // Timing measurements are not a host-specific CI
-                              // threshold.
+    // CI records timing; an operator can opt into a target-host acceptance gate.
+    return failures ? 1 : 0;
   } catch (const std::exception & e) {
     std::cerr << e.what() << '\n';
     return 1;

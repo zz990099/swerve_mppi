@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.20.2 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.20.3 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -102,6 +102,12 @@ if(SWERVE_MPPI_BUILD_BENCHMARKS)
   if(SWERVE_MPPI_BUILD_TESTS)
     add_test(NAME benchmark_allocations COMMAND swerve_mppi_benchmark --smoke)
     set_tests_properties(benchmark_allocations PROPERTIES TIMEOUT 60)
+    add_test(NAME integration_budget_invalid_ratio
+      COMMAND swerve_mppi_integration_budget 2 --budget-ratio 0)
+    add_test(NAME integration_budget_strict_timeout
+      COMMAND swerve_mppi_integration_budget 2 --budget-ratio 0.000001 --strict)
+    set_tests_properties(integration_budget_invalid_ratio integration_budget_strict_timeout
+      PROPERTIES WILL_FAIL TRUE TIMEOUT 60)
   endif()
 endif()
 
