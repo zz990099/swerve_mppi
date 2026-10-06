@@ -14,6 +14,13 @@ header migration and the official ROS Rolling formatting/checking workflow.
 
 ## Build, test and install
 
+Version 0.21.4 completes pre-integration preparation with full peer configuration
+exchange, immutable adapter/frame/clock contracts, explicit profile revocation and
+a serialized offline owner acceptance fixture. It adds no ROS/Gazebo wiring and
+preserves nominal model admission. See [docs/ADAPTER_READINESS.md](docs/ADAPTER_READINESS.md)
+and [docs/ADAPTER_ACCEPTANCE.md](docs/ADAPTER_ACCEPTANCE.md) for enforced API boundaries,
+caller obligations and remaining physical/runtime acceptance.
+
 Version 0.21.3 adds a stateless independent motion-observation API and a 720-sample
 offline lag/noise/slip/delay matrix. It distinguishes diagnostic uncertainty bounds
 from nominal model admission and independently observed stopping from stopped

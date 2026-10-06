@@ -240,7 +240,9 @@ Config with_config_parameters(const Config & base, const std::vector<ConfigParam
   validate(result);
   return result;
 }
-Config parse_config_profile(std::string_view text, const Config & base)
+namespace
+{
+Config parse_profile(std::string_view text, const Config & base, bool complete)
 {
   if (text.size() > 65536) {
     throw std::invalid_argument("configuration profile exceeds 64 KiB");
@@ -280,8 +282,26 @@ Config parse_config_profile(std::string_view text, const Config & base)
         "configuration line " + std::to_string(line_number) + ": " + error.what());
     }
   }
+  if (complete && seen.size() != std::size(parameters)) {
+    std::string missing;
+    for (const auto & p : parameters) {
+      if (std::find(seen.begin(), seen.end(), p.info.name) == seen.end()) {
+        missing += (missing.empty() ? "" : ", ") + std::string(p.info.name);
+      }
+    }
+    throw std::invalid_argument("incomplete resolved configuration: " + missing);
+  }
   validate(result);
   return result;
+}
+}  // namespace
+Config parse_config_profile(std::string_view text, const Config & base)
+{
+  return parse_profile(text, base, false);
+}
+Config parse_resolved_config_profile(std::string_view text)
+{
+  return parse_profile(text, Config{}, true);
 }
 std::string write_config_profile(const Config & config)
 {

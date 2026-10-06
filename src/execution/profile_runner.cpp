@@ -22,6 +22,7 @@ void ProfileRunner::stop()
   plan_.reset();
   fault_ = true;
 }
+void ProfileRunner::cancel() { stop(); }
 bool ProfileRunner::clock_valid(double now_s, double wall_s)
 {
   if (

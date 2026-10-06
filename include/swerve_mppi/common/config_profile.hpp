@@ -45,6 +45,9 @@ Config with_config_parameters(const Config & base, const std::vector<ConfigParam
 // Integer values are unsigned decimal; real values allow decimal exponents.
 // Input is bounded to 64 KiB. Empty profiles preserve the validated base.
 Config parse_config_profile(std::string_view text, const Config & base = Config{});
+// Peer exchange requires every registered parameter exactly once. Unlike an
+// override profile, omitted fields never inherit local defaults.
+Config parse_resolved_config_profile(std::string_view text);
 std::string write_config_profile(const Config & config);
 // Exact shared-setting comparison, before arming. Neither tolerant numeric
 // matching nor a hash can establish agreement. Returns the differing names.

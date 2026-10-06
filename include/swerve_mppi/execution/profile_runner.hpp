@@ -20,6 +20,10 @@ public:
   bool install(const TimedExecutionResult & result, double application_s, double wall_s);
   std::optional<JointTargets> sample(double now_s, double wall_s);
   bool fault() const { return fault_; }
+  // External ingress/plant/endpoint fault: revoke the installed profile and
+  // latch immediately, without inventing a malformed timed result. This does
+  // not command physical braking; the owner must invoke its stop channel.
+  void cancel();
   // Called only after the owner independently stops/verifies the plant and
   // renews the TimedExecutor session. It cannot reset that protocol itself.
   void reset(const VehicleState & recovered);

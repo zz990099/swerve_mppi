@@ -365,6 +365,13 @@ admission/stopping settings exactly before arming. The caller must obtain both
 resolved configurations and invoke the checks; constructors and existing external
 adapters retain their current validation paths. See docs/CONFIGURATION.md.
 
+Version 0.21.4 adds transport-free integration metadata validation, complete
+resolved-peer profiles and explicit ProfileRunner cancellation. These startup/
+ingress contracts join existing modules without adding another mode/actuator
+supervisor. A serialized offline owner fixture demonstrates strict ingress, command
+lifetime, immediate profile revocation and supervised recovery; it is not a live
+ROS adapter. See docs/ADAPTER_READINESS.md and docs/ADAPTER_ACCEPTANCE.md.
+
 Version 0.21.3 adds an independent motion-observation sidecar with explicit source
 provenance, original integer timestamps and deterministic residual bounds. It
 never rewrites state or authorizes execution. Independent lag/noise/slip/delay

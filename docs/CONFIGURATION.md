@@ -95,3 +95,13 @@ profile does not certify tracking for that configuration.
 The companion ROS and Gazebo packages have not been migrated to this API in this
 stage. Their existing parameter mapping and nominal closed-loop evidence remain
 separate. See [PREPARATION_PLAN.md](PREPARATION_PLAN.md) for the remaining work.
+
+## Complete peer exchange (0.21.4)
+
+Local override files may still omit fields. A peer's resolved configuration must
+use `parse_resolved_config_profile`, which requires every registered field exactly
+once and never inherits omitted values from local defaults. `AdapterContract`
+uses this parser and live-budget validation, then joins exact shared configuration
+comparison with explicit frame/clock/policy/timing/watchdog agreement. See
+[ADAPTER_READINESS.md](ADAPTER_READINESS.md) for transport decoding and arming
+obligations. Existing callers of `parse_config_profile` retain override semantics.

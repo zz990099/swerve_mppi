@@ -7,6 +7,13 @@ point and by core tests. ChassisExecutor is the synchronous body-command referen
 entry point; it omits the timed/context trajectory guards. Its endpoint arrays alone are not a complete checked
 actuator reference. Neither class simulates actuators or certifies physical tracking.
 
+Version 0.21.4 adds `ProfileRunner::cancel()` for immediate external-fault
+revocation: clear the installed interval and latch before publishing another sample,
+then invoke the independent physical stop channel. It does not renew/reset the
+executor session or prove physical stop. Complete peer profiles and exact frame/
+clock contracts are specified in [ADAPTER_READINESS.md](ADAPTER_READINESS.md);
+legacy adapters must explicitly adopt them.
+
 ## Request and feedback
 
 | Field | Meaning |

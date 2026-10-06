@@ -9,6 +9,12 @@ preparation reference; they are not a current deployment acceptance report.
 See [PREPARATION_PLAN.md](PREPARATION_PLAN.md) for the active core-only scope and
 [CONFIGURATION.md](CONFIGURATION.md) for the new startup configuration contract.
 
+Version 0.21.4 completes the active portable preparation series. Use
+[ADAPTER_READINESS.md](ADAPTER_READINESS.md) and
+[ADAPTER_ACCEPTANCE.md](ADAPTER_ACCEPTANCE.md) for complete peer profiles,
+frame/clock identity, immediate external-fault revocation and supervised recovery.
+These APIs do not retrofit the unchanged companion adapter automatically.
+
 ## Coherent feedback and scheduling
 
 For ROS ingress use `FeedbackAdapter::make_at_nanoseconds`: retain the original

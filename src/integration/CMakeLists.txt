@@ -1,0 +1,1 @@
+target_sources(swerve_mppi_core PRIVATE adapter_contract.cpp)

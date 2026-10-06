@@ -6,6 +6,7 @@
 #include "swerve_mppi/feedback/feedback.hpp"
 #include "swerve_mppi/feedback/feedback_adapter.hpp"
 #include "swerve_mppi/feedback/motion_observer.hpp"
+#include "swerve_mppi/integration/adapter_contract.hpp"
 #include "swerve_mppi/navigation/navigation.hpp"
 #include "swerve_mppi/planning/controller.hpp"
 #include "swerve_mppi/planning/optimizer.hpp"
@@ -20,6 +21,19 @@ int main()
   const auto restored =
     swerve_mppi::parse_config_profile(swerve_mppi::write_config_profile(configured));
   swerve_mppi::require_execution_compatible(configured, restored);
+  const swerve_mppi::AdapterMetadata metadata{
+    1,
+    "odom",
+    "base_link",
+    {"consumer_clock", 1},
+    swerve_mppi::MotionEvidencePolicy::IndependentNominal,
+    swerve_mppi::TimingLimits{},
+    .5};
+  const swerve_mppi::AdapterContract contract(
+    swerve_mppi::write_config_profile(restored), metadata);
+  swerve_mppi::require_adapter_compatible(contract, contract);
+  swerve_mppi::SnapshotMetadata absent_snapshot;
+  const auto frame_error = swerve_mppi::check_snapshot_contract(contract, absent_snapshot);
   swerve_mppi::validate_live_config(restored);
   swerve_mppi::Optimizer optimizer(swerve_mppi::Config{});
   optimizer.clear_warm_start();
@@ -43,6 +57,8 @@ int main()
   swerve_mppi::ProfileRunner runner(swerve_mppi::Config{});
   const bool installed = runner.install(guarded, 0, 1);
   const auto joints = runner.sample(.05, 1.05);
+  runner.cancel();
+  const bool revoked = runner.fault() && !runner.sample(.05, 1.05);
   const auto nominal_stop = swerve_mppi::ActuationModel(swerve_mppi::Config{})
                               .plan_stopping(current.vehicle, swerve_mppi::Action::Hold, {});
   swerve_mppi::TrajectoryValidator validator(swerve_mppi::Config{});
@@ -62,10 +78,11 @@ int main()
   swerve_mppi::ControllerInput input;
   input.reference_path = {{0, 0, 0}};
   const auto path = paths.update(input);
-  return motion.status == swerve_mppi::MotionStatus::NominalAgreement && motion.body_stationary &&
-             restored.max_linear_accel_mps2 == .5 && restored.random_seed == 7 &&
-             !controller.compute({}).command && result.feedback.confirmed &&
-             guarded.timing_error == swerve_mppi::TimingError::None &&
+  return revoked && frame_error == swerve_mppi::SnapshotContractError::InvalidMetadata &&
+             motion.status == swerve_mppi::MotionStatus::NominalAgreement &&
+             motion.body_stationary && restored.max_linear_accel_mps2 == .5 &&
+             restored.random_seed == 7 && !controller.compute({}).command &&
+             result.feedback.confirmed && guarded.timing_error == swerve_mppi::TimingError::None &&
              guarded.safety_error == swerve_mppi::ExecutionSafetyError::None && midpoint &&
              midpoint->wheel_speeds[0] == 0 && installed && joints &&
              swerve_mppi::check_feedback({}, swerve_mppi::Config{}).status ==

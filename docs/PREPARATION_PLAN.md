@@ -20,7 +20,7 @@ replace the swerve mode handshake or the execution supervisor.
 | 1: configuration foundation (complete, 0.21.1) | Complete typed registry, portable profiles, execution compatibility API, resolved benchmark configuration, current-status documentation | Configuration and installed-consumer regressions; existing core suite; no ROS/Gazebo code changes |
 | 2: timing and workload diagnostics (complete, 0.21.2) | Separate controller and full-pipeline costs, per-call work/status traces, nine-case matrix with configuration/build/source/host evidence | Recording versus strict acceptance; deterministic accounting tests and CLI/manifest cross-checks; target-host procedure; no library callback instrumentation |
 | 3: model and feedback preparation (complete, 0.21.3) | Independent observation/bounded residual API, explicit nominal-only fault/stop policy, 720-sample independent lag/noise/slip/delay matrix | Fault/stop/mode invariants remain fail-closed; model prediction error is measured against independent observations; no silent tolerance widening |
-| 4: adapter readiness | Specify resolved-config exchange, coherent state frames/timestamps, command lifetime, watchdog and recovery ownership; core contract fixtures and checklist | Reviewable pre-integration interface and offline acceptance matrix; no new simulator/ROS wiring |
+| 4: adapter readiness (complete, 0.21.4) | Complete peer profile parser, immutable adapter/frame/clock contract, explicit profile revocation, serialized offline owner fixture and acceptance checklist | Reviewable pre-integration interface and offline acceptance matrix; no new simulator/ROS wiring |
 
 Stage 1 adds APIs and measurement support. It does not make configuration agreement
 automatic across processes, relax the 1e-9 nominal model agreement gate, prove the
@@ -41,10 +41,17 @@ stop evidence during chassis coasting. Noisy bounded residuals remain inadmissib
 accepting them requires reviewed robust stopping/transition envelopes and physical
 identification. See MODEL_FEEDBACK.md for the exact uncertainty and fault policy.
 
-Stage 4 is the next implementation batch. Package resolved-config exchange,
-coherent frames/timestamps, command lifetime, independent evidence and stop/watchdog/
-recovery ownership into reviewable pre-integration contracts and offline fixtures.
-It must make enforcement obligations clear without introducing ROS/Gazebo wiring.
+Stage 4 supplies startup contract and original frame/clock/stamp checks plus
+ProfileRunner::cancel for immediate external-fault profile revocation. A serialized
+offline owner fixture exercises binding to an independent current callback clock,
+strict independent motion, complete command/task lifetime, continuous stopped
+recovery and acknowledged drain/endpoint stop. The contract APIs do not automatically
+arm or retrofit external callers. See ADAPTER_READINESS.md and ADAPTER_ACCEPTANCE.md.
+
+Preparation stages 1..4 are complete. No further implementation phase runs under
+this request. Review the unchanged companion against these contracts before any
+subsequent migration; independent noisy/slipping motion, physical braking guarantees
+and target-host scheduling acceptance remain open.
 
 Actual ROS/Gazebo migration, new physical tests, independent localization and a
 Nav2 controller plugin are subsequent work outside this preparation request.
