@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.21.1 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.21.2 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -98,10 +98,27 @@ if(SWERVE_MPPI_BUILD_BENCHMARKS)
   add_executable(swerve_mppi_integration_budget benchmarks/integration_budget.cpp)
   target_include_directories(swerve_mppi_integration_budget PRIVATE tests/fixtures)
   target_link_libraries(swerve_mppi_integration_budget PRIVATE swerve_mppi_core)
+  target_compile_definitions(swerve_mppi_integration_budget PRIVATE
+    SWERVE_MPPI_TOOL_VERSION="${PROJECT_VERSION}"
+    SWERVE_MPPI_TOOL_BUILD_TYPE="$<CONFIG>"
+    SWERVE_MPPI_TOOL_COMPILER="${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
   add_executable(swerve_mppi_benchmark benchmarks/core_benchmark.cpp)
   target_include_directories(swerve_mppi_benchmark PRIVATE tests/fixtures)
   target_link_libraries(swerve_mppi_benchmark PRIVATE swerve_mppi_core)
   if(SWERVE_MPPI_BUILD_TESTS)
+    add_executable(swerve_mppi_budget_report_tests tests/integration/budget_report_tests.cpp)
+    target_include_directories(swerve_mppi_budget_report_tests PRIVATE benchmarks)
+    target_link_libraries(swerve_mppi_budget_report_tests PRIVATE swerve_mppi_core)
+    add_test(NAME budget_report_regressions COMMAND swerve_mppi_budget_report_tests)
+    set_tests_properties(budget_report_regressions PROPERTIES TIMEOUT 60)
+    if(Python3_Interpreter_FOUND)
+      add_test(NAME budget_diagnostics_cli
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/budget_diagnostics_test.py
+          --tool $<TARGET_FILE:swerve_mppi_integration_budget>
+          --runner ${CMAKE_CURRENT_SOURCE_DIR}/tools/run_budget_matrix.py
+          --expected-version ${PROJECT_VERSION})
+      set_tests_properties(budget_diagnostics_cli PROPERTIES TIMEOUT 60)
+    endif()
     add_test(NAME benchmark_allocations COMMAND swerve_mppi_benchmark --smoke)
     set_tests_properties(benchmark_allocations PROPERTIES TIMEOUT 60)
     add_test(NAME integration_budget_profile

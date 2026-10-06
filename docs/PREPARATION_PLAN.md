@@ -17,8 +17,8 @@ replace the swerve mode handshake or the execution supervisor.
 
 | Stage | Deliverable | Acceptance boundary |
 | --- | --- | --- |
-| 1: configuration foundation | Complete typed registry, portable profiles, execution compatibility API, resolved benchmark configuration, current-status documentation | Configuration and installed-consumer regressions; existing core suite; no ROS/Gazebo code changes |
-| 2: timing and workload diagnostics | Separate planning and full-pipeline costs, record workload/branch/evaluation counts with configuration, reproducible offline workload matrix | Functional failures distinguished from cooperative timeouts and pipeline overruns; tests of accounting; target-host procedure |
+| 1: configuration foundation (complete, 0.21.1) | Complete typed registry, portable profiles, execution compatibility API, resolved benchmark configuration, current-status documentation | Configuration and installed-consumer regressions; existing core suite; no ROS/Gazebo code changes |
+| 2: timing and workload diagnostics (complete, 0.21.2) | Separate controller and full-pipeline costs, per-call work/status traces, nine-case matrix with configuration/build/source/host evidence | Recording versus strict acceptance; deterministic accounting tests and CLI/manifest cross-checks; target-host procedure; no library callback instrumentation |
 | 3: model and feedback preparation | Characterize the current exact encoder/body admission assumption; design explicit bounded uncertainty and fault contracts; add independent offline lag/noise/slip probes | Fault/stop/mode invariants remain fail-closed; model prediction error is measured against independent observations; no silent tolerance widening |
 | 4: adapter readiness | Specify resolved-config exchange, coherent state frames/timestamps, command lifetime, watchdog and recovery ownership; core contract fixtures and checklist | Reviewable pre-integration interface and offline acceptance matrix; no new simulator/ROS wiring |
 
@@ -26,12 +26,15 @@ Stage 1 adds APIs and measurement support. It does not make configuration agreem
 automatic across processes, relax the 1e-9 nominal model agreement gate, prove the
 60 ms target-host budget, or address live executor scheduling stalls.
 
-Stage 2 is the next implementation batch. It should retain the existing bounded
-input policy and all safety gates, and expose enough evidence to decide whether
-cost traversal, branch count, sample count or external scheduling dominates. CI
-records timing; strict runtime acceptance belongs on the intended CPU.
+Stage 2 preserves the bounded input policy and all safety gates. Controller timing
+includes path preparation, geometry, optimization and safety work; it is not an
+optimizer-only measurement. Changing input density and sample/horizon profiles
+supports scaling comparisons. Process CPU gaps are hints rather than proof of
+scheduling causes; internal critic/rollout profiling and live executor stall
+diagnosis remain separate investigations. CI records timing; strict runtime
+acceptance belongs on the intended CPU. See BUDGET_DIAGNOSTICS.md.
 
-Stage 3 requires a concrete uncertainty policy before changing model admission.
+Stage 3 is the next implementation batch and requires a concrete uncertainty policy before changing model admission.
 Measured body motion, encoder kinematics and stopping certification must have
 separate responsibilities. Offline probes can reveal unsafe assumptions without
 claiming physical calibration. Stage 4 packages those decisions for later use.

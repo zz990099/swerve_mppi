@@ -39,14 +39,19 @@ jobs:
 
       - name: Record production integration budget (Release)
         if: matrix.build_type == 'Release'
+        run: >-
+          python tools/run_budget_matrix.py
+          --executable build/swerve_mppi_integration_budget
+          --output-dir build/integration-budget
+          --repetitions 50 --budget-ratio 0.6
+      - name: Publish workload summary
+        if: always() && matrix.build_type == 'Release'
         run: |
-          ./build/swerve_mppi_integration_budget 50 --budget-ratio 0.6 --write-config build/integration-budget.conf > build/integration-budget.csv
-          ./build/swerve_mppi_integration_budget 50 --config build/integration-budget.conf --path-points 4096 > build/integration-budget-dense.csv
+          if test -f build/integration-budget/report.md; then
+            tee -a "$GITHUB_STEP_SUMMARY" < build/integration-budget/report.md
+          fi
       - uses: actions/upload-artifact@v4
-        if: matrix.build_type == 'Release'
+        if: always() && matrix.build_type == 'Release'
         with:
           name: integration-budget
-          path: |
-            build/integration-budget.csv
-            build/integration-budget-dense.csv
-            build/integration-budget.conf
+          path: build/integration-budget/

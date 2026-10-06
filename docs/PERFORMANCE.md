@@ -1,10 +1,16 @@
-# Core workspaces, diagnostics and measurement (0.21.1)
+# Core workspaces, diagnostics and measurement (0.21.2)
 
 The pipeline tool accepts `--config profile.conf` and `--write-config resolved.conf`.
 Profile values override defaults; an explicit `--budget-ratio` overrides the profile
-independent of argument order. CI uploads the resolved profile beside its ordinary
-and dense-path CSVs. See [CONFIGURATION.md](CONFIGURATION.md) for parsing, live
-budget checks and the configuration compatibility boundary.
+independent of argument order. CI preserves the resolved profile beside the
+workload summary and per-call traces. See [CONFIGURATION.md](CONFIGURATION.md) for parsing, live
+budget checks and the configuration compatibility boundary. Version 0.21.2
+preserves the leading summary columns and adds stage distributions, actual work
+counts and mutually exclusive root failure counts. `--trace` writes individual
+calls; `--matrix` runs 41/401/4096-point paths at 0/40/128 circles. CI now uploads
+the complete nine-case report directory. See
+[BUDGET_DIAGNOSTICS.md](BUDGET_DIAGNOSTICS.md) for schema 2, CPU clock interpretation,
+report evidence and acceptance accounting.
 
 ## Target-host live-budget acceptance
 
@@ -25,6 +31,13 @@ nonzero for any timeout, overrun or functional failure. Without it, timeout and
 overrun counts are recorded while functional failures still return nonzero.
 Ratios must be finite and in (0,1]; zero cannot disable the live measurement.
 The old positional repetition-count command remains supported.
+
+Functional failures now count failed calls by their first failing stage, rather
+than multiple events in one call. A controller failure reason, rejected admission
+(including a safe fallback), failed installation or missing initial/endpoint
+sample is a functional failure of this workload. Timeout withholding remains an
+expected fail-closed outcome in recording mode; any authorization after a timeout
+is a functional failure. Raw traces retain secondary error/status fields.
 
 This is a fixed cold-start workload, not a ROS transport benchmark or a hard
 real-time proof. Input count limits bound work but do not guarantee throughput.
@@ -213,7 +226,7 @@ Version 0.8 has a fresh committed measurement matrix; see CORE_REVIEW_VALIDATION
 ## 0.21 live-workload acceptance
 
 The ROS node uses a 0.6 compute ratio (60 ms at the fixed 100 ms model tick).
-CI records both ordinary and 4096-point contexts, each at 0/40/128 circles,
+CI records 41/401/4096-point contexts, each at 0/40/128 circles,
 50 cold repetitions. Shared runners record timing rather than claiming a
 hardware real-time guarantee. On the actual deployment CPU run both gates:
 

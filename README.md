@@ -14,6 +14,12 @@ header migration and the official ROS Rolling formatting/checking workflow.
 
 ## Build, test and install
 
+Version 0.21.2 adds offline pipeline stage timing, per-call work/failure traces and
+a nine-case workload matrix with resolved configuration, binary/build/source/host
+metadata and artifact hashes. Library interfaces and algorithms remain unchanged.
+See [docs/BUDGET_DIAGNOSTICS.md](docs/BUDGET_DIAGNOSTICS.md) for reproduction and
+the distinction between recording performance and strict target-host acceptance.
+
 Version 0.21.1 adds a complete typed configuration registry, portable profiles,
 startup planning/execution compatibility checks and resolved configuration
 artifacts for pipeline benchmarks. Core defaults and controller semantics remain
