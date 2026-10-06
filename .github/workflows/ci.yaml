@@ -40,8 +40,8 @@ jobs:
       - name: Record production integration budget (Release)
         if: matrix.build_type == 'Release'
         run: |
-          ./build/swerve_mppi_integration_budget 50 --budget-ratio 0.6 > build/integration-budget.csv
-          ./build/swerve_mppi_integration_budget 50 --budget-ratio 0.6 --path-points 4096 > build/integration-budget-dense.csv
+          ./build/swerve_mppi_integration_budget 50 --budget-ratio 0.6 --write-config build/integration-budget.conf > build/integration-budget.csv
+          ./build/swerve_mppi_integration_budget 50 --config build/integration-budget.conf --path-points 4096 > build/integration-budget-dense.csv
       - uses: actions/upload-artifact@v4
         if: matrix.build_type == 'Release'
         with:
@@ -49,3 +49,4 @@ jobs:
           path: |
             build/integration-budget.csv
             build/integration-budget-dense.csv
+            build/integration-budget.conf

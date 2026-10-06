@@ -6,11 +6,19 @@ mode branches, predicts braking and steering alignment, and waits for measured
 mode confirmation before driving after a switch.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for component responsibilities, execution
-contracts and remaining simulation integration work.
+contracts and remaining preparation work.
+See [docs/PREPARATION_PLAN.md](docs/PREPARATION_PLAN.md) for the staged scope
+before further simulation integration.
 See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for module directories, the 0.19
 header migration and the official ROS Rolling formatting/checking workflow.
 
 ## Build, test and install
+
+Version 0.21.1 adds a complete typed configuration registry, portable profiles,
+startup planning/execution compatibility checks and resolved configuration
+artifacts for pipeline benchmarks. Core defaults and controller semantics remain
+unchanged. This stage changes no ROS or Gazebo integration. See
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the API and its caller obligations.
 
 Version 0.21.0 adds shared fail-closed segment geometry and exact immutable spatial
 indices reused across every branch of a planning call. Public scoring and execution
@@ -147,7 +155,10 @@ It reports solve-time percentiles, allocations and path/completion metrics as CS
 See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for commands and measurement limits.
 The optional allocation regression runs in CI; wall-clock timing is not a CI gate.
 
-## Current status
+## Historical milestones
+
+The following notes describe the state and future work at each older release.
+For current readiness and the active preparation scope use the documents above.
 
 Version 0.19 organizes public headers, implementations and tests into seven functional
 modules, removes model-to-executor header coupling for shared value types and narrows
@@ -320,11 +331,11 @@ angle. Update custom execution supervisors accordingly; do not reconstruct wheel
 commands from body twist and discard these joint targets. Nonfinite body commands
 and excessive moving steering steps are rejected by ModeExecutor.
 
-This is a core research prototype. It has no ROS node or Nav2 plugin, and has not
-been validated in a combined Gazebo closed loop. Obstacles and the footprint are
-circles, and each horizon allows one mode change. Footprint/costmap queries,
-actuator-delay calibration, solve-time profiling and transport adapters remain
-future work. Path tracking and completion are implemented for ordered task paths;
+This remains a research core. The companion repository supplies the ROS node and
+nominal Gazebo closed-loop validation; a Nav2 plugin remains future work. Obstacles
+and the footprint are circles, and each horizon allows one mode change. Costmap
+queries, uncertainty-aware model admission, plant calibration and target-host
+runtime acceptance remain preparation/integration work. Path tracking and completion are implemented for ordered task paths;
 localization jumps and unrestricted global-path reacquisition are not supported. The typed
 mode contract and standalone execution supervisor are implemented and tested.
 These core tests do not establish agreement with physical or Gazebo dynamics.

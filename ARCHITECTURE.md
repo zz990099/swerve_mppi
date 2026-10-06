@@ -353,10 +353,17 @@ projection, critic extension, swept collisions and deterministic straight-path
 closed-loop progress. CTest also installs the library into a clean prefix and
 builds/runs an independent consumer through find_package().
 
-These tests validate core contracts, not Gazebo tracking performance. The next
-stage must compare predicted trajectories against independent Gazebo truth and
-measure solve-time distributions, tracking error, mode-switch counts, stalls and
-faults.
+These tests validate core contracts, not Gazebo tracking performance. The companion
+repository has nominal physical tracking and independent Gazebo prediction-error
+probes. Broader uncertainty, scheduling and target-host runtime acceptance remain
+necessary; those results must not be inferred from core tests. See
+docs/PREPARATION_PLAN.md for the staged work before further integration.
+
+Version 0.21.1 adds a startup-only complete configuration registry and portable
+profiles. Planning and execution consumers can compare all shared model/protocol/
+admission/stopping settings exactly before arming. The caller must obtain both
+resolved configurations and invoke the checks; constructors and existing external
+adapters retain their current validation paths. See docs/CONFIGURATION.md.
 
 Default-noise behavior regressions cover fourteen scenarios and five fixed seeds,
 including reverse travel, terminal yaw, S-curves, reversals and a closed square.

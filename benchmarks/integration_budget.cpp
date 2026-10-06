@@ -1,9 +1,12 @@
 #include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 
 #include "behavior_fixture.hpp"
+#include "swerve_mppi/common/config_profile.hpp"
 #include "swerve_mppi/execution/profile_runner.hpp"
 #include "swerve_mppi/planning/controller.hpp"
 using namespace swerve_mppi;
@@ -11,7 +14,8 @@ int main(int argc, char ** argv)
 {
   try {
     int repetitions = 50;
-    double budget_ratio = .8;
+    std::optional<double> budget_ratio;
+    std::string config_path, resolved_path;
     bool strict = false;
     int path_points = 0;
     bool have_repetitions = false;
@@ -19,6 +23,22 @@ int main(int argc, char ** argv)
       const std::string argument = argv[i];
       if (argument == "--strict") {
         strict = true;
+      } else if (argument == "--config" && i + 1 < argc) {
+        if (!config_path.empty()) {
+          throw std::invalid_argument("duplicate --config");
+        }
+        config_path = argv[++i];
+        if (config_path.empty()) {
+          throw std::invalid_argument("empty --config path");
+        }
+      } else if (argument == "--write-config" && i + 1 < argc) {
+        if (!resolved_path.empty()) {
+          throw std::invalid_argument("duplicate --write-config");
+        }
+        resolved_path = argv[++i];
+        if (resolved_path.empty()) {
+          throw std::invalid_argument("empty --write-config path");
+        }
       } else if (argument == "--path-points" && i + 1 < argc) {
         const std::string value = argv[++i];
         std::size_t used = 0;
@@ -43,22 +63,52 @@ int main(int argc, char ** argv)
       } else {
         throw std::invalid_argument(
           "usage: integration_budget [repetitions] [--budget-ratio ratio] [--path-points count] "
-          "[--strict]");
+          "[--config profile] [--write-config resolved-profile] [--strict]");
       }
-    }
-    if (!std::isfinite(budget_ratio) || budget_ratio <= 0 || budget_ratio > 1) {
-      throw std::invalid_argument("budget ratio must be finite and in (0, 1]");
     }
     if (repetitions < 2 || repetitions > 10000) {
       throw std::invalid_argument("repetitions must be 2..10000");
+    }
+    Config config;
+    if (!config_path.empty()) {
+      std::ifstream file(config_path, std::ios::binary);
+      if (!file) {
+        throw std::invalid_argument("cannot read configuration profile: " + config_path);
+      }
+      std::string text(65537, '\0');
+      file.read(text.data(), static_cast<std::streamsize>(text.size()));
+      if (file.bad()) {
+        throw std::invalid_argument("failed to read configuration profile: " + config_path);
+      }
+      text.resize(static_cast<std::size_t>(file.gcount()));
+      config = parse_config_profile(text);
+    }
+    // Precedence is independent of command-line order: explicit ratio wins
+    // over the file, which otherwise overrides standalone defaults.
+    if (budget_ratio) {
+      config.compute_budget_ratio = *budget_ratio;
+    }
+    validate_live_config(config);
+    const auto workload_points = path_points ? static_cast<std::size_t>(path_points)
+                                             : test::scenario_input("curve").reference_path.size();
+    if (workload_points > config.max_path_points || config.max_obstacles < 128) {
+      throw std::invalid_argument("benchmark workload exceeds configured path/obstacle limits");
+    }
+    if (!resolved_path.empty()) {
+      std::ofstream file(resolved_path);
+      file << write_config_profile(config);
+      file.close();
+      if (!file) {
+        throw std::invalid_argument(
+          "cannot write resolved configuration profile: " + resolved_path);
+      }
     }
     std::cout << "path_points,obstacles,repetitions,budget_ms,p50_ms,p95_ms,p99_ms,max_ms,"
                  "min_headroom_ms,"
                  "compute_timeouts,total_overruns,other_failures\n";
     int failures = 0;
     for (int count : {0, 40, 128}) {
-      Config c;  // Production budget enabled. Never disable it for this probe.
-      c.compute_budget_ratio = budget_ratio;
+      const Config c = config;  // Live budget cannot be disabled for this probe.
       auto input = test::scenario_input("curve");
       if (path_points) {
         input.reference_path.clear();

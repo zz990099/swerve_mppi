@@ -1,3 +1,4 @@
+#include "swerve_mppi/common/config_profile.hpp"
 #include "swerve_mppi/execution/chassis_executor.hpp"
 #include "swerve_mppi/execution/executor.hpp"
 #include "swerve_mppi/execution/profile_runner.hpp"
@@ -9,6 +10,12 @@
 #include "swerve_mppi/planning/optimizer.hpp"
 int main()
 {
+  const auto configured =
+    swerve_mppi::parse_config_profile("max_linear_accel_mps2=.5\nrandom_seed=7");
+  const auto restored =
+    swerve_mppi::parse_config_profile(swerve_mppi::write_config_profile(configured));
+  swerve_mppi::require_execution_compatible(configured, restored);
+  swerve_mppi::validate_live_config(restored);
   swerve_mppi::Optimizer optimizer(swerve_mppi::Config{});
   optimizer.clear_warm_start();
   swerve_mppi::Controller controller(swerve_mppi::Config{});
@@ -50,7 +57,8 @@ int main()
   swerve_mppi::ControllerInput input;
   input.reference_path = {{0, 0, 0}};
   const auto path = paths.update(input);
-  return !controller.compute({}).command && result.feedback.confirmed &&
+  return restored.max_linear_accel_mps2 == .5 && restored.random_seed == 7 &&
+             !controller.compute({}).command && result.feedback.confirmed &&
              guarded.timing_error == swerve_mppi::TimingError::None &&
              guarded.safety_error == swerve_mppi::ExecutionSafetyError::None && midpoint &&
              midpoint->wheel_speeds[0] == 0 && installed && joints &&

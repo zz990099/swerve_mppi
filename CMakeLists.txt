@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.21.0 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.21.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -51,7 +51,7 @@ if(SWERVE_MPPI_BUILD_TESTS)
   target_include_directories(swerve_mppi_tests PRIVATE src tests/fixtures)
   add_test(NAME swerve_mppi_tests COMMAND swerve_mppi_tests)
   foreach(suite_path
-    model/model planning/optimizer execution/execution navigation/navigation
+    common/configuration model/model planning/optimizer execution/execution navigation/navigation
     safety/safety execution/timing model/actuation safety/admission integration/integration
     execution/chassis
   )
@@ -85,11 +85,13 @@ if(SWERVE_MPPI_BUILD_TESTS)
       -DTEST_COMPILER=${CMAKE_CXX_COMPILER}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_test.cmake)
   set_tests_properties(
-    swerve_mppi_tests model_regressions optimizer_regressions execution_regressions
+    swerve_mppi_tests configuration_regressions model_regressions optimizer_regressions execution_regressions
     navigation_regressions safety_regressions timing_regressions actuation_regressions
     admission_regressions integration_regressions chassis_regressions installed_consumer
     PROPERTIES TIMEOUT 60
   )
+  target_compile_definitions(swerve_mppi_configuration_tests PRIVATE
+    SWERVE_MPPI_DEFAULT_PROFILE="${CMAKE_CURRENT_SOURCE_DIR}/config/default.conf")
 endif()
 
 if(SWERVE_MPPI_BUILD_BENCHMARKS)
@@ -102,6 +104,12 @@ if(SWERVE_MPPI_BUILD_BENCHMARKS)
   if(SWERVE_MPPI_BUILD_TESTS)
     add_test(NAME benchmark_allocations COMMAND swerve_mppi_benchmark --smoke)
     set_tests_properties(benchmark_allocations PROPERTIES TIMEOUT 60)
+    add_test(NAME integration_budget_profile
+      COMMAND ${CMAKE_COMMAND}
+        -DBUDGET_TOOL=$<TARGET_FILE:swerve_mppi_integration_budget>
+        -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/budget-profile-test
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/budget_profile_test.cmake)
+    set_tests_properties(integration_budget_profile PROPERTIES TIMEOUT 60)
     add_test(NAME integration_budget_invalid_ratio
       COMMAND swerve_mppi_integration_budget 2 --budget-ratio 0)
     add_test(NAME integration_budget_strict_timeout
@@ -118,6 +126,7 @@ install(TARGETS swerve_mppi_core EXPORT swerve_mppiTargets
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES config/default.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/swerve_mppi)
 
 set(swerve_mppi_package_dir "${CMAKE_INSTALL_LIBDIR}/cmake/swerve_mppi")
 configure_package_config_file(

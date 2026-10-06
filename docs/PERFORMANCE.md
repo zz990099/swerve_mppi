@@ -1,4 +1,10 @@
-# Core workspaces, diagnostics and measurement (0.20.3)
+# Core workspaces, diagnostics and measurement (0.21.1)
+
+The pipeline tool accepts `--config profile.conf` and `--write-config resolved.conf`.
+Profile values override defaults; an explicit `--budget-ratio` overrides the profile
+independent of argument order. CI uploads the resolved profile beside its ordinary
+and dense-path CSVs. See [CONFIGURATION.md](CONFIGURATION.md) for parsing, live
+budget checks and the configuration compatibility boundary.
 
 ## Target-host live-budget acceptance
 
@@ -9,8 +15,8 @@ the normal competing workload. The ROS node currently uses 0.6, or 60 ms per
 100 ms model interval:
 
 ```bash
-./build-release/swerve_mppi_integration_budget 200 --budget-ratio 0.6 > budget.csv
-./build-release/swerve_mppi_integration_budget 200 --budget-ratio 0.6 --strict > acceptance.csv
+./build-release/swerve_mppi_integration_budget 200 --budget-ratio 0.6 --write-config budget.conf > budget.csv
+./build-release/swerve_mppi_integration_budget 200 --config budget.conf --strict > acceptance.csv
 ```
 
 Each row reports P50/P95/P99/max pipeline time, minimum headroom, controller

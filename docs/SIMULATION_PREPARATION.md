@@ -1,9 +1,13 @@
-# Simulation integration preparation (0.20)
+# Simulation integration preparation (historical 0.20 reference)
 
 This release supplies the feedback boundary, profile-consumer regressions and a
 production-budget measurement tool, plus an actionless chassis command boundary. The separate Gazebo package supplies an
-independent guarded ros2_control endpoint. A ROS MPPI planning node and physical
-MPPI tracking acceptance remain integration work.
+independent guarded ros2_control endpoint. The companion repository now also
+supplies a ROS MPPI planning node, explicit execution controller and nominal
+physical closed-loop regressions. The instructions below retain the original
+preparation reference; they are not a current deployment acceptance report.
+See [PREPARATION_PLAN.md](PREPARATION_PLAN.md) for the active core-only scope and
+[CONFIGURATION.md](CONFIGURATION.md) for the new startup configuration contract.
 
 ## Coherent feedback and scheduling
 
@@ -73,8 +77,8 @@ The protected Gazebo endpoint remains the final joint actuator boundary. It cons
 ProfileRunner samples produced after body-command admission; do not send nominal
 body targets or frozen mode-entry intent directly to its joint packet. Existing
 Gazebo Twist control is not the complete timed/task/mode-acknowledgement protocol.
-A ROS chassis-command message and adapter still need implementation in the next
-integration stage. This release changes the portable core/execution boundary.
+The companion now supplies the ROS chassis-command message and adapter. The
+original 0.20 release changed the portable core/execution boundary.
 
 ## Execution endpoint
 
