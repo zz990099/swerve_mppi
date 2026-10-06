@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.21.2 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.21.3 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -51,7 +51,7 @@ if(SWERVE_MPPI_BUILD_TESTS)
   target_include_directories(swerve_mppi_tests PRIVATE src tests/fixtures)
   add_test(NAME swerve_mppi_tests COMMAND swerve_mppi_tests)
   foreach(suite_path
-    common/configuration model/model planning/optimizer execution/execution navigation/navigation
+    feedback/motion common/configuration model/model planning/optimizer execution/execution navigation/navigation
     safety/safety execution/timing model/actuation safety/admission integration/integration
     execution/chassis
   )
@@ -85,7 +85,7 @@ if(SWERVE_MPPI_BUILD_TESTS)
       -DTEST_COMPILER=${CMAKE_CXX_COMPILER}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_test.cmake)
   set_tests_properties(
-    swerve_mppi_tests configuration_regressions model_regressions optimizer_regressions execution_regressions
+    swerve_mppi_tests motion_regressions configuration_regressions model_regressions optimizer_regressions execution_regressions
     navigation_regressions safety_regressions timing_regressions actuation_regressions
     admission_regressions integration_regressions chassis_regressions installed_consumer
     PROPERTIES TIMEOUT 60
@@ -95,6 +95,9 @@ if(SWERVE_MPPI_BUILD_TESTS)
 endif()
 
 if(SWERVE_MPPI_BUILD_BENCHMARKS)
+  add_executable(swerve_mppi_model_probe benchmarks/model_probe.cpp)
+  target_include_directories(swerve_mppi_model_probe PRIVATE tests/fixtures)
+  target_link_libraries(swerve_mppi_model_probe PRIVATE swerve_mppi_core)
   add_executable(swerve_mppi_integration_budget benchmarks/integration_budget.cpp)
   target_include_directories(swerve_mppi_integration_budget PRIVATE tests/fixtures)
   target_link_libraries(swerve_mppi_integration_budget PRIVATE swerve_mppi_core)
@@ -112,6 +115,11 @@ if(SWERVE_MPPI_BUILD_BENCHMARKS)
     add_test(NAME budget_report_regressions COMMAND swerve_mppi_budget_report_tests)
     set_tests_properties(budget_report_regressions PROPERTIES TIMEOUT 60)
     if(Python3_Interpreter_FOUND)
+      add_test(NAME motion_probe_cli
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/motion_probe_test.py
+          --tool $<TARGET_FILE:swerve_mppi_model_probe>
+          --summary ${CMAKE_CURRENT_SOURCE_DIR}/tools/summarize_motion_probe.py)
+      set_tests_properties(motion_probe_cli PROPERTIES TIMEOUT 60)
       add_test(NAME budget_diagnostics_cli
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/budget_diagnostics_test.py
           --tool $<TARGET_FILE:swerve_mppi_integration_budget>

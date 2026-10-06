@@ -365,6 +365,13 @@ admission/stopping settings exactly before arming. The caller must obtain both
 resolved configurations and invoke the checks; constructors and existing external
 adapters retain their current validation paths. See docs/CONFIGURATION.md.
 
+Version 0.21.3 adds an independent motion-observation sidecar with explicit source
+provenance, original integer timestamps and deterministic residual bounds. It
+never rewrites state or authorizes execution. Independent lag/noise/slip/delay
+probes expose encoder-only blind spots while strict nominal model gates remain.
+See docs/MODEL_FEEDBACK.md for the nominal-only policy and external fault/stop
+ownership required before independent physical acceptance.
+
 Default-noise behavior regressions cover fourteen scenarios and five fixed seeds,
 including reverse travel, terminal yaw, S-curves, reversals and a closed square.
 An independent encoder fixture with 64 substeps per tick checks completion,

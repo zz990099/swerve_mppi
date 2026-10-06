@@ -37,6 +37,23 @@ jobs:
       - name: Test core and installed consumer
         run: ctest --test-dir build --output-on-failure --parallel 2
 
+      - name: Record independent motion probes (Release)
+        if: matrix.build_type == 'Release'
+        run: |
+          mkdir -p build/motion-probe
+          git rev-parse HEAD > build/motion-probe/source-commit.txt
+          cp build/CMakeCache.txt build/motion-probe/CMakeCache.txt
+          build/swerve_mppi_model_probe --print-config > build/motion-probe/resolved.conf
+          build/swerve_mppi_model_probe --config build/motion-probe/resolved.conf > build/motion-probe/calls.csv
+          python tools/summarize_motion_probe.py build/motion-probe/calls.csv > build/motion-probe/report.md
+          tee -a "$GITHUB_STEP_SUMMARY" < build/motion-probe/report.md
+          sha256sum build/swerve_mppi_model_probe build/motion-probe/resolved.conf build/motion-probe/calls.csv > build/motion-probe/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.build_type == 'Release'
+        with:
+          name: motion-probe
+          path: build/motion-probe/
+
       - name: Record production integration budget (Release)
         if: matrix.build_type == 'Release'
         run: >-

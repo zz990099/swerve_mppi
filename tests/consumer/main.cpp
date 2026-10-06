@@ -5,11 +5,16 @@
 #include "swerve_mppi/execution/timing.hpp"
 #include "swerve_mppi/feedback/feedback.hpp"
 #include "swerve_mppi/feedback/feedback_adapter.hpp"
+#include "swerve_mppi/feedback/motion_observer.hpp"
 #include "swerve_mppi/navigation/navigation.hpp"
 #include "swerve_mppi/planning/controller.hpp"
 #include "swerve_mppi/planning/optimizer.hpp"
 int main()
 {
+  const auto motion =
+    swerve_mppi::MotionObserver(swerve_mppi::Config{})
+      .assess(
+        {}, 0, swerve_mppi::MotionObservation{{}, 0, swerve_mppi::MotionSource::IndependentBody});
   const auto configured =
     swerve_mppi::parse_config_profile("max_linear_accel_mps2=.5\nrandom_seed=7");
   const auto restored =
@@ -57,7 +62,8 @@ int main()
   swerve_mppi::ControllerInput input;
   input.reference_path = {{0, 0, 0}};
   const auto path = paths.update(input);
-  return restored.max_linear_accel_mps2 == .5 && restored.random_seed == 7 &&
+  return motion.status == swerve_mppi::MotionStatus::NominalAgreement && motion.body_stationary &&
+             restored.max_linear_accel_mps2 == .5 && restored.random_seed == 7 &&
              !controller.compute({}).command && result.feedback.confirmed &&
              guarded.timing_error == swerve_mppi::TimingError::None &&
              guarded.safety_error == swerve_mppi::ExecutionSafetyError::None && midpoint &&

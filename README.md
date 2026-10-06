@@ -14,6 +14,13 @@ header migration and the official ROS Rolling formatting/checking workflow.
 
 ## Build, test and install
 
+Version 0.21.3 adds a stateless independent motion-observation API and a 720-sample
+offline lag/noise/slip/delay matrix. It distinguishes diagnostic uncertainty bounds
+from nominal model admission and independently observed stopping from stopped
+encoders. Existing 1e-9 admission and execution gates remain unchanged; the
+observer is not wired into live control. See [docs/MODEL_FEEDBACK.md](docs/MODEL_FEEDBACK.md)
+for policy, fault ownership, reproduction and remaining physical-model limitations.
+
 Version 0.21.2 adds offline pipeline stage timing, per-call work/failure traces and
 a nine-case workload matrix with resolved configuration, binary/build/source/host
 metadata and artifact hashes. Library interfaces and algorithms remain unchanged.

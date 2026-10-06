@@ -19,7 +19,7 @@ replace the swerve mode handshake or the execution supervisor.
 | --- | --- | --- |
 | 1: configuration foundation (complete, 0.21.1) | Complete typed registry, portable profiles, execution compatibility API, resolved benchmark configuration, current-status documentation | Configuration and installed-consumer regressions; existing core suite; no ROS/Gazebo code changes |
 | 2: timing and workload diagnostics (complete, 0.21.2) | Separate controller and full-pipeline costs, per-call work/status traces, nine-case matrix with configuration/build/source/host evidence | Recording versus strict acceptance; deterministic accounting tests and CLI/manifest cross-checks; target-host procedure; no library callback instrumentation |
-| 3: model and feedback preparation | Characterize the current exact encoder/body admission assumption; design explicit bounded uncertainty and fault contracts; add independent offline lag/noise/slip probes | Fault/stop/mode invariants remain fail-closed; model prediction error is measured against independent observations; no silent tolerance widening |
+| 3: model and feedback preparation (complete, 0.21.3) | Independent observation/bounded residual API, explicit nominal-only fault/stop policy, 720-sample independent lag/noise/slip/delay matrix | Fault/stop/mode invariants remain fail-closed; model prediction error is measured against independent observations; no silent tolerance widening |
 | 4: adapter readiness | Specify resolved-config exchange, coherent state frames/timestamps, command lifetime, watchdog and recovery ownership; core contract fixtures and checklist | Reviewable pre-integration interface and offline acceptance matrix; no new simulator/ROS wiring |
 
 Stage 1 adds APIs and measurement support. It does not make configuration agreement
@@ -34,10 +34,17 @@ scheduling causes; internal critic/rollout profiling and live executor stall
 diagnosis remain separate investigations. CI records timing; strict runtime
 acceptance belongs on the intended CPU. See BUDGET_DIAGNOSTICS.md.
 
-Stage 3 is the next implementation batch and requires a concrete uncertainty policy before changing model admission.
-Measured body motion, encoder kinematics and stopping certification must have
-separate responsibilities. Offline probes can reveal unsafe assumptions without
-claiming physical calibration. Stage 4 packages those decisions for later use.
+Stage 3 preserves nominal model admission and supplies a stateless diagnostic
+sidecar, not an automatically enforced independent-motion gate. The offline plant
+exposes prediction error despite encoder/body agreement and false encoder-only
+stop evidence during chassis coasting. Noisy bounded residuals remain inadmissible;
+accepting them requires reviewed robust stopping/transition envelopes and physical
+identification. See MODEL_FEEDBACK.md for the exact uncertainty and fault policy.
+
+Stage 4 is the next implementation batch. Package resolved-config exchange,
+coherent frames/timestamps, command lifetime, independent evidence and stop/watchdog/
+recovery ownership into reviewable pre-integration contracts and offline fixtures.
+It must make enforcement obligations clear without introducing ROS/Gazebo wiring.
 
 Actual ROS/Gazebo migration, new physical tests, independent localization and a
 Nav2 controller plugin are subsequent work outside this preparation request.
