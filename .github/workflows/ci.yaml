@@ -31,18 +31,35 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DCMAKE_CXX_FLAGS=-Werror
           -DSWERVE_MPPI_BUILD_BENCHMARKS=ON
+          -DSWERVE_MPPI_BUILD_PREPARATION_TOOLS=ON
           -DSWERVE_MPPI_BUILD_FORMAT_TESTS=ON
       - name: Build
         run: cmake --build build --parallel 2
       - name: Test core and installed consumer
         run: ctest --test-dir build --output-on-failure --parallel 2
 
-      - name: Check adapter contract under UBSan (Debug)
+      - uses: actions/checkout@v4
+        with:
+          repository: zz990099/swerve_gazebo_sim
+          ref: d05e0a037dec986c167fd58f8bd2fb1ff56b5723
+          path: companion-source
+      - name: Test offline companion preparation (no ROS or Gazebo)
+        run: |
+          python tests/simulation_preparation_test.py --tool build/swerve_mppi_config_preflight --companion companion-source
+          python tools/prepare_simulation.py --tool build/swerve_mppi_config_preflight --companion companion-source --output-dir build/simulation-preparation
+          tee -a "$GITHUB_STEP_SUMMARY" < build/simulation-preparation/report.md
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: simulation-preparation-${{ matrix.build_type }}
+          path: build/simulation-preparation/
+
+      - name: Check startup contracts under UBSan (Debug)
         if: matrix.build_type == 'Debug'
         run: |
-          cmake -S . -B build-ubsan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-Werror -fsanitize=undefined -fno-sanitize-recover=all"
-          cmake --build build-ubsan --target swerve_mppi_adapter_tests swerve_mppi_configuration_tests --parallel 2
-          ctest --test-dir build-ubsan -R 'adapter_regressions|configuration_regressions' --output-on-failure
+          cmake -S . -B build-ubsan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-Werror -fsanitize=undefined -fno-sanitize-recover=all" -DSWERVE_MPPI_BUILD_PREPARATION_TOOLS=ON
+          cmake --build build-ubsan --target swerve_mppi_adapter_tests swerve_mppi_configuration_tests swerve_mppi_config_preflight --parallel 2
+          ctest --test-dir build-ubsan -R 'adapter_regressions|configuration_regressions|config_preflight_cli' --output-on-failure
 
       - name: Record independent motion probes (Release)
         if: matrix.build_type == 'Release'

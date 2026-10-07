@@ -48,11 +48,16 @@ strict independent motion, complete command/task lifetime, continuous stopped
 recovery and acknowledged drain/endpoint stop. The contract APIs do not automatically
 arm or retrofit external callers. See ADAPTER_READINESS.md and ADAPTER_ACCEPTANCE.md.
 
-Preparation stages 1..4 are complete. No further implementation phase runs under
-this request. Review the unchanged companion against these contracts before any
-subsequent migration; independent noisy/slipping motion, physical braking guarantees
-and target-host scheduling acceptance remain open.
+Preparation stages 1..4 are complete. A separately requested follow-up now audits
+and prepares the companion without connecting it. Stage 5 (complete, 0.21.5) adds
+the pinned source audit, configuration provenance and offline candidate preflight.
+See SIMULATION_MIGRATION_AUDIT.md for concrete evidence and migration obligations.
+The companion remains unchanged, and prepared candidates are not runtime exports
+or physical acceptance.
 
-Actual ROS/Gazebo migration, new physical tests, independent localization and a
-Nav2 controller plugin are subsequent work outside this preparation request.
-Stop after stage 4 and report readiness and remaining integration risks.
+Next preparation batches keep the same no-integration boundary: versioned wire
+records and bounded decoding fixtures, then serialized revocation/recovery and
+acknowledgement fixtures, then independent measurement/calibration specifications.
+Actual ROS/Gazebo migration and physical tests require a later integration request.
+Independent noisy/slipping motion, robust braking guarantees and target-host
+scheduling acceptance remain open. A Nav2 plugin remains subsequent work.

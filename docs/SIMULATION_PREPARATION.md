@@ -149,3 +149,10 @@ reverse, crab, spin, transitions and stopping. Measure latency, slip and worst-c
 braking, update conservative model bounds, and repeat obstacles and fault injection.
 The endpoint's publisher-loss smoke test proves a low-speed stop/recovery mechanism;
 it does not close these physical acceptance items.
+
+## Pinned companion follow-up (0.21.5)
+
+See SIMULATION_MIGRATION_AUDIT.md for the source-pinned configuration/clock/owner
+review and executable offline preparation workflow. Startup candidate compatibility
+is separate from runtime exchange, coherent independent observations, recovery and
+physical acceptance. This follow-up changes no ROS/Gazebo runtime or core pin.

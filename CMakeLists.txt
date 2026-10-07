@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.21.4 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.21.5 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 option(SWERVE_MPPI_BUILD_TESTS "Build standalone tests" ON)
 option(SWERVE_MPPI_BUILD_BENCHMARKS "Build standalone measurement tools" OFF)
+option(SWERVE_MPPI_BUILD_PREPARATION_TOOLS "Build offline adapter preparation tools" OFF)
 option(SWERVE_MPPI_BUILD_FORMAT_TESTS "Check the pinned ROS Rolling C++ format" OFF)
 
 if(SWERVE_MPPI_BUILD_FORMAT_TESTS)
@@ -141,6 +142,23 @@ if(SWERVE_MPPI_BUILD_BENCHMARKS)
       COMMAND swerve_mppi_integration_budget 2 --budget-ratio 0.000001 --strict)
     set_tests_properties(integration_budget_invalid_ratio integration_budget_strict_timeout
       PROPERTIES WILL_FAIL TRUE TIMEOUT 60)
+  endif()
+endif()
+
+if(SWERVE_MPPI_BUILD_PREPARATION_TOOLS)
+  add_executable(swerve_mppi_config_preflight preparation/config_preflight.cpp)
+  target_link_libraries(swerve_mppi_config_preflight PRIVATE swerve_mppi_core)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(swerve_mppi_config_preflight PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  target_compile_definitions(swerve_mppi_config_preflight PRIVATE
+    SWERVE_MPPI_TOOL_VERSION="${PROJECT_VERSION}")
+  if(SWERVE_MPPI_BUILD_TESTS AND Python3_Interpreter_FOUND)
+    add_test(NAME config_preflight_cli
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/config_preflight_test.py
+        --tool $<TARGET_FILE:swerve_mppi_config_preflight>
+        --profile ${CMAKE_CURRENT_SOURCE_DIR}/config/default.conf)
+    set_tests_properties(config_preflight_cli PROPERTIES TIMEOUT 60)
   endif()
 endif()
 

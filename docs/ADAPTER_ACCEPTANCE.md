@@ -61,3 +61,12 @@ These are follow-up items, not work performed or authorized in this preparation
 series. The core architecture is retained; no wholesale rewrite or new ROS/Gazebo
 wiring is required to complete this stage. Preparation readiness is established
 for contract review and offline nominal testing, not independent physical deployment.
+
+## Companion audit follow-up (0.21.5)
+
+SIMULATION_MIGRATION_AUDIT.md now records the unchanged pinned companion's source
+behavior and migration gaps. The optional config preflight and source-pinned
+runner generate full candidates with provenance; neither exports actual runtime
+profiles nor closes the remaining integration/physical proof column. The follow-up
+request authorizes offline preparation only. Next are wire decoding and supervised
+recovery fixtures; ROS/Gazebo migration remains outside that scope.

@@ -14,6 +14,12 @@ header migration and the official ROS Rolling formatting/checking workflow.
 
 ## Build, test and install
 
+Version 0.21.5 adds a pinned companion source audit, complete migration candidate
+profiles with per-field provenance, and optional offline startup preflight tools.
+It leaves the companion's existing runtime and core pin unchanged and starts no
+ROS/Gazebo process. See [docs/SIMULATION_MIGRATION_AUDIT.md](docs/SIMULATION_MIGRATION_AUDIT.md)
+for reproduction, concrete migration gaps and the next offline preparation batches.
+
 Version 0.21.4 completes pre-integration preparation with full peer configuration
 exchange, immutable adapter/frame/clock contracts, explicit profile revocation and
 a serialized offline owner acceptance fixture. It adds no ROS/Gazebo wiring and
