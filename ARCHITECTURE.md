@@ -30,18 +30,28 @@ There is no actuator profile, execution admission service or profile sampler in 
 production library. These checks establish feasibility under the current nominal
 model, not physical braking guarantees for Gazebo or hardware.
 
-The library currently retains its nominal affine-drive/proportional-brake model
-and strict observation admission. Stages 2 and 3 revise those assumptions for the
-Python chassis and asynchronous observations. Stage 1 deliberately avoids changing
-optimizer behavior and numerical model policy during the ownership refactor.
+The model uses the independent chassis period inside each prediction interval.
+`ChassisPrediction` carries limited body intent, commanded joints, frozen alignment
+and dwell state separately from `VehicleState`. Rollout carries this context across
+steps; a cold seed explicitly assumes command-side state equals the observation.
+The controller retains an issued same-mode entry if the chassis subsequently reports
+automatic realignment. Pending unconfirmed alignment has a dedicated hypothetical
+continuation check; only actual measured confirmation releases the live Drive gate.
+The actual accepted steering receipt remains immutable for explicit mode requests.
+
+Prediction uses ideal sampled targets and encoder-derived motion, not Gazebo servo,
+contact or slip dynamics. Stage 3 handles observation uncertainty, asynchronous time
+and command-history reconciliation before this can be treated as a live integration.
 
 The test-only `NominalChassis` in `tests/fixtures/chassis_fixture.hpp` supplies
 measured acknowledgements to offline loops. It shares nominal target calculation
 with DriveModel, while encoder/body integration is independently implemented in
 `behavior_fixture.hpp`. The fixture is not installed or linked into the core and
-is not an independent validation of the Python chassis. A separate perturbed plant
+is not an independent validation of chassis command generation.
+The separate Python parity test invokes the actual companion `Chassis` class. A separate perturbed plant
 in `motion_fixture.hpp` measures the nominal model's lag/slip/noise limitations.
 
-The repository does not build, import or check out the Gazebo repository. A future
+Production does not build, import or execute the Gazebo repository. CI checks out
+a pinned companion revision solely for the optional offline Python parity test. A future
 ROS adapter belongs on the algorithm side and will communicate only through the
 current body-command and chassis-state messages. See the [roadmap](docs/PREPARATION_PLAN.md).

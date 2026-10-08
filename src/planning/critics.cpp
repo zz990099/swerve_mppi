@@ -124,7 +124,8 @@ double segment_obstacle_cost(
       return false;
     }
     if (clearance < .5) {
-      cost += config.clearance_weight / (clearance + .03);
+      // Clearance is a distance-field property, independent of obstacle sampling density.
+      cost = std::max(cost, config.clearance_weight / (clearance + .03));
     }
     return true;
   };

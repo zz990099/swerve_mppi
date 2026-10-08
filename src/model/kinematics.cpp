@@ -37,27 +37,24 @@ WheelCommand Kinematics::inverse(const Control & u, const std::array<double, 4> 
     const double wx = u.vx - u.wz * y[i], wy = u.vy + u.wz * x[i];
     const double speed = std::hypot(wx, wy);
     result.angles[i] = current[i];
-    if (speed < 1e-9) {
+    if (speed / config_.wheel_radius_m < 1e-9) {
       continue;
     }
     const double angle = std::atan2(wy, wx);
     double distance = std::numeric_limits<double>::infinity();
-    int selected_turn = 3;
+
     // Mechanical joints use direct distance: wrapping across a hard stop is
     // forbidden.
-    for (int k = -2; k <= 2; ++k) {
+    for (int k = -1; k <= 1; ++k) {
       const double candidate = angle + k * kPi;
       if (std::abs(candidate) > config_.steering_limit_rad + 1e-9) {
         continue;
       }
       const double bounded =
         std::clamp(candidate, -config_.steering_limit_rad, config_.steering_limit_rad);
-      const double delta = std::abs(bounded - current[i]);
-      if (
-        delta < distance - 1e-9 ||
-        (std::abs(delta - distance) <= 1e-9 && std::abs(k) < selected_turn)) {
+      const double delta = std::abs(candidate - current[i]);
+      if (delta < distance) {
         distance = delta;
-        selected_turn = std::abs(k);
         result.angles[i] = bounded;
         result.speeds[i] = k % 2 == 0 ? speed : -speed;
       }

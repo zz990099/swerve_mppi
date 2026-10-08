@@ -62,6 +62,13 @@ void run(const std::string & scenario, unsigned seed)
         break;
       }
     }
+    if (!command.command)
+      std::cerr << "scenario=" << scenario << " seed=" << seed << " tick=" << tick
+                << " failure=" << static_cast<int>(command.failure_reason)
+                << " confirmed=" << input.vehicle.mode_confirmed
+                << " mode=" << static_cast<int>(input.vehicle.actual_mode)
+                << " pose=" << input.vehicle.pose.x << "," << input.vehicle.pose.y
+                << " phase=" << static_cast<int>(command.phase) << "\n";
     check(command.command.has_value(), "controller unexpectedly stopped");
     const auto result = plant.update(command, input.vehicle);
     if (result.feedback.fault) {

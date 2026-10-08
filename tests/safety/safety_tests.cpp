@@ -117,7 +117,7 @@ void test_validator_configuration_contract()
       different.collision_margin_m = .01;
     }
     if (field == 2) {
-      different.steering_limit_rad = 2;
+      different.feedback_linear_tolerance_mps = .1;
     }
     if (field == 3) {
       different.max_wheel_speed_mps = 3;
@@ -306,13 +306,13 @@ void test_drive_requires_complete_stopping_continuation()
   auto c = deterministic();
   c.safety_reduction_attempts = 0;
   c.horizon_steps = 2;
-  c.max_linear_decel_mps2 = .1;
+  c.max_wheel_accel_mps2 = .1;
   for (double goal : {2.0, .2}) {
     detail::Planner controller(c);
     test::NominalChassis executor(c);
     auto in = straight();
     in.reference_path.back().x = goal;
-    in.obstacles = {{.64, 0, .05}};
+    in.obstacles = {{.6008, 0, .05}};
     const auto blocked = controller.compute(in);
     check(
       blocked.action == Action::Hold && blocked.failure_reason == FailureReason::NoFeasiblePlan &&
@@ -331,8 +331,8 @@ void test_drive_requires_complete_stopping_continuation()
   detail::Planner limited(c);
   auto in = straight();
   check(
-    limited.compute(in).action == Action::Hold,
-    "an exhausted stopping budget must reject Drive, even with no obstacles");
+    limited.compute(in).action == Action::Drive,
+    "from rest one command period and one brake period fit the minimum budget");
   in.vehicle.velocity.vx = .2;
   in.vehicle.wheel_speeds.fill(.2);
   in.vehicle.stamp_s += c.dt_s;
@@ -355,13 +355,20 @@ void test_first_drive_deceleration_matches_execution()
   in.obstacles = {{.558, 0, .05}};
   Trajectory unsafe;
   RolloutEngine(c).generate_continuation(in.vehicle, {}, {.048, 0, 0}, unsafe);
-  // Independent full-period Drive plus analytic full brake: mean speed * dt,
-  // then v^2/(2*a). The old fastest-ramp prediction incorrectly passed 8 mm.
-  const double expected = (.1 + .048) * c.dt_s / 2 + .048 * .048 / (2 * c.max_linear_decel_mps2);
+  // Independent 100 Hz body-intent slew followed by per-wheel zero braking.
+  double expected = 0, velocity = .1;
+  for (int tick = 0; tick < 10; ++tick) {
+    expected += velocity * .01;
+    velocity += std::clamp(.048 - velocity, -.009, .009);
+  }
+  while (velocity > 0) {
+    expected += velocity * .01;
+    velocity = std::max(0., velocity - .04);
+  }
   check(
     unsafe.valid && std::abs(unsafe.final_state.pose.x - expected) < 1e-10 &&
       TrajectoryValidator(c).check(in, unsafe) == TrajectoryStatus::Collision,
-    "decelerating first Drive must include its full-period displacement");
+    "decelerating command must include held-target travel and independent wheel brake");
   detail::Planner controller(c);
   test::NominalChassis executor(c);
   const auto output = controller.compute(in);
@@ -380,31 +387,21 @@ void test_first_drive_deceleration_matches_execution()
     "independent first Drive and Brake must stay outside the obstacle "
     "boundary");
 }
-void test_stopping_budget_reduction_restores_progress()
+void test_bounded_reduction_budget()
 {
-  auto c = deterministic();
-  c.max_linear_decel_mps2 = .001;
-  c.samples_per_branch = c.iterations = 1;
-  auto in = straight();
-  in.reference_path.back().x = 1;
-  detail::Planner controller(c);
-  test::NominalChassis executor(c);
-  const auto output = controller.compute(in);
-  check(
-    output.action == Action::Drive && output.safety_reductions > 0 &&
-      output.safety_reductions <= c.safety_reduction_attempts,
-    "bounded reduction must find a safe slow Drive within the stopping "
-    "budget");
-  auto result = executor.update(output, in.vehicle);
-  check(!result.feedback.fault, "reduced tracking output must execute healthily");
-  actuate(in.vehicle, result, c);
-  check(in.vehicle.pose.x > 0, "a safe reduced intent must make measured progress");
+  Config c;
   c.safety_reduction_attempts = 0;
-  detail::Planner disabled(c);
-  in = straight();
+  c.collision_margin_m = 0;
+  c.goal_position_tolerance_m = .001;
+  auto in = straight();
+  in.vehicle.velocity.vx = .1;
+  in.vehicle.wheel_speeds.fill(.1);
+  in.reference_path.back().x = .04;
+  in.obstacles = {{.558, 0, .05}};
+  const auto blocked = detail::Planner(c).compute(in);
   check(
-    disabled.compute(in).action == Action::Hold,
-    "zero reduction budget retains checked waiting semantics");
+    blocked.action != Action::Drive && blocked.safety_reductions == 0,
+    "disabled reduction cannot emit a rejected capture intent");
   c.safety_reduction_attempts = 17;
   bool rejected = false;
   try {
@@ -412,7 +409,7 @@ void test_stopping_budget_reduction_restores_progress()
   } catch (const std::invalid_argument &) {
     rejected = true;
   }
-  check(rejected, "reduction work must have a bounded configurable maximum");
+  check(rejected, "reduction workload cap must reject oversize configuration");
 }
 void test_overspeed_feedback_uses_checked_braking()
 {
@@ -500,6 +497,9 @@ void test_pending_request_rechecks_fresh_stopping_constraints()
     "safe pending-request braking cannot grant confirmation or latch a "
     "fault");
   actuate(in.vehicle, braking, c);
+  // A new measured disturbance arrives with the changed world context.
+  in.vehicle.wheel_speeds.fill(.3);
+  in.vehicle.velocity = Kinematics(c).forward(in.vehicle.wheel_speeds, in.vehicle.steering_angles);
   in.obstacles = {{in.vehicle.pose.x + .605, in.vehicle.pose.y, .05}};
   const auto rejected = controller.compute(in);
   check(
@@ -660,26 +660,19 @@ void test_residual_hold_obstacle()
   in.vehicle.velocity.vx = .2;
   in.vehicle.wheel_speeds.fill(.2);
   in.reference_path = {{0, 0, 0}, {0, .2, 0}};
-  // Independent old simultaneous-brake/steer integral placed this footprint
-  // 0.2 mm inside the obstacle; the phased brake ends at (0.02, 0).
-  const double radius = c.robot_radius_m + c.collision_margin_m + .05 - .0002;
-  in.obstacles = {{.0195821866951 - .1 * radius, .00329207621933 + std::sqrt(.99) * radius, .05}};
-  const auto predicted = DriveModel(c).step(in.vehicle, {0, .3, 0}, c.dt_s);
+  c.robot_radius_m = .001;
+  c.collision_margin_m = 0;
+  in.obstacles = {{.005, 0, 0}};
+  const auto targets = DriveModel(c).steering_for_entry(DriveMode::Crab, {0, .3, 0}, {});
+  Trajectory stop;
+  RolloutEngine(c).generate_stopping_interval(in.vehicle, targets, stop);
   check(
-    predicted.valid && std::abs(predicted.state.pose.x - .02) < 1e-9 &&
-      std::abs(predicted.state.pose.y) < 1e-9,
-    "Hold prediction must retain the complete residual braking distance "
-    "without rolling "
-    "steering");
-  const auto output = detail::Planner(c).compute(in);
-  test::NominalChassis executor(c);
-  const auto execution = executor.update(output, in.vehicle);
-  auto actual = in.vehicle;
-  test::actuate(actual, execution, c);
+    stop.valid && std::abs(stop.final_state.pose.x - .006) < 1e-9 &&
+      std::abs(stop.final_state.pose.y) < 1e-9,
+    "alignment interval retains all discrete residual brake travel before steering");
   check(
-    test::measured_clearance(in.vehicle.pose, actual.pose, in.obstacles, c) > 0,
-    "the reviewed residual-Hold obstacle must remain clear under "
-    "independent execution");
+    TrajectoryValidator(c).check(in, stop) == TrajectoryStatus::Collision,
+    "sub-threshold rolling does not erase a colliding stopping tail");
 }
 
 }  // namespace
@@ -691,7 +684,7 @@ int main()
     test_residual_hold_obstacle();
     test_drive_requires_complete_stopping_continuation();
     test_first_drive_deceleration_matches_execution();
-    test_stopping_budget_reduction_restores_progress();
+    test_bounded_reduction_budget();
     test_overspeed_feedback_uses_checked_braking();
     test_zero_intent_braking_executes_with_measured_residual();
     test_temporary_failure_stops_and_recovers();

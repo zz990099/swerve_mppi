@@ -71,7 +71,7 @@ void test_complete_profile_and_locale()
     std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
   same(Config{}, parse_config_profile(defaults));
   const auto & schema = config_schema();
-  check(schema.size() == 68, "update the complete parameter schema when Config changes");
+  check(schema.size() == 70, "update the complete parameter schema when Config changes");
   const auto values = config_parameters(original);
   for (std::size_t i = 0; i < schema.size(); ++i) {
     check(
@@ -128,6 +128,11 @@ void test_rejected_profiles()
   }
   rejects([] { parse_config_profile("# first\nunknown_limit = 1"); }, "configuration line 2");
   rejects([] { parse_config_profile("dt_s=.1\ndt_s=.2"); }, "duplicate");
+  for (const auto old_key :
+       {"max_linear_decel_mps2=1", "max_angular_decel_radps2=1",
+        "drive_kinematic_tolerance_mps=.02"}) {
+    rejects([&] { parse_config_profile(old_key); }, "unknown");
+  }
   rejects([] { parse_config_profile("goal_position_tolerance_m = .5"); }, "invalid");
   rejects([] { parse_config_profile(std::string(65537, '#')); }, "64 KiB");
   const char nul[] = "dt_s=.1\0junk";
@@ -138,7 +143,7 @@ void test_rejected_profiles()
     [] { with_config_parameters({}, {{"max_vx_mps", std::numeric_limits<double>::infinity()}}); },
     "max_vx_mps");
   rejects(
-    [] { with_config_parameters({}, std::vector<ConfigParameter>(69, {"dt_s", .1})); }, "too many");
+    [] { with_config_parameters({}, std::vector<ConfigParameter>(71, {"dt_s", .1})); }, "too many");
 }
 
 void test_live_budget_admission()

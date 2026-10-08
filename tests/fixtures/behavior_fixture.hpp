@@ -36,54 +36,14 @@ inline double measured_clearance(
 // Kinematics::forward or a controller prediction to advance its state.
 inline void actuate(VehicleState & s, const PlantTargets & command, const Config & c)
 {
-  const bool moving_steering = command.action == detail::Action::Drive;
-  const bool stopped = std::hypot(s.velocity.vx, s.velocity.vy) <= c.stopped_linear_mps &&
-                       std::abs(s.velocity.wz) <= c.stopped_angular_radps &&
-                       std::all_of(s.wheel_speeds.begin(), s.wheel_speeds.end(), [&](double v) {
-                         return std::abs(v) <= c.stopped_wheel_speed_mps;
-                       });
   const double x[] = {c.wheelbase_m / 2, c.wheelbase_m / 2, -c.wheelbase_m / 2, -c.wheelbase_m / 2};
   const double y[] = {c.track_m / 2, -c.track_m / 2, c.track_m / 2, -c.track_m / 2};
-  const auto before = s;
-  std::array<double, 4> end_angles = s.steering_angles, end_speeds = s.wheel_speeds;
-  double braking_time = std::max(
-    std::hypot(s.velocity.vx, s.velocity.vy) / c.max_linear_decel_mps2,
-    std::abs(s.velocity.wz) / c.max_angular_decel_radps2);
-  for (std::size_t i = 0; i < 4; ++i) {
-    end_speeds[i] += std::clamp(
-      command.wheel_speed_targets[i] - s.wheel_speeds[i], -c.max_wheel_accel_mps2 * c.dt_s,
-      c.max_wheel_accel_mps2 * c.dt_s);
-    braking_time = std::max(braking_time, std::abs(s.wheel_speeds[i]) / c.max_wheel_accel_mps2);
-    check(std::abs(end_angles[i]) <= c.steering_limit_rad + 1e-9, "steering stop violated");
-    check(std::abs(end_speeds[i]) <= c.max_wheel_speed_mps + 1e-9, "wheel speed violated");
-  }
-  const double steering_time = moving_steering ? c.dt_s
-                               : stopped       ? std::max(0.0, c.dt_s - braking_time)
-                                               : 0;
-  for (std::size_t i = 0; i < 4; ++i) {
-    end_angles[i] += std::clamp(
-      command.steering_targets[i] - before.steering_angles[i],
-      -c.max_steer_rate_radps * steering_time, c.max_steer_rate_radps * steering_time);
-  }
-  // Drive joint targets ramp over the control period. Stopping actions use a
-  // proportional braking ramp, then align only during the remaining stopped
-  // time. Derive each intermediate body twist independently from the encoder
-  // vectors.
-  auto twist_at = [&](double t) {
+  auto encoded = [&]() {
     Twist2d v;
     double moment = 0;
     for (std::size_t i = 0; i < 4; ++i) {
-      const double steering_fraction = moving_steering ? t / c.dt_s
-                                       : steering_time > 0
-                                         ? std::clamp((t - braking_time) / steering_time, 0.0, 1.0)
-                                         : 0;
-      const double angle =
-        before.steering_angles[i] + (end_angles[i] - before.steering_angles[i]) * steering_fraction;
-      const double speed =
-        moving_steering
-          ? before.wheel_speeds[i] + (end_speeds[i] - before.wheel_speeds[i]) * t / c.dt_s
-          : before.wheel_speeds[i] * (braking_time > 0 ? std::max(0.0, 1 - t / braking_time) : 0);
-      const double vx = speed * std::cos(angle), vy = speed * std::sin(angle);
+      const double vx = s.wheel_speeds[i] * std::cos(s.steering_angles[i]);
+      const double vy = s.wheel_speeds[i] * std::sin(s.steering_angles[i]);
       v.vx += vx / 4;
       v.vy += vy / 4;
       v.wz += x[i] * vy - y[i] * vx;
@@ -92,23 +52,30 @@ inline void actuate(VehicleState & s, const PlantTargets & command, const Config
     v.wz /= moment;
     return v;
   };
-  constexpr int substeps = 64;
-  const double h = (moving_steering ? c.dt_s : std::min(c.dt_s, braking_time)) / substeps;
-  for (int step = 0; step < substeps; ++step) {
-    const auto v = twist_at((step + .5) * h);
-    const double yaw = s.pose.yaw + v.wz * h / 2;
-    s.pose.x += (std::cos(yaw) * v.vx - std::sin(yaw) * v.vy) * h;
-    s.pose.y += (std::sin(yaw) * v.vx + std::cos(yaw) * v.vy) * h;
-    s.pose.yaw = wrap_angle(s.pose.yaw + v.wz * h);
-  }
-  s.steering_angles = end_angles;
-  for (std::size_t i = 0; i < 4; ++i) {
-    s.wheel_speeds[i] = moving_steering
-                          ? end_speeds[i]
-                          : before.wheel_speeds[i] *
-                              (braking_time > 0 ? std::max(0.0, 1 - c.dt_s / braking_time) : 0);
-  }
-  s.velocity = twist_at(c.dt_s);
+  auto sample = [&](const JointSample & target) {
+    const auto v = encoded();
+    // Independent midpoint integration converges to sample-and-hold SE(2).
+    constexpr int subdivisions = 64;
+    const double h = target.dt_s / subdivisions;
+    for (int j = 0; j < subdivisions; ++j) {
+      const double yaw = s.pose.yaw + v.wz * h / 2;
+      s.pose.x += (std::cos(yaw) * v.vx - std::sin(yaw) * v.vy) * h;
+      s.pose.y += (std::sin(yaw) * v.vx + std::cos(yaw) * v.vy) * h;
+      s.pose.yaw = std::atan2(std::sin(s.pose.yaw + v.wz * h), std::cos(s.pose.yaw + v.wz * h));
+    }
+    s.steering_angles = target.angles;
+    s.wheel_speeds = target.speeds;
+    for (std::size_t i = 0; i < 4; ++i) {
+      check(
+        std::abs(s.steering_angles[i]) <= c.steering_limit_rad + 1e-9, "steering stop violated");
+      check(std::abs(s.wheel_speeds[i]) <= c.max_wheel_speed_mps + 1e-9, "wheel speed violated");
+    }
+  };
+  if (command.samples.empty())
+    sample({command.steering_targets, command.wheel_speed_targets, c.dt_s});
+  else
+    for (const auto & target : command.samples) sample(target);
+  s.velocity = encoded();
   s.actual_mode = command.feedback.actual_mode;
   s.mode_confirmed = command.feedback.confirmed;
   s.mode_fault = command.feedback.fault;

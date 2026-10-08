@@ -45,11 +45,15 @@ void test_mode_kinematics()
   crab.actual_mode = DriveMode::Crab;
   const auto first = model.step(crab, {0.0, 0.5, 0.0}, config.dt_s);
   check(
-    first.valid && std::abs(first.state.pose.y) < 1e-9 && first.state.steering_angles[0] > 0.0,
+    first.valid && std::abs(first.state.pose.y) < 1e-9 &&
+      std::abs(first.state.steering_angles[0]) > 0.0,
     "lateral drive must first align the wheels while stationary");
   VehicleState rolling = first.state;
+  auto memory = first.prediction;
   for (int i = 0; i < 10; ++i) {
-    rolling = model.step(rolling, {0.0, 0.5, 0.0}, config.dt_s).state;
+    const auto next = model.step(rolling, {0.0, 0.5, 0.0}, config.dt_s, memory);
+    rolling = next.state;
+    memory = next.prediction;
   }
   check(
     rolling.pose.y > 0.0 && std::abs(rolling.pose.yaw) < 1e-9,

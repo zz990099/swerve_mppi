@@ -2,8 +2,7 @@
 #include <cmath>
 
 #include "common/detail/time_comparison.hpp"
-#include "model/detail/motion_profile.hpp"
-#include "model/detail/stopping_motion.hpp"
+#include "model/detail/nominal_motion.hpp"
 #include "safety/detail/validation.hpp"
 #include "swerve_mppi/feedback/feedback.hpp"
 #include "swerve_mppi/model/model.hpp"
@@ -23,56 +22,32 @@ double TransitionModel::rollout(
     (target_mode != DriveMode::DualAckermann && target_mode != DriveMode::Spin &&
      target_mode != DriveMode::Crab) ||
     !std::isfinite(entry_intent.vx) || !std::isfinite(entry_intent.vy) ||
-    !std::isfinite(entry_intent.wz)) {
+    !std::isfinite(entry_intent.wz) ||
+    (target_mode == DriveMode::DualAckermann &&
+     (entry_intent.vy != 0 || (entry_intent.vx == 0 && entry_intent.wz != 0))) ||
+    (target_mode == DriveMode::Spin && (entry_intent.vx != 0 || entry_intent.vy != 0)) ||
+    (target_mode == DriveMode::Crab && entry_intent.wz != 0)) {
     return -1.0;
   }
   const std::size_t begin = steps;
-  while (!is_stopped(state, config_)) {
-    if (steps >= maximum) {
-      return -1.0;
-    }
-    auto next = model_.step(state, {}, config_.dt_s);
-    if (!next.valid) {
-      return -1.0;
-    }
-    state = next.state;
-    ++steps;
-    detail::append_motion(next, trace, sweep_margins, error);
-  }
   const auto angles = model_.steering_for_entry(target_mode, entry_intent, state.steering_angles);
-  const auto minimum =
-    detail::duration_ticks(config_.alignment_min_s, config_.dt_s, maximum - steps);
-  if (!minimum) {
-    return -1.0;
-  }
-  std::size_t aligned_steps = 0;
-  while (true) {
-    bool aligned = true;
-    for (std::size_t i = 0; i < 4; ++i) {
-      if (std::abs(angles[i] - state.steering_angles[i]) > config_.steering_tolerance_rad) {
-        aligned = false;
-      }
-    }
-    if (aligned && aligned_steps >= *minimum) {
-      break;
-    }
-    if (steps >= maximum) {
-      return -1.0;
-    }
-    const auto next = detail::stopping_step(state, angles, config_, config_.dt_s);
+  auto memory = model_.alignment_seed(state, angles);
+  do {
+    if (steps >= maximum) return -1.0;
+    const auto next = model_.step(state, {}, config_.dt_s, memory);
+    if (!next.valid) return -1.0;
     state = next.state;
+    memory = next.prediction;
     ++steps;
-    ++aligned_steps;
     detail::append_motion(next, trace, sweep_margins, error);
-  }
+  } while (memory.phase != TransitionPhase::Stable);
   const auto confirmation =
     detail::duration_ticks(config_.confirmation_prediction_s, config_.dt_s, maximum - steps);
   if (!confirmation) {
     return -1.0;
   }
-  // Even immediate transport needs an executor confirmation Hold, followed by
-  // the manager's measured-feedback handover Hold. The configured allowance
-  // covers these cycles and may reserve additional feedback/transport latency.
+  // Reserve observation/manager handover time after nominal mechanical completion.
+  // This prediction never confirms a real request.
   const std::size_t wait = std::max(*confirmation, std::size_t{2});
   if (wait > maximum - steps) {
     return -1.0;
@@ -85,12 +60,14 @@ double TransitionModel::rollout(
   }
   steps += wait;
   for (std::size_t i = 0; i < wait; ++i) {
-    const auto next = detail::stopping_step(state, angles, config_, config_.dt_s);
+    const auto next = model_.step(state, {}, config_.dt_s, memory);
+    if (!next.valid) return -1.0;
+    memory = next.prediction;
     state = next.state;
     detail::append_motion(next, trace, sweep_margins, error);
   }
   state.actual_mode = target_mode;
-  // A hypothetical transition cannot echo an actual executor acceptance.
+  // A hypothetical transition cannot echo an actual chassis acceptance.
   state.accepted_mode_request.reset();
   state.mode_confirmed = true;
   state.time_in_mode_s = 0.0;

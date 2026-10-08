@@ -5,13 +5,15 @@ spin and crab modes. The controller samples velocity sequences within mode branc
 predicts transition costs, checks trajectories and returns body velocity with an
 optional explicit mode request. It waits for measured mode confirmation before driving.
 
-Version 0.22 completes stage 1 of the chassis-interface refactor. The production
-library owns planning and prediction. Chassis execution, joint-profile sampling,
-transport sessions and old Gazebo migration tools have been removed. There are no
-compatibility wrappers for the removed interfaces.
+Version 0.23 completes the current-chassis prediction stage. The core predicts the
+Python chassis's body saturation, independent wheel ramps, ordinary zero and frozen
+brake/align/dwell behavior. The old joint interpolation and proportional brake laws
+are removed. Public output remains velocity and explicit mode intent, with no joint
+execution or transport compatibility interfaces.
 
-The prediction model is still the nominal core model; matching the current Python
-Gazebo chassis is stage 2. This release is not a completed Gazebo integration.
+Prediction assumes ideal target tracking at the chassis period. Cold observations
+do not reveal the chassis's hidden command history; asynchronous observation and
+history reconciliation are stage 3. This is not a completed physical Gazebo integration.
 See the [complete staged plan](docs/PREPARATION_PLAN.md).
 
 ## Build and test
@@ -27,12 +29,15 @@ cmake --install build --prefix "$PWD/install-local"
 
 Use `SWERVE_MPPI_BUILD_TESTS=OFF` for a library-only build or
 `SWERVE_MPPI_BUILD_BENCHMARKS=ON` for offline measurement tools.
+`SWERVE_MPPI_CHASSIS_SOURCE_DIR=/absolute/path/to/swerve_gazebo_sim` enables offline
+parity against that checkout's actual Python mechanics. CI pins the reviewed companion
+commit; ordinary library builds do not require it.
 `BUILD_SHARED_LIBS=ON` selects a shared library. No ROS environment is required.
 
 Consumers use the installed CMake package:
 
 ```cmake
-find_package(swerve_mppi 0.22 CONFIG REQUIRED)
+find_package(swerve_mppi 0.23 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 

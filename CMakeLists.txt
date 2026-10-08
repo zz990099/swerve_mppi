@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.22.0 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.23.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+
+set(SWERVE_MPPI_CHASSIS_SOURCE_DIR "" CACHE PATH "Companion Python chassis checkout for offline parity")
 
 option(SWERVE_MPPI_BUILD_TESTS "Build standalone tests" ON)
 option(SWERVE_MPPI_BUILD_BENCHMARKS "Build standalone measurement tools" OFF)
@@ -60,6 +62,16 @@ if(SWERVE_MPPI_BUILD_TESTS)
     target_include_directories(swerve_mppi_${suite}_tests PRIVATE src tests/fixtures)
     add_test(NAME ${suite}_regressions COMMAND swerve_mppi_${suite}_tests)
   endforeach()
+  if(SWERVE_MPPI_CHASSIS_SOURCE_DIR)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(swerve_mppi_chassis_parity_driver tests/model/chassis_parity_driver.cpp)
+    target_link_libraries(swerve_mppi_chassis_parity_driver PRIVATE swerve_mppi_core)
+    add_test(NAME chassis_python_parity
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/chassis_parity_test.py
+        --tool $<TARGET_FILE:swerve_mppi_chassis_parity_driver>
+        --chassis-root ${SWERVE_MPPI_CHASSIS_SOURCE_DIR})
+    set_tests_properties(chassis_python_parity PROPERTIES TIMEOUT 60)
+  endif()
   add_executable(swerve_mppi_behavior_tests tests/integration/behavior_tests.cpp)
   target_link_libraries(swerve_mppi_behavior_tests PRIVATE swerve_mppi_core)
   target_include_directories(swerve_mppi_behavior_tests PRIVATE src tests/fixtures)

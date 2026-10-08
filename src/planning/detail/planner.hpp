@@ -40,6 +40,10 @@ private:
   GoalManager goal_manager_;
   double last_stamp_s_ = -1.0;
   std::optional<Control> alignment_control_;
+  std::array<double, 4> alignment_targets_{};
+  std::optional<Control> last_drive_control_;
+  std::array<double, 4> last_drive_alignment_{};
+  DriveMode last_drive_mode_ = DriveMode::DualAckermann;
   DriveMode alignment_mode_ = DriveMode::DualAckermann;
   double alignment_start_s_ = 0.0;
   std::size_t safety_reductions_ = 0;

@@ -6,7 +6,7 @@
 #include <stdexcept>
 
 #include "common/detail/time_comparison.hpp"
-#include "model/detail/drive_interpolation.hpp"
+#include "model/detail/body_limits.hpp"
 #include "safety/detail/validation.hpp"
 #include "swerve_mppi/feedback/feedback.hpp"
 
@@ -110,7 +110,7 @@ Prediction Planner::compute_impl(const ControllerInput & input, const PlanningBu
     limit = std::min(
       {limit, config_.goal_translation_gain * distance,
        std::sqrt(
-         2 * config_.max_linear_decel_mps2 *
+         2 * config_.capture_linear_decel_mps2 *
          std::max(0.0, distance - config_.goal_position_tolerance_m / 2))});
   }
   prepared.tracking =
@@ -122,6 +122,17 @@ Prediction Planner::compute_impl(const ControllerInput & input, const PlanningBu
   } catch (const std::invalid_argument &) {
     stop.failure_reason = FailureReason::InvalidInput;
     return stop;
+  }
+  // The chassis may start automatic realignment during a command interval.
+  // Retain the issued body intent and its entry geometry until real confirmation.
+  if (
+    !input.vehicle.mode_confirmed && !input.vehicle.mode_fault && !mode_manager_.active() &&
+    !alignment_control_ && last_drive_control_ && input.vehicle.actual_mode == last_drive_mode_) {
+    alignment_control_ = last_drive_control_;
+    alignment_targets_ = last_drive_alignment_;
+    alignment_mode_ = input.vehicle.actual_mode;
+    alignment_start_s_ = input.vehicle.stamp_s;
+    optimizer_.clear_warm_start();
   }
   // GoalOnly terminal translation cannot advance in Spin. A finite horizon
   // plus switch cost can otherwise prefer yaw-only motion indefinitely. The
@@ -139,12 +150,12 @@ Prediction Planner::compute_impl(const ControllerInput & input, const PlanningBu
     if (out.action == Action::Hold && out.phase == TransitionPhase::Stable) {
       alignment_start_s_ = input.vehicle.stamp_s;
     }
+  } else if (alignment_control_ && !input.vehicle.mode_fault) {
+    out = continue_alignment(prepared);
+    out.control_policy = ControlPolicy::Alignment;
   } else if (!input.vehicle.mode_confirmed || input.vehicle.mode_fault) {
     out = stop;
     out.failure_reason = FailureReason::FeedbackFault;
-  } else if (alignment_control_) {
-    out = continue_alignment(prepared);
-    out.control_policy = ControlPolicy::Alignment;
   } else if (
     goal.complete || spin_terminal_translation ||
     (path.goal_eligible &&
@@ -284,7 +295,7 @@ Prediction Planner::compute_goal(const ControllerInput & input, const GoalState 
     const double speed = std::min(
       {config_.max_spin_radps, config_.goal_rotation_gain * error,
        std::sqrt(
-         2 * config_.max_angular_decel_radps2 *
+         2 * config_.capture_angular_decel_radps2 *
          std::max(0.0, error - config_.goal_yaw_tolerance_rad / 2))});
     control.wz = std::copysign(speed, goal.yaw_error_rad);
   } else {
@@ -343,7 +354,7 @@ Prediction Planner::apply_control(const ControllerInput & input, Control control
   out.requested_mode = input.vehicle.actual_mode;
   out.steering_targets = input.vehicle.steering_angles;
   // A zero intent is braking even when measured joints still imply motion.
-  // Preserve the executor's braking semantics instead of declaring a Drive.
+  // Preserve the chassis's zero semantics instead of declaring a Drive.
   if (std::hypot(control.vx, control.vy) < 1e-9 && std::abs(control.wz) < 1e-9) {
     alignment_control_.reset();
     optimizer_.clear_warm_start();
@@ -370,14 +381,16 @@ Prediction Planner::apply_control(const ControllerInput & input, Control control
   }
   out.velocity_intent = {control.vx, control.vy, control.wz};
   out.steering_targets = preview.steering_targets;
-  if (preview.aligning) {
+  if (preview.aligning || !input.vehicle.mode_confirmed) {
     if (!alignment_control_) {
       alignment_control_ = control;
+      alignment_targets_ = preview.prediction.alignment;
       alignment_mode_ = input.vehicle.actual_mode;
       alignment_start_s_ = input.vehicle.stamp_s;
       optimizer_.clear_warm_start();
       return continue_alignment(input);
     }
+    out.steering_targets = alignment_targets_;
     out.action = is_stopped(input.vehicle, config_) ? Action::Hold : Action::Brake;
     out.phase = out.action == Action::Hold ? TransitionPhase::Aligning : TransitionPhase::Braking;
   } else {
@@ -388,6 +401,10 @@ Prediction Planner::apply_control(const ControllerInput & input, Control control
       return planning_stop(input);
     }
     out.action = Action::Drive;
+    last_drive_control_ = control;
+    last_drive_mode_ = input.vehicle.actual_mode;
+    last_drive_alignment_ =
+      Kinematics(config_).inverse(model_.bounded(control), input.vehicle.steering_angles).angles;
     out.body_command = preview.state.velocity;
     out.wheel_speed_targets = preview.wheel_speed_targets;
     alignment_control_.reset();
@@ -416,14 +433,20 @@ std::optional<Control> Planner::safe_reduction(
 bool Planner::safe_control(
   const ControllerInput & input, const Branch & branch, const Control & control)
 {
-  safety_rollout_.generate_continuation(input.vehicle, branch, control, safety_trace_);
+  if (alignment_control_ && !mode_manager_.active() && !input.vehicle.mode_confirmed) {
+    safety_rollout_.generate_alignment_continuation(
+      input.vehicle, control, alignment_targets_, safety_trace_);
+  } else {
+    safety_rollout_.generate_continuation(input.vehicle, branch, control, safety_trace_);
+  }
   return validator_->check(input, safety_trace_) == TrajectoryStatus::Valid &&
          is_stopped(safety_trace_.final_state, config_);
 }
 Prediction Planner::planning_stop(const ControllerInput & input)
 {
   optimizer_.clear_warm_start();
-  alignment_control_.reset();
+  // Zero does not cancel a chassis-owned automatic transition.
+  if (input.vehicle.mode_confirmed) alignment_control_.reset();
   Prediction out;
   out.requested_mode = input.vehicle.actual_mode;
   out.steering_targets = input.vehicle.steering_angles;
@@ -434,7 +457,10 @@ Prediction Planner::planning_stop(const ControllerInput & input)
 Prediction Planner::check_stopping(const ControllerInput & input, Prediction out)
 {
   const auto & target =
-    out.action == Action::Brake ? input.vehicle.steering_angles : out.steering_targets;
+    alignment_control_ && !mode_manager_.active() && !input.vehicle.mode_confirmed
+      ? alignment_targets_
+    : out.action == Action::Brake ? input.vehicle.steering_angles
+                                  : out.steering_targets;
   safety_rollout_.generate_stopping_interval(input.vehicle, target, safety_trace_);
   if (
     validator_->check(input, safety_trace_) == TrajectoryStatus::Valid &&
@@ -457,6 +483,7 @@ void Planner::reset()
   optimizer_.reset();
   mode_manager_.reset();
   last_stamp_s_ = -1.0;
+  last_drive_control_.reset();
   alignment_control_.reset();
   path_manager_.reset();
   goal_manager_.reset();

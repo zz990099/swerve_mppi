@@ -18,6 +18,12 @@ jobs:
         build_type: [Debug, Release]
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout current chassis mechanics for offline parity
+        uses: actions/checkout@v4
+        with:
+          repository: zz990099/swerve_gazebo_sim
+          ref: 9358c96884d7fa4866cea7c053daa7a7cec82d8f
+          path: companion-chassis
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -32,17 +38,18 @@ jobs:
           -DCMAKE_CXX_FLAGS=-Werror
           -DSWERVE_MPPI_BUILD_BENCHMARKS=ON
           -DSWERVE_MPPI_BUILD_FORMAT_TESTS=ON
+          -DSWERVE_MPPI_CHASSIS_SOURCE_DIR=${{ github.workspace }}/companion-chassis
       - name: Build
         run: cmake --build build --parallel 2
       - name: Test core and installed consumer
         run: ctest --test-dir build --output-on-failure --parallel 2
 
-      - name: Check planning and configuration under UBSan (Debug)
+      - name: Check planning, model and configuration under UBSan (Debug)
         if: matrix.build_type == 'Debug'
         run: |
           cmake -S . -B build-ubsan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-Werror -fsanitize=undefined -fno-sanitize-recover=all"
-          cmake --build build-ubsan --target swerve_mppi_command_tests swerve_mppi_configuration_tests swerve_mppi_safety_tests --parallel 2
-          ctest --test-dir build-ubsan -R 'command_regressions|configuration_regressions|safety_regressions' --output-on-failure
+          cmake --build build-ubsan --target swerve_mppi_command_tests swerve_mppi_configuration_tests swerve_mppi_safety_tests swerve_mppi_model_tests --parallel 2
+          ctest --test-dir build-ubsan -R 'command_regressions|configuration_regressions|safety_regressions|model_regressions' --output-on-failure
 
       - name: Record independent motion probes (Release)
         if: matrix.build_type == 'Release'

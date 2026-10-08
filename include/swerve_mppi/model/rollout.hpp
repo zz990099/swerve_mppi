@@ -54,10 +54,16 @@ public:
     const VehicleState & initial, const Branch & branch, const Control & first_control,
     Trajectory & out) const;
 
+  // Predict an already-pending same-mode alignment from its frozen geometry.
+  // Unconfirmed measurements remain unconfirmed; no live Drive is authorized.
+  void generate_alignment_continuation(
+    const VehicleState & initial, const Control & intent,
+    const std::array<double, 4> & frozen_angles, Trajectory & out) const;
+
 private:
   void stopping_rollout(
     const VehicleState & initial, const Branch & branch, const Control * first_control,
-    Trajectory & out) const;
+    Trajectory & out, const std::array<double, 4> * frozen_angles = nullptr) const;
   Config config_;
   DriveModel model_;
   TransitionModel transition_;

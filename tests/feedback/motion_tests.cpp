@@ -197,12 +197,12 @@ void test_independent_probe()
   Config ramp_config = c;
   ramp_config.dt_s = 1;
   test::MotionPlant plant(ramp_config, DriveMode::DualAckermann, {"nominal"});
-  plant.advance({}, {.4, .4, .4, .4}, false);
+  plant.advance({}, {.4, .4, .4, .4});
   check(
     std::abs(plant.state.pose.x - .2) < 1e-12 && std::abs(plant.body_velocity.vx - .4) < 1e-12,
     "independent linear-ramp oracle");
   test::MotionPlant slipped(ramp_config, DriveMode::DualAckermann, {"slip", 0, 0, .25});
-  slipped.advance({}, {.4, .4, .4, .4}, false);
+  slipped.advance({}, {.4, .4, .4, .4});
   check(
     std::abs(slipped.state.pose.x - .15) < 1e-12 &&
       std::abs(slipped.state.velocity.vx - .4) < 1e-12 &&
@@ -215,8 +215,8 @@ void test_independent_probe()
   const double exact_distance = .4 * (.5 - tau + tau * tau * (1 - std::exp(-1 / tau)));
   test::MotionPlant lagged(ramp_config, DriveMode::DualAckermann, {"lag", tau});
   test::MotionPlant refined(ramp_config, DriveMode::DualAckermann, {"lag", tau});
-  lagged.advance({}, {.4, .4, .4, .4}, false, 512);
-  refined.advance({}, {.4, .4, .4, .4}, false, 1024);
+  lagged.advance({}, {.4, .4, .4, .4}, 512);
+  refined.advance({}, {.4, .4, .4, .4}, 1024);
   check(
     std::abs(refined.body_velocity.vx - exact_velocity) < 1e-6 &&
       std::abs(refined.state.pose.x - exact_distance) < 1e-6 &&

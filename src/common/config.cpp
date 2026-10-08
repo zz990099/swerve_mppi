@@ -25,15 +25,18 @@ void validate(const Config & c)
     c.max_wheel_accel_mps2,
     c.steering_limit_rad,
     c.max_steer_rate_radps,
+    c.chassis_max_linear_speed_mps,
+    c.chassis_max_angular_speed_radps,
+    c.chassis_period_s,
     c.max_vx_mps,
     c.max_crab_speed_mps,
     c.max_spin_radps,
     c.max_yaw_rate_radps,
     c.min_turn_radius_m,
     c.max_linear_accel_mps2,
-    c.max_linear_decel_mps2,
+    c.capture_linear_decel_mps2,
     c.max_angular_accel_radps2,
-    c.max_angular_decel_radps2,
+    c.capture_angular_decel_radps2,
     c.steering_tolerance_rad,
     c.drive_steering_limit_rad,
     c.confirmation_timeout_s,
@@ -45,7 +48,6 @@ void validate(const Config & c)
     }
   }
   const double nonnegative[] = {
-    c.drive_kinematic_tolerance_mps,
     c.feedback_linear_tolerance_mps,
     c.feedback_angular_tolerance_radps,
     c.compute_budget_ratio,
@@ -77,8 +79,8 @@ void validate(const Config & c)
     }
   }
   if (
-    c.steering_limit_rad < 1.5707963267948966 || c.steering_limit_rad > 3.14159265358979323846 ||
-    c.goal_docking_distance_m <= c.goal_position_tolerance_m ||
+    c.steering_limit_rad != 1.5707963267948966 || c.chassis_period_s < .001 ||
+    c.chassis_period_s > .02 || c.goal_docking_distance_m <= c.goal_position_tolerance_m ||
     c.goal_docking_distance_m > c.goal_slowdown_distance_m ||
     !std::isfinite(c.goal_docking_distance_m) ||
     c.goal_yaw_tolerance_rad >= 3.14159265358979323846 ||

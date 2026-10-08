@@ -9,12 +9,20 @@ namespace swerve_mppi::test
 {
 // Test-only nominal target generator. Independent encoder integration lives in
 // behavior_fixture.hpp. Reusing DriveModel for target compilation deliberately
-// preserves stage-1 nominal regressions; this is not the Python/Gazebo plant.
+// matches the command model; direct Python parity is a separate test.
+// This fixture is not the physical Gazebo servo/contact plant.
+struct JointSample
+{
+  std::array<double, 4> angles{};
+  std::array<double, 4> speeds{};
+  double dt_s = 0;
+};
 struct PlantTargets
 {
   detail::Action action = detail::Action::Hold;
   std::array<double, 4> steering_targets{};
   std::array<double, 4> wheel_speed_targets{};
+  std::vector<JointSample> samples;
   ModeFeedback feedback;
 };
 class NominalChassis
@@ -54,7 +62,7 @@ public:
             measured.steering_angles),
           r.entry_velocity};
         pending_ = true;
-        aligned_since_ = -1;
+        begin_ = true;
       }
       if (
         r.mode != accepted_->mode || r.entry_velocity.vx != accepted_->entry_velocity.vx ||
@@ -64,43 +72,42 @@ public:
       out.feedback.request_id = accepted_->id;
       out.feedback.accepted_mode_request = accepted_;
     }
-    if (pending_) {
-      out.feedback.confirmed = false;
-      out.action = Action::Brake;
-      if (is_stopped(measured, config_)) {
-        out.action = Action::RequestMode;
-        out.steering_targets = accepted_->steering_targets;
-        bool aligned = true;
-        for (std::size_t i = 0; i < 4; ++i) {
-          aligned = aligned && std::abs(measured.steering_angles[i] - out.steering_targets[i]) <=
-                                 config_.steering_tolerance_rad;
-        }
-        if (aligned) {
-          if (aligned_since_ < 0) aligned_since_ = measured.stamp_s;
-          if (measured.stamp_s - aligned_since_ + 1e-12 >= config_.alignment_min_s) {
-            pending_ = false;
-            out.feedback.actual_mode = accepted_->mode;
-            out.feedback.confirmed = true;
-            out.feedback.time_in_mode_s = 0;
-            out.action = Action::Hold;
-          }
-        } else
-          aligned_since_ = -1;
-      }
-      return out;
+    if (!memory_) memory_ = model_.seed(measured);
+    if (begin_) {
+      memory_->phase = TransitionPhase::Braking;
+      memory_->alignment = accepted_->steering_targets;
+      memory_->transition_start_s = measured.stamp_s;
+      memory_->aligned_since_s = -1;
+      begin_ = false;
     }
     const auto & v = command.target_velocity;
-    if (v.vx == 0 && v.vy == 0 && v.wz == 0) {
-      out.action = is_stopped(measured, config_) ? Action::Hold : Action::Brake;
-      return out;
+    if (pending_ && (v.vx != 0 || v.vy != 0 || v.wz != 0)) return reject();
+    if (!pending_ && command.mode != measured.actual_mode) return reject();
+    auto state = measured;
+    const auto ticks =
+      static_cast<std::size_t>(std::ceil(config_.dt_s / config_.chassis_period_s - 1e-12));
+    const double h = config_.dt_s / ticks;
+    bool aligning = false;
+    for (std::size_t tick = 0; tick < ticks; ++tick) {
+      const auto next = model_.step(state, {v.vx, v.vy, v.wz}, h, *memory_);
+      if (!next.valid) return reject();
+      memory_ = next.prediction;
+      aligning = aligning || next.aligning;
+      out.samples.push_back({next.steering_targets, next.wheel_speed_targets, h});
+      state = next.state;
     }
-    if (command.mode != measured.actual_mode || !measured.mode_confirmed) return reject();
-    const auto target = model_.step(measured, {v.vx, v.vy, v.wz}, config_.dt_s);
-    if (!target.valid) return reject();
-    out.steering_targets = target.steering_targets;
-    out.action = target.aligning ? (is_stopped(measured, config_) ? Action::Hold : Action::Brake)
-                                 : Action::Drive;
-    if (!target.aligning) out.wheel_speed_targets = target.wheel_speed_targets;
+    out.steering_targets = state.steering_angles;
+    out.wheel_speed_targets = state.wheel_speeds;
+    if (pending_ && memory_->phase == TransitionPhase::Stable) {
+      pending_ = false;
+      out.feedback.actual_mode = accepted_->mode;
+      out.feedback.time_in_mode_s = 0;
+    }
+    out.feedback.confirmed = memory_->phase == TransitionPhase::Stable && !pending_;
+    out.action = aligning ? (is_stopped(measured, config_) ? Action::Hold : Action::Brake)
+                 : (v.vx == 0 && v.vy == 0 && v.wz == 0)
+                   ? (is_stopped(measured, config_) ? Action::Hold : Action::Brake)
+                   : Action::Drive;
     return out;
   }
 
@@ -124,6 +131,7 @@ private:
   std::optional<AcceptedModeRequest> accepted_;
   bool pending_ = false;
   bool fault_ = false;
-  double aligned_since_ = -1;
+  bool begin_ = false;
+  std::optional<ChassisPrediction> memory_;
 };
 }  // namespace swerve_mppi::test

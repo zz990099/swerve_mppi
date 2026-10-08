@@ -87,6 +87,25 @@ void test_prepared_scoring_context()
       "a copied optimizer must prepare its own fresh obstacle context");
   }
 }
+void test_clearance_sampling_density()
+{
+  Config c;
+  c.compute_budget_ratio = 0;
+  auto in = input();
+  const auto trace =
+    RolloutEngine(c).generate(in.vehicle, {}, std::vector<Control>(c.horizon_steps, {.3, 0, 0}));
+  in.obstacles = {{.3, .75, .05}};
+  const double sparse = CriticManager(c).score(in, trace);
+  in.obstacles.resize(40, in.obstacles.front());
+  const double dense = CriticManager(c).score(in, trace);
+  check(
+    std::isfinite(sparse) && sparse == dense,
+    "repeated samples of the nearest obstacle cannot multiply clearance cost");
+  in.obstacles.push_back({.3, 0, .05});
+  check(
+    !std::isfinite(CriticManager(c).score(in, trace)),
+    "nearest-clearance scoring retains hard collision rejection");
+}
 void test_hysteresis_selection()
 {
   Config c;
@@ -642,6 +661,7 @@ int main()
   try {
     test_exact_spatial_queries();
     test_prepared_scoring_context();
+    test_clearance_sampling_density();
     test_hysteresis_selection();
     test_rollout_and_swept_collision();
     test_effective_noise_and_disabled_noise();

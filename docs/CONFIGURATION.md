@@ -23,6 +23,15 @@ navigation and planning-budget parameters control the optimizer and task policy.
 regressions; live callers must use a positive budget. Input size and stopping-horizon
 limits bound work without truncating paths or obstacles.
 
-The current model defaults are not a validated match for Python/Gazebo execution.
-Stage 2 reconciles the model, and stage 4 compares shared chassis settings without
-requiring the chassis to understand optimizer parameters.
+Shared chassis defaults match the current Python configuration: body caps 0.8 m/s
+and 0.8 rad/s, 100 Hz updates, wheel caps 2 m/s and 4 m/s^2, steering rate 2.5 rad/s,
+0.05 rad measured alignment tolerance, 0.05 s alignment dwell and 5 s transition
+limit. Steering travel is exactly +/- pi/2; unsupported older travel ranges are rejected.
+
+`max_vx_mps`, `max_crab_speed_mps`, `max_spin_radps`, `max_yaw_rate_radps` and
+`min_turn_radius_m` are planner proposal policies, possibly stricter than shared
+chassis caps. `capture_linear_decel_mps2` and `capture_angular_decel_radps2` shape
+terminal capture only. They do not simulate chassis zero/braking. Previous body
+brake and affine-residual configuration keys have no aliases and are rejected.
+Stage 4 will compare shared settings with the message adapter. Matching these defaults
+does not establish physical Gazebo tracking or braking accuracy.

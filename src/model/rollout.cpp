@@ -4,8 +4,7 @@
 #include <cmath>
 
 #include "common/detail/time_comparison.hpp"
-#include "model/detail/motion_profile.hpp"
-#include "model/detail/stopping_motion.hpp"
+#include "model/detail/nominal_motion.hpp"
 #include "safety/detail/validation.hpp"
 
 namespace swerve_mppi
@@ -35,7 +34,9 @@ void RolloutEngine::generate_stopping_interval(
     check_model_feedback(initial, config_).status != FeedbackStatus::Valid) {
     return;
   }
-  const auto endpoint = detail::stopping_step(initial, steering_targets, config_, config_.dt_s);
+  auto memory = model_.alignment_seed(initial, steering_targets);
+  const auto endpoint = model_.step(initial, {}, config_.dt_s, memory);
+  memory = endpoint.prediction;
   if (
     !endpoint.valid || !std::isfinite(endpoint.sweep_margin_m) || endpoint.sweep_margin_m < 0 ||
     !std::isfinite(endpoint.integration_error_m) || endpoint.integration_error_m < 0 ||
@@ -60,11 +61,12 @@ void RolloutEngine::generate_stopping_interval(
     if (steps >= config_.stopping_horizon_steps) {
       return;
     }
-    const auto next = model_.step(out.final_state, {}, config_.dt_s);
+    const auto next = model_.step(out.final_state, {}, config_.dt_s, memory);
     if (!next.valid) {
       return;
     }
     out.final_state = next.state;
+    memory = next.prediction;
     detail::append_motion(next, &out.poses, &out.sweep_margins_m, out.position_error_m);
     out.controls.push_back({});
     out.active_controls.push_back(false);
@@ -78,9 +80,15 @@ void RolloutEngine::generate_continuation(
 {
   stopping_rollout(initial, branch, &first_control, out);
 }
+void RolloutEngine::generate_alignment_continuation(
+  const VehicleState & initial, const Control & intent, const std::array<double, 4> & frozen_angles,
+  Trajectory & out) const
+{
+  stopping_rollout(initial, {initial.actual_mode, 0, false}, &intent, out, &frozen_angles);
+}
 void RolloutEngine::stopping_rollout(
   const VehicleState & initial, const Branch & branch, const Control * first_control,
-  Trajectory & out) const
+  Trajectory & out, const std::array<double, 4> * frozen_angles) const
 {
   out.valid = false;
   out.poses.clear();
@@ -92,9 +100,9 @@ void RolloutEngine::stopping_rollout(
   out.final_state = initial;
   if (
     check_model_feedback(initial, config_).status != FeedbackStatus::Valid ||
-    (first_control &&
-     (!initial.mode_confirmed || initial.mode_fault || !std::isfinite(first_control->vx) ||
-      !std::isfinite(first_control->vy) || !std::isfinite(first_control->wz))) ||
+    (first_control && ((!initial.mode_confirmed && !frozen_angles) || initial.mode_fault ||
+                       !std::isfinite(first_control->vx) || !std::isfinite(first_control->vy) ||
+                       !std::isfinite(first_control->wz))) ||
     (branch.switches &&
      (!first_control || branch.switch_step != 0 || branch.mode == initial.actual_mode ||
       !detail::elapsed_at_least(initial.time_in_mode_s, 0, config_.minimum_mode_dwell_s)))) {
@@ -109,11 +117,14 @@ void RolloutEngine::stopping_rollout(
       *first_control, &out.sweep_margins_m, &out.position_error_m) < 0) {
     return;
   }
+  if (frozen_angles && !detail::valid_steering(*frozen_angles, config_)) return;
+  auto memory = frozen_angles ? model_.alignment_seed(out.final_state, *frozen_angles)
+                              : model_.seed(out.final_state);
   out.controls.resize(steps);
   out.active_controls.resize(steps, false);
   const std::size_t alignment_begin = steps;
   bool pending = first_control != nullptr;
-  // Include residual movement below the executor's stopped thresholds. Those
+  // Include residual movement below the chassis's stopped thresholds. Those
   // thresholds permit handover, but do not certify zero remaining displacement.
   auto at_rest = [&]() {
     return out.final_state.velocity.vx == 0 && out.final_state.velocity.vy == 0 &&
@@ -131,11 +142,12 @@ void RolloutEngine::stopping_rollout(
     }
     const Control control =
       pending ? model_.project(*first_control, out.final_state.actual_mode) : Control{};
-    const auto next = model_.step(out.final_state, control, config_.dt_s);
+    const auto next = model_.step(out.final_state, control, config_.dt_s, memory);
     if (!next.valid) {
       return;
     }
     out.final_state = next.state;
+    memory = next.prediction;
     detail::append_motion(next, &out.poses, &out.sweep_margins_m, out.position_error_m);
     out.controls.push_back(control);
     out.active_controls.push_back(first_control && steps == alignment_begin);
@@ -179,6 +191,7 @@ void RolloutEngine::generate(
   out.poses.push_back(initial.pose);
   out.controls.resize(controls.size());
   out.active_controls.assign(controls.size(), false);
+  auto memory = model_.seed(initial);
   std::size_t step = 0;
   bool switched = false;
   std::optional<Control> alignment;
@@ -194,6 +207,7 @@ void RolloutEngine::generate(
           controls[branch.switch_step], &out.sweep_margins_m, &out.position_error_m) < 0.0) {
         return;
       }
+      memory = model_.seed(out.final_state);
       switched = true;
       // The switch-entry control remains committed through the first Drive.
       // The proposal at the resume index is ignored, just as in Controller.
@@ -215,11 +229,12 @@ void RolloutEngine::generate(
       return;
     }
     const Control control = alignment.value_or(model_.project(controls[step], mode));
-    const auto next = model_.step(out.final_state, control, config_.dt_s);
+    const auto next = model_.step(out.final_state, control, config_.dt_s, memory);
     if (!next.valid) {
       return;
     }
     out.final_state = next.state;
+    memory = next.prediction;
     out.controls[step] = control;
     // The first control commits entry geometry. Following controls are ignored
     // until that same intent finishes alignment and emits its first Drive.

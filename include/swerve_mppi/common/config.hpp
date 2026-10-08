@@ -17,26 +17,28 @@ struct Config
   // Linear rolling units; adapters convert joint rad/s using wheel_radius_m.
   double max_wheel_speed_mps = 2.0;
   double max_wheel_accel_mps2 = 4.0;
-  // Symmetric mechanical stops; supported half-range is pi/2 through pi.
+  // Current chassis mechanical stops: exactly +/- pi/2.
   double steering_limit_rad = 1.5707963267948966;
   double max_steer_rate_radps = 2.5;
+  double chassis_max_linear_speed_mps = 0.8;
+  double chassis_max_angular_speed_radps = 0.8;
+  // Prediction substep at the independent chassis update period.
+  double chassis_period_s = 0.01;
+  // Mode-specific planner proposal caps, possibly stricter than the chassis.
   double max_vx_mps = 0.8;
   double max_crab_speed_mps = 0.65;
   double max_spin_radps = 0.8;
   double max_yaw_rate_radps = 0.7;
   double min_turn_radius_m = 0.6;
   double max_linear_accel_mps2 = 0.9;
-  double max_linear_decel_mps2 = 1.0;
+  // Capture slowdown policy only; normal zero brakes each wheel independently.
+  double capture_linear_decel_mps2 = 1.0;
   double max_angular_accel_radps2 = 1.3;
-  double max_angular_decel_radps2 = 1.3;
+  double capture_angular_decel_radps2 = 1.3;
   double steering_tolerance_rad = 0.05;
   // Maximum target joint change allowed without stopping in a stable mode.
   // Set equal to steering_tolerance_rad for a conservative stop/align policy.
   double drive_steering_limit_rad = 0.20;
-  // Maximum per-module rolling-vector residual from the instantaneous rigid-body
-  // twist throughout Drive, including its measured start. Zero permits only
-  // numerical residual; moving steering may be reduced or rejected.
-  double drive_kinematic_tolerance_mps = 0.02;
   double stopped_linear_mps = 0.035;
   double stopped_angular_radps = 0.035;
   double stopped_wheel_speed_mps = 0.005;
@@ -48,12 +50,12 @@ struct Config
 
   // Age of the confirmed actual mode, not request stability time.
   double minimum_mode_dwell_s = 1.0;
-  double alignment_min_s = 0.25;
+  double alignment_min_s = 0.05;
   // Total post-alignment allowance; prediction enforces at least two protocol
   // ticks.
   double confirmation_prediction_s = 0.20;
   // Planner waiting deadline includes braking, alignment and acknowledgement.
-  double confirmation_timeout_s = 2.0;
+  double confirmation_timeout_s = 5.0;
   double switch_cost = 1.0;
   double switch_hysteresis = 0.4;
 

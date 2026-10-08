@@ -3,9 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "model/detail/drive_interpolation.hpp"
-#include "model/detail/motion_profile.hpp"
-#include "model/detail/stopping_motion.hpp"
+#include "model/detail/nominal_motion.hpp"
 #include "safety/detail/validation.hpp"
 #include "swerve_mppi/feedback/feedback.hpp"
 
@@ -14,32 +12,7 @@ namespace swerve_mppi
 namespace
 {
 constexpr double kEpsilon = 1e-9;
-// Split the velocity segment at its minimum speed. Traversing the braking
-// part consumes deceleration time before any remaining acceleration time.
-double braking_fraction(double ix, double iy, double fx, double fy)
-{
-  const double dx = fx - ix, dy = fy - iy;
-  const double squared = dx * dx + dy * dy;
-  return squared > 0.0 ? std::clamp(-(ix * dx + iy * dy) / squared, 0.0, 1.0) : 0.0;
 }
-double velocity_fraction(
-  double ix, double iy, double fx, double fy, double accel, double decel, double dt)
-{
-  const double length = std::hypot(fx - ix, fy - iy);
-  if (length < kEpsilon) {
-    return 1.0;
-  }
-  const double braking = length * braking_fraction(ix, iy, fx, fy);
-  const double brake_time = braking / decel;
-  const double distance = dt <= brake_time ? dt * decel : braking + (dt - brake_time) * accel;
-  return std::min(1.0, distance / length);
-}
-double velocity_change_time(double ix, double iy, double fx, double fy, double accel, double decel)
-{
-  const double fraction = braking_fraction(ix, iy, fx, fy);
-  return std::hypot(fx - ix, fy - iy) * (fraction / decel + (1.0 - fraction) / accel);
-}
-}  // namespace
 
 bool is_stopped(const VehicleState & state, const Config & c)
 {
@@ -79,6 +52,11 @@ bool DriveModel::feasible(const Control & u, DriveMode mode) const
   if (!admissible) {
     return false;
   }
+  const auto capped = bounded(u);
+  if (
+    std::abs(capped.vx - u.vx) > tol || std::abs(capped.vy - u.vy) > tol ||
+    std::abs(capped.wz - u.wz) > tol)
+    return false;
   const auto wheels = kinematics_.inverse(u, {});
   return wheels.valid && std::all_of(wheels.speeds.begin(), wheels.speeds.end(), [&](double speed) {
            return std::abs(speed) <= config_.max_wheel_speed_mps + tol;
@@ -109,6 +87,7 @@ Control DriveModel::project(const Control & u, DriveMode mode) const
       break;
     }
   }
+  out = bounded(out);
   const auto wheels = kinematics_.inverse(out, {});
   double maximum = 0.0;
   for (double speed : wheels.speeds) {
@@ -129,128 +108,183 @@ std::array<double, 4> DriveModel::steering_for_mode(
 std::array<double, 4> DriveModel::steering_for_entry(
   DriveMode mode, const Control & intent, const std::array<double, 4> & current) const
 {
-  const auto projected = project(intent, mode);
-  const double scale =
-    std::max({std::abs(projected.vx), std::abs(projected.vy), std::abs(projected.wz)});
-  if (scale == 0) {
-    return steering_for_mode(mode, current);
-  }
-  // Entry specifies direction/curvature, not rolling speed. Divide instead of
-  // multiplying by a reciprocal so subnormal finite intents remain representable.
-  return kinematics_
-    .inverse({projected.vx / scale, projected.vy / scale, projected.wz / scale}, current)
+  const double scale = std::max({std::abs(intent.vx), std::abs(intent.vy), std::abs(intent.wz)});
+  if (scale == 0) return steering_for_mode(mode, current);
+  // Normalize the raw legal entry, preserving curvature without planner projection.
+  return kinematics_.inverse({intent.vx / scale, intent.vy / scale, intent.wz / scale}, current)
     .angles;
 }
 
-StepResult DriveModel::step(const VehicleState & start, const Control & u, double dt) const
+Control DriveModel::bounded(const Control & u) const
+{
+  const double scale = std::max(
+    {1.0, std::hypot(u.vx, u.vy) / config_.chassis_max_linear_speed_mps,
+     std::abs(u.wz) / config_.chassis_max_angular_speed_radps});
+  return {u.vx / scale, u.vy / scale, u.wz / scale};
+}
+ChassisPrediction DriveModel::seed(const VehicleState & s) const
+{
+  ChassisPrediction memory;
+  memory.limited_velocity = s.velocity;
+  memory.commanded_angles = s.steering_angles;
+  for (std::size_t i = 0; i < 4; ++i)
+    memory.commanded_wheel_radps[i] = s.wheel_speeds[i] / config_.wheel_radius_m;
+  return memory;
+}
+ChassisPrediction DriveModel::alignment_seed(
+  const VehicleState & s, const std::array<double, 4> & angles) const
+{
+  auto memory = seed(s);
+  memory.phase = TransitionPhase::Braking;
+  memory.alignment = angles;
+  memory.transition_start_s = s.stamp_s;
+  return memory;
+}
+StepResult DriveModel::step(const VehicleState & s, const Control & u, double dt) const
+{
+  return step(s, u, dt, seed(s));
+}
+StepResult DriveModel::step(
+  const VehicleState & start, const Control & u, double dt, const ChassisPrediction & memory) const
 {
   StepResult out;
   out.state = start;
+  out.prediction = memory;
+  auto & m = out.prediction;
   if (
-    !std::isfinite(dt) || dt <= 0.0 ||
-    check_model_feedback(start, config_).status != FeedbackStatus::Valid ||
-    !feasible(u, start.actual_mode)) {
+    !std::isfinite(dt) || dt <= 0 || dt / config_.chassis_period_s > 1024 ||
+    check_model_feedback(start, config_).status != FeedbackStatus::Valid || start.mode_fault ||
+    !std::isfinite(u.vx) || !std::isfinite(u.vy) || !std::isfinite(u.wz) ||
+    (start.actual_mode == DriveMode::DualAckermann && (u.vy != 0 || (u.vx == 0 && u.wz != 0))) ||
+    (start.actual_mode == DriveMode::Spin && (u.vx != 0 || u.vy != 0)) ||
+    (start.actual_mode == DriveMode::Crab && u.wz != 0) ||
+    !detail::valid_steering(m.commanded_angles, config_) ||
+    !detail::valid_steering(m.alignment, config_) || !std::isfinite(m.limited_velocity.vx) ||
+    !std::isfinite(m.limited_velocity.vy) || !std::isfinite(m.limited_velocity.wz) ||
+    !std::isfinite(m.transition_start_s) || !std::isfinite(m.aligned_since_s) ||
+    (m.phase != TransitionPhase::Stable && m.phase != TransitionPhase::Braking &&
+     m.phase != TransitionPhase::Aligning)) {
     out.valid = false;
     return out;
   }
-  const auto wheels = kinematics_.inverse(u, start.steering_angles);
-  if (!wheels.valid) {
-    out.valid = false;
-    return out;
-  }
-  bool ready = true;
-  for (std::size_t i = 0; i < 4; ++i) {
+  for (double speed : m.commanded_wheel_radps) {
     if (
-      !std::isfinite(start.wheel_speeds[i]) ||
-      std::abs(start.wheel_speeds[i]) > config_.max_wheel_speed_mps + kEpsilon ||
-      std::abs(wheels.speeds[i]) > config_.max_wheel_speed_mps + kEpsilon) {
+      !std::isfinite(speed) ||
+      std::abs(speed) > config_.max_wheel_speed_mps / config_.wheel_radius_m + kEpsilon) {
       out.valid = false;
       return out;
     }
-    if (std::abs(wheels.angles[i] - start.steering_angles[i]) > config_.drive_steering_limit_rad) {
-      ready = false;
-    }
   }
-  out.steering_targets =
-    ready || is_stopped(start, config_) ? wheels.angles : start.steering_angles;
-  out.aligning = !ready;
-  const bool driving = ready && (std::hypot(u.vx, u.vy) >= kEpsilon || std::abs(u.wz) >= kEpsilon);
-  if (!driving) {
-    auto stopped = detail::stopping_step(start, out.steering_targets, config_, dt);
-    stopped.aligning = !ready;
-    return stopped;
-  }
-  auto & state = out.state;
-  auto target = wheels.speeds;
-  const Twist2d initial = kinematics_.forward(start.wheel_speeds, start.steering_angles);
-  auto target_fraction = [&]() {
-    const auto desired = kinematics_.forward(target, wheels.angles);
-    double fraction = std::min(
-      velocity_fraction(
-        initial.vx, initial.vy, desired.vx, desired.vy, config_.max_linear_accel_mps2,
-        config_.max_linear_decel_mps2, dt),
-      velocity_fraction(
-        initial.wz, 0.0, desired.wz, 0.0, config_.max_angular_accel_radps2,
-        config_.max_angular_decel_radps2, dt));
-    for (std::size_t i = 0; i < 4; ++i) {
-      const double delta = std::abs(target[i] - start.wheel_speeds[i]);
-      if (delta > kEpsilon) {
-        fraction = std::min(fraction, config_.max_wheel_accel_mps2 * dt / delta);
-      }
-      const double steering_delta = std::abs(wheels.angles[i] - start.steering_angles[i]);
-      if (steering_delta > kEpsilon) {
-        fraction = std::min(fraction, config_.max_steer_rate_radps * dt / steering_delta);
-      }
-    }
-    return fraction;
+  const auto velocity = bounded(u);
+  auto targets = [&](const Control & intent) {
+    auto w = kinematics_.inverse(intent, out.state.steering_angles);
+    for (double & speed : w.speeds) speed /= config_.wheel_radius_m;
+    double scale = 1;
+    for (double speed : w.speeds)
+      scale =
+        std::max(scale, std::abs(speed) / (config_.max_wheel_speed_mps / config_.wheel_radius_m));
+    for (double & speed : w.speeds) speed /= scale;
+    return w;
   };
-  double fraction = target_fraction();
-  // Steering changes the encoder-derived twist too. Limit the joint step as a
-  // whole, rather than checking acceleration at fixed steering angles only.
-  detail::MotionProfile profile;
-  for (std::size_t attempt = 0;; ++attempt) {
-    for (std::size_t i = 0; i < 4; ++i) {
-      state.wheel_speeds[i] =
-        start.wheel_speeds[i] + fraction * (target[i] - start.wheel_speeds[i]);
-      state.steering_angles[i] =
-        start.steering_angles[i] + fraction * (wheels.angles[i] - start.steering_angles[i]);
-    }
-    state.velocity = kinematics_.forward(state.wheel_speeds, state.steering_angles);
-    profile = detail::motion_profile(initial, state, start, config_);
-    const bool module_consistent = detail::drive_residual_admissible(start, state, config_);
-    const bool speed_ok = detail::drive_speed_admissible(start, state, config_);
-    if (
-      module_consistent && speed_ok && detail::drive_rates_admissible(start, state, config_, dt) &&
-      profile.duration <= dt + 1e-12 &&
-      velocity_change_time(
-        initial.vx, initial.vy, state.velocity.vx, state.velocity.vy, config_.max_linear_accel_mps2,
-        config_.max_linear_decel_mps2) <= dt + 1e-9 &&
-      velocity_change_time(
-        initial.wz, 0.0, state.velocity.wz, 0.0, config_.max_angular_accel_radps2,
-        config_.max_angular_decel_radps2) <= dt + 1e-9) {
-      break;
-    }
-    if (attempt == 60) {
-      out.valid = false;
-      return out;
-    }
-    if (!speed_ok) {
-      // Reducing steering alone can stall a turn at an exact speed cap. Reserve
-      // a small rolling-speed margin while retaining the intended geometry.
-      for (double & speed : target) {
-        speed *= .99;
+  auto approach = [](auto & values, const auto & target, double delta) {
+    for (std::size_t i = 0; i < 4; ++i)
+      values[i] += std::clamp(target[i] - values[i], -delta, delta);
+  };
+  // Each substep observes the previous targets, updates command mechanics, and
+  // applies the new targets at its endpoint. This is an ideal tracking model.
+  const std::size_t ticks =
+    static_cast<std::size_t>(std::ceil(dt / config_.chassis_period_s - 1e-12));
+  const double h = dt / std::max(ticks, std::size_t{1});
+  double length = 0, largest_speed_jump = 0, curvature_accel = 0;
+  Twist2d previous = out.state.velocity;
+  for (std::size_t tick = 0; tick < std::max(ticks, std::size_t{1}); ++tick) {
+    const auto before = out.state.velocity;
+    detail::integrate_constant(out.state.pose, before, h);
+    length += std::hypot(before.vx, before.vy) * h;
+    largest_speed_jump =
+      std::max(largest_speed_jump, std::hypot(before.vx - previous.vx, before.vy - previous.vy));
+    curvature_accel =
+      std::max(curvature_accel, std::hypot(before.vx, before.vy) * std::abs(before.wz));
+    previous = before;
+    const double now = start.stamp_s + (tick + 1) * h;
+    const double wheel_delta = config_.max_wheel_accel_mps2 / config_.wheel_radius_m * h;
+    const double steer_delta = config_.max_steer_rate_radps * h;
+    bool drive = false;
+    if (m.phase == TransitionPhase::Stable) {
+      if (velocity.vx == 0 && velocity.vy == 0 && velocity.wz == 0) {
+        approach(m.commanded_wheel_radps, std::array<double, 4>{}, wheel_delta);
+        m.limited_velocity = {};
+        drive = true;  // ordinary zero holds commanded steering
+      } else {
+        const auto & v = m.limited_velocity;
+        const double dx = velocity.vx - v.vx, dy = velocity.vy - v.vy, dw = velocity.wz - v.wz;
+        const double linear = std::hypot(dx, dy), angular = std::abs(dw);
+        const double scale = std::min(
+          {1.0, linear ? config_.max_linear_accel_mps2 * h / linear : 1.0,
+           angular ? config_.max_angular_accel_radps2 * h / angular : 1.0});
+        const Control next{v.vx + scale * dx, v.vy + scale * dy, v.wz + scale * dw};
+        const auto w = targets(next);
+        if (!w.valid) {
+          out.valid = false;
+          return out;
+        }
+        bool ready = true;
+        for (std::size_t i = 0; i < 4; ++i)
+          ready = ready && std::abs(w.angles[i] - out.state.steering_angles[i]) <=
+                             config_.drive_steering_limit_rad;
+        if (ready) {
+          approach(m.commanded_wheel_radps, w.speeds, wheel_delta);
+          approach(m.commanded_angles, w.angles, steer_delta);
+          m.limited_velocity = {next.vx, next.vy, next.wz};
+          drive = true;
+        } else {
+          m.alignment = targets(velocity).angles;
+          m.phase = TransitionPhase::Braking;
+          m.transition_start_s = now;
+          m.aligned_since_s = -1;
+        }
       }
-      fraction = target_fraction();
-    } else {
-      fraction *= 0.5;
     }
+    if (!drive) {
+      out.aligning = true;
+      if (now - m.transition_start_s > config_.confirmation_timeout_s) {
+        out.valid = false;
+        return out;
+      }
+      approach(m.commanded_wheel_radps, std::array<double, 4>{}, wheel_delta);
+      m.limited_velocity = {};
+      const bool stopped = std::all_of(
+        out.state.wheel_speeds.begin(), out.state.wheel_speeds.end(),
+        [&](double v) { return std::abs(v) <= config_.stopped_wheel_speed_mps; });
+      const bool commanded_zero = std::all_of(
+        m.commanded_wheel_radps.begin(), m.commanded_wheel_radps.end(),
+        [](double v) { return v == 0; });
+      if (!stopped || !commanded_zero) {
+        m.phase = TransitionPhase::Braking;
+        m.aligned_since_s = -1;
+      } else {
+        m.phase = TransitionPhase::Aligning;
+        approach(m.commanded_angles, m.alignment, steer_delta);
+        if (detail::steering_aligned(out.state.steering_angles, m.alignment, config_)) {
+          if (m.aligned_since_s < 0) m.aligned_since_s = now;
+          if (now - m.aligned_since_s >= config_.alignment_min_s) m.phase = TransitionPhase::Stable;
+        } else
+          m.aligned_since_s = -1;
+      }
+    }
+    out.state.steering_angles = m.commanded_angles;
+    for (std::size_t i = 0; i < 4; ++i)
+      out.state.wheel_speeds[i] = m.commanded_wheel_radps[i] * config_.wheel_radius_m;
+    out.state.velocity = kinematics_.forward(out.state.wheel_speeds, m.commanded_angles);
   }
-  out.steering_targets = state.steering_angles;
-  out.wheel_speed_targets = state.wheel_speeds;
-  detail::integrate_drive(out, start, initial, config_, dt);
-  state.stamp_s += dt;
-  state.time_in_mode_s += dt;
+  out.steering_targets = m.commanded_angles;
+  out.wheel_speed_targets = out.state.wheel_speeds;
+  out.state.stamp_s += dt;
+  out.state.time_in_mode_s += dt;
+  // Discrete velocity jumps represented by a bounded linear ramp plus its
+  // sample-and-hold discrepancy. Also cover curved motion and reversal.
+  out.sweep_margin_m = std::min(
+    length / 2, (largest_speed_jump / h + curvature_accel) * dt * dt / 8 + largest_speed_jump * dt);
   return out;
 }
-
 }  // namespace swerve_mppi

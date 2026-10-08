@@ -66,32 +66,24 @@ public:
     out.wz /= moment;
     return out;
   }
+  // Generic independent affine target ramp, or explicit held-target interval.
+  // Neither mode implements the chassis command generator.
   void advance(
-    const std::array<double, 4> & angles, const std::array<double, 4> & speeds, bool braking,
-    int substeps = 512)
+    const std::array<double, 4> & angles, const std::array<double, 4> & speeds, int substeps = 512,
+    bool held = false)
   {
     const auto before = state;
-    double brake_s = std::max(
-      std::hypot(state.velocity.vx, state.velocity.vy) / config_.max_linear_decel_mps2,
-      std::abs(state.velocity.wz) / config_.max_angular_decel_radps2);
-    for (double speed : state.wheel_speeds) {
-      brake_s = std::max(brake_s, std::abs(speed) / config_.max_wheel_accel_mps2);
-    }
     const double h = config_.dt_s / substeps;
     for (int step = 0; step < substeps; ++step) {
       const double t = (step + .5) * h;
-      const double angle_fraction = !braking ? t / config_.dt_s
-                                    : config_.dt_s > brake_s
-                                      ? std::clamp((t - brake_s) / (config_.dt_s - brake_s), 0., 1.)
-                                      : 0;
+      const double angle_fraction = held ? 0 : t / config_.dt_s;
       const auto prior_wheels = state.wheel_speeds;
       for (std::size_t i = 0; i < 4; ++i) {
         state.steering_angles[i] =
           before.steering_angles[i] + (angles[i] - before.steering_angles[i]) * angle_fraction;
         const double target =
-          braking
-            ? before.wheel_speeds[i] * (brake_s > 0 ? std::max(0., 1 - t / brake_s) : 0)
-            : before.wheel_speeds[i] + (speeds[i] - before.wheel_speeds[i]) * t / config_.dt_s;
+          held ? held_speeds_[i]
+               : before.wheel_speeds[i] + (speeds[i] - before.wheel_speeds[i]) * t / config_.dt_s;
         if (perturbation_.wheel_lag_s > 0) {
           state.wheel_speeds[i] +=
             (target - state.wheel_speeds[i]) * (1 - std::exp(-h / perturbation_.wheel_lag_s));
@@ -128,6 +120,7 @@ public:
       state.pose.yaw = std::atan2(
         std::sin(state.pose.yaw + h * physical.wz), std::cos(state.pose.yaw + h * physical.wz));
     }
+    held_speeds_ = speeds;
     state.steering_angles = angles;
     if (perturbation_.wheel_lag_s == 0) {
       state.wheel_speeds = speeds;
@@ -151,6 +144,7 @@ private:
     state.velocity = encoder_twist();
     state.stamp_s = std::chrono::duration<double>(std::chrono::nanoseconds(stamp_ns)).count();
   }
+  std::array<double, 4> held_speeds_{};
   Config config_;
   MotionPerturbation perturbation_;
 };
@@ -176,6 +170,10 @@ inline std::vector<MotionProbeRow> run_motion_probe(const Config & c)
   if (c.dt_s > 1 || c.dt_s < .001) {
     throw std::invalid_argument("Probe requires dt_s in [0.001,1]");
   }
+  if (std::abs(c.dt_s / c.chassis_period_s - std::round(c.dt_s / c.chassis_period_s)) > 1e-9) {
+    throw std::invalid_argument(
+      "Probe requires an integer number of chassis periods per model tick");
+  }
   const auto tick_ns = static_cast<std::int64_t>(std::llround(c.dt_s * 1e9));
   if (std::chrono::duration<double>(std::chrono::nanoseconds(tick_ns)).count() != c.dt_s) {
     throw std::invalid_argument("Probe dt_s must represent an exact integer nanosecond period");
@@ -188,16 +186,27 @@ inline std::vector<MotionProbeRow> run_motion_probe(const Config & c)
                           : mode == DriveMode::Crab        ? Control{0, .4, 0}
                                                            : Control{0, 0, .5};
     for (const auto & p : motion_perturbations()) {
-      MotionPlant plant(c, mode, p);
+      Config micro = c;
+      micro.dt_s = c.chassis_period_s;
+      MotionPlant plant(micro, mode, p);
+      auto memory = model.seed(plant.state);
       MotionObservation previous{
         plant.body_velocity, plant.stamp_ns, MotionSource::IndependentBody};
       for (int tick = 0; tick < 40; ++tick) {
         const bool braking = tick >= 20;
-        const auto predicted = model.step(plant.state, braking ? Control{} : drive, c.dt_s);
+        const auto predicted = model.step(plant.state, braking ? Control{} : drive, c.dt_s, memory);
         if (!predicted.valid) {
           throw std::runtime_error("Probe intent is incompatible with resolved configuration");
         }
-        plant.advance(predicted.steering_targets, predicted.wheel_speed_targets, braking);
+        // Independently apply each command endpoint to a sample-and-hold plant.
+        const auto ticks = static_cast<std::size_t>(std::llround(c.dt_s / c.chassis_period_s));
+        for (std::size_t substep = 0; substep < ticks; ++substep) {
+          const auto target =
+            model.step(plant.state, braking ? Control{} : drive, c.chassis_period_s, memory);
+          if (!target.valid) throw std::runtime_error("invalid probe command prediction");
+          memory = target.prediction;
+          plant.advance(target.steering_targets, target.wheel_speed_targets, 64, true);
+        }
         MotionObservation current{
           plant.body_velocity, plant.stamp_ns, MotionSource::IndependentBody};
         // Deterministic bounded alternating measurement disturbance, not MPPI proposal noise.

@@ -36,6 +36,20 @@ private:
   Config config_;
 };
 
+// Command-side prediction only. Never substitute it for measured feedback.
+// Cold seeds assume commanded joints and limited velocity equal the observation;
+// carry this context between steps for a known nominal command history.
+struct ChassisPrediction
+{
+  TransitionPhase phase = TransitionPhase::Stable;
+  Twist2d limited_velocity;
+  std::array<double, 4> commanded_angles{};
+  std::array<double, 4> commanded_wheel_radps{};
+  std::array<double, 4> alignment{};
+  double transition_start_s = 0;
+  double aligned_since_s = -1;
+};
+
 struct StepResult
 {
   VehicleState state;
@@ -43,8 +57,8 @@ struct StepResult
   std::array<double, 4> wheel_speed_targets{};
   bool valid = true;
   bool aligning = false;
-  // Conservative enclosure for full-tick affine Drive joints or proportional
-  // Brake.
+  ChassisPrediction prediction;
+  // Conservative enclosure for the complete sample-and-hold nominal motion.
   double sweep_margin_m = 0;
   double integration_error_m = 0;
 };
@@ -56,7 +70,16 @@ public:
 
   bool feasible(const Control & control, DriveMode mode) const;
   Control project(const Control & control, DriveMode mode) const;
+  // Cold prediction from an observation; this is an explicit nominal assumption.
   StepResult step(const VehicleState & start, const Control & control, double dt_s) const;
+  StepResult step(
+    const VehicleState & start, const Control & control, double dt_s,
+    const ChassisPrediction & prediction) const;
+  ChassisPrediction seed(const VehicleState & observed) const;
+  ChassisPrediction alignment_seed(
+    const VehicleState & observed, const std::array<double, 4> & frozen_angles) const;
+  // Shared chassis caps; planner projection remains a separate policy.
+  Control bounded(const Control & intent) const;
   std::array<double, 4> steering_for_mode(
     DriveMode mode, const std::array<double, 4> & current_angles = {}) const;
   std::array<double, 4> steering_for_entry(
