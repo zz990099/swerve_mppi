@@ -1,12 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.21.5 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.22.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 option(SWERVE_MPPI_BUILD_TESTS "Build standalone tests" ON)
 option(SWERVE_MPPI_BUILD_BENCHMARKS "Build standalone measurement tools" OFF)
-option(SWERVE_MPPI_BUILD_PREPARATION_TOOLS "Build offline adapter preparation tools" OFF)
 option(SWERVE_MPPI_BUILD_FORMAT_TESTS "Check the pinned ROS Rolling C++ format" OFF)
 
 if(SWERVE_MPPI_BUILD_FORMAT_TESTS)
@@ -52,9 +51,8 @@ if(SWERVE_MPPI_BUILD_TESTS)
   target_include_directories(swerve_mppi_tests PRIVATE src tests/fixtures)
   add_test(NAME swerve_mppi_tests COMMAND swerve_mppi_tests)
   foreach(suite_path
-    feedback/motion common/configuration model/model planning/optimizer execution/execution navigation/navigation
-    safety/safety execution/timing model/actuation safety/admission integration/integration
-    execution/chassis integration/adapter
+    feedback/motion common/configuration model/model planning/optimizer navigation/navigation
+    safety/safety safety/admission planning/command
   )
     get_filename_component(suite "${suite_path}" NAME)
     add_executable(swerve_mppi_${suite}_tests tests/${suite_path}_tests.cpp)
@@ -64,17 +62,13 @@ if(SWERVE_MPPI_BUILD_TESTS)
   endforeach()
   add_executable(swerve_mppi_behavior_tests tests/integration/behavior_tests.cpp)
   target_link_libraries(swerve_mppi_behavior_tests PRIVATE swerve_mppi_core)
-  target_include_directories(swerve_mppi_behavior_tests PRIVATE tests/fixtures)
+  target_include_directories(swerve_mppi_behavior_tests PRIVATE src tests/fixtures)
   foreach(scenario
     straight lateral curve spin reverse final_yaw scurve scurve_duplicates
     cusp loop short_cusp short_loop short_corner near_obstacles spin_translation
   )
     add_test(NAME behavior_${scenario} COMMAND swerve_mppi_behavior_tests ${scenario})
-    add_test(NAME timed_behavior_${scenario} COMMAND swerve_mppi_behavior_tests ${scenario} --timed)
-    add_test(NAME profile_behavior_${scenario} COMMAND swerve_mppi_behavior_tests ${scenario} --profile)
-    set_tests_properties(profile_behavior_${scenario} PROPERTIES TIMEOUT 180)
     set_tests_properties(behavior_${scenario} PROPERTIES TIMEOUT 180)
-    set_tests_properties(timed_behavior_${scenario} PROPERTIES TIMEOUT 180)
   endforeach()
   add_test(NAME installed_consumer
     COMMAND ${CMAKE_COMMAND}
@@ -86,9 +80,8 @@ if(SWERVE_MPPI_BUILD_TESTS)
       -DTEST_COMPILER=${CMAKE_CXX_COMPILER}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_test.cmake)
   set_tests_properties(
-    swerve_mppi_tests motion_regressions configuration_regressions model_regressions optimizer_regressions execution_regressions
-    navigation_regressions safety_regressions timing_regressions actuation_regressions
-    admission_regressions integration_regressions chassis_regressions adapter_regressions installed_consumer
+    swerve_mppi_tests motion_regressions configuration_regressions model_regressions optimizer_regressions
+    navigation_regressions safety_regressions admission_regressions command_regressions installed_consumer
     PROPERTIES TIMEOUT 60
   )
   target_compile_definitions(swerve_mppi_configuration_tests PRIVATE
@@ -99,66 +92,19 @@ if(SWERVE_MPPI_BUILD_BENCHMARKS)
   add_executable(swerve_mppi_model_probe benchmarks/model_probe.cpp)
   target_include_directories(swerve_mppi_model_probe PRIVATE tests/fixtures)
   target_link_libraries(swerve_mppi_model_probe PRIVATE swerve_mppi_core)
-  add_executable(swerve_mppi_integration_budget benchmarks/integration_budget.cpp)
-  target_include_directories(swerve_mppi_integration_budget PRIVATE tests/fixtures)
-  target_link_libraries(swerve_mppi_integration_budget PRIVATE swerve_mppi_core)
-  target_compile_definitions(swerve_mppi_integration_budget PRIVATE
-    SWERVE_MPPI_TOOL_VERSION="${PROJECT_VERSION}"
-    SWERVE_MPPI_TOOL_BUILD_TYPE="$<CONFIG>"
-    SWERVE_MPPI_TOOL_COMPILER="${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
   add_executable(swerve_mppi_benchmark benchmarks/core_benchmark.cpp)
-  target_include_directories(swerve_mppi_benchmark PRIVATE tests/fixtures)
+  target_include_directories(swerve_mppi_benchmark PRIVATE src tests/fixtures)
   target_link_libraries(swerve_mppi_benchmark PRIVATE swerve_mppi_core)
   if(SWERVE_MPPI_BUILD_TESTS)
-    add_executable(swerve_mppi_budget_report_tests tests/integration/budget_report_tests.cpp)
-    target_include_directories(swerve_mppi_budget_report_tests PRIVATE benchmarks)
-    target_link_libraries(swerve_mppi_budget_report_tests PRIVATE swerve_mppi_core)
-    add_test(NAME budget_report_regressions COMMAND swerve_mppi_budget_report_tests)
-    set_tests_properties(budget_report_regressions PROPERTIES TIMEOUT 60)
+    add_test(NAME benchmark_allocations COMMAND swerve_mppi_benchmark --smoke)
+    set_tests_properties(benchmark_allocations PROPERTIES TIMEOUT 60)
     if(Python3_Interpreter_FOUND)
       add_test(NAME motion_probe_cli
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/motion_probe_test.py
           --tool $<TARGET_FILE:swerve_mppi_model_probe>
           --summary ${CMAKE_CURRENT_SOURCE_DIR}/tools/summarize_motion_probe.py)
       set_tests_properties(motion_probe_cli PROPERTIES TIMEOUT 60)
-      add_test(NAME budget_diagnostics_cli
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/budget_diagnostics_test.py
-          --tool $<TARGET_FILE:swerve_mppi_integration_budget>
-          --runner ${CMAKE_CURRENT_SOURCE_DIR}/tools/run_budget_matrix.py
-          --expected-version ${PROJECT_VERSION})
-      set_tests_properties(budget_diagnostics_cli PROPERTIES TIMEOUT 60)
     endif()
-    add_test(NAME benchmark_allocations COMMAND swerve_mppi_benchmark --smoke)
-    set_tests_properties(benchmark_allocations PROPERTIES TIMEOUT 60)
-    add_test(NAME integration_budget_profile
-      COMMAND ${CMAKE_COMMAND}
-        -DBUDGET_TOOL=$<TARGET_FILE:swerve_mppi_integration_budget>
-        -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/budget-profile-test
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/budget_profile_test.cmake)
-    set_tests_properties(integration_budget_profile PROPERTIES TIMEOUT 60)
-    add_test(NAME integration_budget_invalid_ratio
-      COMMAND swerve_mppi_integration_budget 2 --budget-ratio 0)
-    add_test(NAME integration_budget_strict_timeout
-      COMMAND swerve_mppi_integration_budget 2 --budget-ratio 0.000001 --strict)
-    set_tests_properties(integration_budget_invalid_ratio integration_budget_strict_timeout
-      PROPERTIES WILL_FAIL TRUE TIMEOUT 60)
-  endif()
-endif()
-
-if(SWERVE_MPPI_BUILD_PREPARATION_TOOLS)
-  add_executable(swerve_mppi_config_preflight preparation/config_preflight.cpp)
-  target_link_libraries(swerve_mppi_config_preflight PRIVATE swerve_mppi_core)
-  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(swerve_mppi_config_preflight PRIVATE -Wall -Wextra -Wpedantic)
-  endif()
-  target_compile_definitions(swerve_mppi_config_preflight PRIVATE
-    SWERVE_MPPI_TOOL_VERSION="${PROJECT_VERSION}")
-  if(SWERVE_MPPI_BUILD_TESTS AND Python3_Interpreter_FOUND)
-    add_test(NAME config_preflight_cli
-      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/config_preflight_test.py
-        --tool $<TARGET_FILE:swerve_mppi_config_preflight>
-        --profile ${CMAKE_CURRENT_SOURCE_DIR}/config/default.conf)
-    set_tests_properties(config_preflight_cli PROPERTIES TIMEOUT 60)
   endif()
 endif()
 

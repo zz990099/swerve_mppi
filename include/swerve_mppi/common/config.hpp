@@ -52,7 +52,7 @@ struct Config
   // Total post-alignment allowance; prediction enforces at least two protocol
   // ticks.
   double confirmation_prediction_s = 0.20;
-  // Execution deadline includes braking, alignment and acknowledgement.
+  // Planner waiting deadline includes braking, alignment and acknowledgement.
   double confirmation_timeout_s = 2.0;
   double switch_cost = 1.0;
   double switch_hysteresis = 0.4;

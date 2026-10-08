@@ -5,6 +5,7 @@
 
 #include "common/detail/time_comparison.hpp"
 #include "model/detail/motion_profile.hpp"
+#include "model/detail/stopping_motion.hpp"
 #include "safety/detail/validation.hpp"
 
 namespace swerve_mppi
@@ -17,7 +18,9 @@ void RolloutEngine::generate_stop(const VehicleState & initial, Trajectory & out
 {
   stopping_rollout(initial, {initial.actual_mode, 0, false}, nullptr, out);
 }
-void RolloutEngine::generate_execution(const ActuationPlan & plan, Trajectory & out) const
+void RolloutEngine::generate_stopping_interval(
+  const VehicleState & initial, const std::array<double, 4> & steering_targets,
+  Trajectory & out) const
 {
   out.valid = false;
   out.poses.clear();
@@ -25,20 +28,26 @@ void RolloutEngine::generate_execution(const ActuationPlan & plan, Trajectory & 
   out.controls.clear();
   out.active_controls.clear();
   out.position_error_m = 0;
-  out.branch = {plan.start().actual_mode, 0, false};
-  out.final_state = plan.start();
+  out.branch = {initial.actual_mode, 0, false};
+  out.final_state = initial;
   if (
-    !plan.compatible_with(config_) ||
-    check_model_feedback(plan.start(), config_).status != FeedbackStatus::Valid ||
-    check_model_feedback(plan.endpoint().state, config_).status != FeedbackStatus::Valid) {
+    initial.mode_fault || !detail::valid_steering(steering_targets, config_) ||
+    check_model_feedback(initial, config_).status != FeedbackStatus::Valid) {
     return;
   }
-  out.poses.push_back(plan.start().pose);
-  detail::append_motion(plan.endpoint(), &out.poses, &out.sweep_margins_m, out.position_error_m);
-  out.final_state = plan.endpoint().state;
+  const auto endpoint = detail::stopping_step(initial, steering_targets, config_, config_.dt_s);
+  if (
+    !endpoint.valid || !std::isfinite(endpoint.sweep_margin_m) || endpoint.sweep_margin_m < 0 ||
+    !std::isfinite(endpoint.integration_error_m) || endpoint.integration_error_m < 0 ||
+    check_model_feedback(endpoint.state, config_).status != FeedbackStatus::Valid) {
+    return;
+  }
+  out.poses.push_back(initial.pose);
+  detail::append_motion(endpoint, &out.poses, &out.sweep_margins_m, out.position_error_m);
+  out.final_state = endpoint.state;
   out.controls.push_back(
     {out.final_state.velocity.vx, out.final_state.velocity.vy, out.final_state.velocity.wz});
-  out.active_controls.push_back(plan.action() == Action::Drive);
+  out.active_controls.push_back(false);
   std::size_t steps = 1;
   auto at_rest = [&]() {
     return out.final_state.velocity.vx == 0 && out.final_state.velocity.vy == 0 &&

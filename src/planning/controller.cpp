@@ -28,13 +28,13 @@ Output Controller::compute(const ControllerInput & input)
   const auto planned = planner_->compute(input);
   Output out;
   static_cast<PlanningDiagnostics &>(out) = planned;
-  if (planned.action == Action::SafeStop) {
+  if (planned.action == detail::Action::SafeStop) {
     return out;
   }
   ChassisCommand command;
   command.mode = input.vehicle.actual_mode;
   command.target_velocity = planned.velocity_intent;
-  if (planned.action == Action::RequestMode) {
+  if (planned.action == detail::Action::RequestMode) {
     if (!planned.mode_request) {
       return out;
     }

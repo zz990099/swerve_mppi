@@ -40,7 +40,7 @@ def main():
         return 1
 
     files = sorted(
-        str(path) for directory in ('include', 'src', 'tests', 'benchmarks', 'preparation')
+        str(path) for directory in ('include', 'src', 'tests', 'benchmarks')
         for path in (root / directory).rglob('*')
         if path.is_file() and path.suffix in ('.cpp', '.hpp'))
     command = ['--config', str(config), *files]

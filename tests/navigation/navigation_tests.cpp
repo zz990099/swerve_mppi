@@ -7,6 +7,7 @@
 #include "swerve_mppi/planning/controller.hpp"
 #include "swerve_mppi/planning/critics.hpp"
 using namespace swerve_mppi;
+using namespace swerve_mppi::detail;
 namespace
 {
 void check(bool ok, const char * message)

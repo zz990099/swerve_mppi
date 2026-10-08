@@ -23,14 +23,6 @@ enum class TransitionPhase
   AwaitingConfirmation,
   Fault
 };
-enum class Action
-{
-  Drive,
-  Brake,
-  RequestMode,
-  Hold,
-  SafeStop
-};
 enum class NavigationStatus
 {
   Tracking,
@@ -61,11 +53,11 @@ struct Twist2d
   double wz = 0.0;
 };
 
-struct JointModeRequest
+struct AcceptedModeRequest
 {
   std::uint64_t id = 0;
   DriveMode mode = DriveMode::DualAckermann;
-  // Mechanical positions frozen by execution at first acceptance.
+  // Mechanical positions frozen by the chassis at first acceptance.
   std::array<double, 4> steering_targets{};
   // The complete frozen body intent, echoed without rescaling.
   Twist2d entry_velocity;
@@ -81,13 +73,13 @@ struct VehicleState
   DriveMode actual_mode = DriveMode::DualAckermann;
   bool mode_confirmed = true;
   bool mode_fault = false;
-  // Echo of the executor's active/last completed request; zero means startup.
+  // Echo of the chassis's active/last completed request; zero means startup.
   std::uint64_t mode_request_id = 0;
   double time_in_mode_s = 0.0;
   double stamp_s = 0.0;
-  // Executor-owned first-accepted request, retained through completion.
+  // Chassis-owned first-accepted request, retained through completion.
   // Required when a pending planner request's ID has been accepted.
-  std::optional<JointModeRequest> accepted_mode_request{};
+  std::optional<AcceptedModeRequest> accepted_mode_request{};
 };
 
 struct CircleObstacle
@@ -134,18 +126,9 @@ struct ModeFeedback
   bool fault = false;
   std::uint64_t request_id = 0;
   double time_in_mode_s = 0.0;
-  // Exact immutable request accepted by execution, including mechanical entry
-  // positions. Empty at startup or after deliberate executor recovery.
-  std::optional<JointModeRequest> accepted_mode_request{};
-};
-
-struct ExecutionResult
-{
-  Action action = Action::SafeStop;
-  TransitionPhase phase = TransitionPhase::Stable;
-  std::array<double, 4> steering_targets{};
-  std::array<double, 4> wheel_speed_targets{};
-  ModeFeedback feedback;
+  // Exact immutable request accepted by the chassis, including mechanical entry
+  // positions. Empty before a request has been accepted.
+  std::optional<AcceptedModeRequest> accepted_mode_request{};
 };
 
 enum class FailureReason
@@ -202,22 +185,6 @@ struct PlanningDiagnostics
   double cross_track_error_m = 0.0;
   double goal_distance_m = 0.0;
   double goal_yaw_error_rad = 0.0;
-};
-
-// Joint-level execution/model representation. Controller never returns this
-// type.
-struct JointCommand : PlanningDiagnostics
-{
-  Action action = Action::SafeStop;
-  DriveMode requested_mode = DriveMode::DualAckermann;
-  // Drive: endpoint forward kinematics; joints interpolate over the full tick.
-  Twist2d body_command;
-  Twist2d velocity_intent;  // Nominal target, not the FK endpoint after rate
-                            // limiting.
-  std::array<double, 4> steering_targets{};
-  std::array<double, 4> wheel_speed_targets{};
-  // Present on RequestMode only; retries preserve every field.
-  std::optional<JointModeRequest> mode_request;
 };
 
 // Body-frame entry intent specifies alignment geometry; it never authorizes

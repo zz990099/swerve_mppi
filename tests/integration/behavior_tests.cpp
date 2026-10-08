@@ -4,28 +4,21 @@
 #include <stdexcept>
 #include <string>
 
-#include "profile_fixture.hpp"
-#include "swerve_mppi/execution/chassis_executor.hpp"
-#include "swerve_mppi/execution/timing.hpp"
-#include "swerve_mppi/feedback/feedback_adapter.hpp"
+#include "behavior_fixture.hpp"
 #include "swerve_mppi/planning/controller.hpp"
 
 using namespace swerve_mppi;
 namespace
 {
 using namespace swerve_mppi::test;
-void run(const std::string & scenario, unsigned seed, bool timed, bool profile)
+void run(const std::string & scenario, unsigned seed)
 {
   Config c;
   c.compute_budget_ratio = 0;  // Behavior assertions are independent of host speed.
   c.random_seed = seed;
   auto input = scenario_input(scenario);
   Controller controller(c);
-  ChassisExecutor executor(c, input.vehicle.actual_mode);
-  TimedExecutor timed_executor(c, 1, input.vehicle.actual_mode);
-  ProfileRunner runner(c);
-  FeedbackAdapter feedback(c);
-  double actuator_wall_s = 10;
+  NominalChassis plant(c);
   const auto goal = input.reference_path.back();
   int hold = 0, stalled = 0, max_stalled = 0, switches = 0;
   int completed_tick = -1;
@@ -70,25 +63,7 @@ void run(const std::string & scenario, unsigned seed, bool timed, bool profile)
       }
     }
     check(command.command.has_value(), "controller unexpectedly stopped");
-    ExecutionResult result;
-    if (timed || profile) {
-      const double now = input.vehicle.stamp_s;
-      CommandEnvelope envelope{
-        1,          static_cast<std::uint64_t>(tick + 1), now, command, now, now,
-        now + .025, CommandTask::capture(input)};
-      const auto guarded = timed_executor.update(envelope, input, now);
-      check(
-        guarded.timing_error == TimingError::None &&
-          guarded.safety_error == ExecutionSafetyError::None && guarded.actuation,
-        "default behavior must pass execution-time validation without a "
-        "fallback");
-      result = guarded.execution;
-      if (profile) {
-        check(runner.install(guarded, now, actuator_wall_s), "profile install in closed loop");
-      }
-    } else {
-      result = executor.update(command, input.vehicle);
-    }
+    const auto result = plant.update(command, input.vehicle);
     if (result.feedback.fault) {
       std::cerr << "fault scenario=" << scenario << " seed=" << seed << " tick=" << tick
                 << " mode=" << static_cast<int>(input.vehicle.actual_mode)
@@ -99,37 +74,12 @@ void run(const std::string & scenario, unsigned seed, bool timed, bool profile)
       }
     }
     check(!result.feedback.fault, "execution fault in default noisy closed loop");
-    hold += result.action == Action::Hold;
-    if (result.action == Action::Drive) {
+    hold += result.action == detail::Action::Hold;
+    if (result.action == detail::Action::Drive) {
       check(input.vehicle.mode_confirmed, "drive preceded actual mode confirmation");
     }
     const auto from = input.vehicle.pose;
-    if (profile) {
-      minimum_clearance = std::min(
-        minimum_clearance,
-        actuate_profile(
-          input.vehicle, runner, result.feedback, c, actuator_wall_s, input.obstacles));
-    } else {
-      actuate(input.vehicle, result, c);
-    }
-    if (profile) {
-      JointObservation encoders;
-      encoders.stamp_s = input.vehicle.stamp_s;
-      const std::array<std::string, 4> corners{"rr", "rl", "fr", "fl"};
-      for (std::size_t i = 0; i < 4; ++i) {
-        encoders.names.push_back(corners[i] + "_wheel_joint");
-        encoders.names.push_back(corners[i] + "_steering_joint");
-        encoders.positions.push_back(0);
-        encoders.positions.push_back(input.vehicle.steering_angles[3 - i]);
-        encoders.velocities.push_back(input.vehicle.wheel_speeds[3 - i] / c.wheel_radius_m);
-        encoders.velocities.push_back(0);
-      }
-      const auto snapshot = feedback.make(
-        encoders, {input.vehicle.pose, encoders.stamp_s}, result.feedback, encoders.stamp_s);
-      check(snapshot.state.has_value(), "sampled encoder feedback must pass synchronized adapter");
-      input.vehicle = *snapshot.state;
-    }
-    actuator_wall_s += c.dt_s;
+    actuate(input.vehicle, result, c);
     minimum_clearance =
       std::min(minimum_clearance, measured_clearance(from, input.vehicle.pose, input.obstacles, c));
     check(minimum_clearance > 0, "measured motion must remain outside inflated obstacles");
@@ -186,18 +136,14 @@ void run(const std::string & scenario, unsigned seed, bool timed, bool profile)
 int main(int argc, char ** argv)
 {
   try {
-    const bool timed = argc > 2 && std::string(argv[argc - 1]) == "--timed";
-    const bool profile = argc > 2 && std::string(argv[argc - 1]) == "--profile";
-    const int arguments = argc - (timed || profile ? 1 : 0);
-    check(
-      arguments == 2 || arguments == 3,
-      "usage: behavior_tests scenario [seed] [--timed|--profile]");
+    const int arguments = argc;
+    check(arguments == 2 || arguments == 3, "usage: behavior_tests scenario [seed]");
     if (arguments == 3) {
-      run(argv[1], std::stoul(argv[2]), timed, profile);
+      run(argv[1], std::stoul(argv[2]));
       return 0;
     }
     for (unsigned seed : {1u, 7u, 42u, 73u, 101u}) {
-      run(argv[1], seed, timed, profile);
+      run(argv[1], seed);
     }
     return 0;
   } catch (const std::exception & error) {

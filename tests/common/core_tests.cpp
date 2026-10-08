@@ -6,6 +6,7 @@
 #include "planning/detail/planner.hpp"
 
 using namespace swerve_mppi;
+using namespace swerve_mppi::detail;
 
 namespace
 {
@@ -112,7 +113,7 @@ void test_confirmation_and_timeout()
     "mode value without an acknowledgement must not permit driving");
   observed.mode_confirmed = true;
   observed.mode_request_id = 1;
-  observed.accepted_mode_request = JointModeRequest{1, DriveMode::Crab, {}};
+  observed.accepted_mode_request = AcceptedModeRequest{1, DriveMode::Crab, {}};
   observed.stamp_s = 1.3;
   check(
     manager.update(observed).action == Action::Hold && !manager.active(),
@@ -168,7 +169,7 @@ void test_controller_lateral_goal()
   config.switch_hysteresis = 0.01;
   detail::Planner controller(config);
   auto input = make_input();
-  const JointCommand first = controller.compute(input);
+  const Prediction first = controller.compute(input);
   check(
     first.action == Action::RequestMode && first.requested_mode == DriveMode::Crab,
     "lateral goal should select crab and request its confirmation");
@@ -187,7 +188,7 @@ void test_controller_lateral_goal()
     controller.compute(input).action == Action::Hold,
     "acknowledgement must include a zero-command handover");
   input.vehicle.stamp_s += config.dt_s;
-  const JointCommand drive = controller.compute(input);
+  const Prediction drive = controller.compute(input);
   check(
     drive.action == Action::Drive && drive.body_command.vy > 0,
     "direction-aware confirmed entry should permit lateral motion directly");

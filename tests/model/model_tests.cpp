@@ -6,6 +6,7 @@
 #include "behavior_fixture.hpp"
 #include "planning/detail/planner.hpp"
 using namespace swerve_mppi;
+using namespace swerve_mppi::detail;
 namespace
 {
 void check(bool ok, const char * message)
@@ -353,7 +354,7 @@ void test_independent_ramp_integration_and_fixture()
   VehicleState measured;
   measured.velocity.vx = .1;
   measured.wheel_speeds.fill(.1);
-  ExecutionResult brake;
+  test::PlantTargets brake;
   brake.action = Action::Brake;
   brake.feedback.confirmed = true;
   test::actuate(measured, brake, c);
@@ -527,7 +528,7 @@ void test_residual_alignment_order()
           close(predicted.state.pose.y, 0) && close(predicted.state.steering_angles[0], angle),
         "residual rolling must finish braking before alignment consumes "
         "the remaining tick");
-      ExecutionResult command;
+      test::PlantTargets command;
       command.action = Action::Hold;
       command.steering_targets = predicted.steering_targets;
       command.feedback.actual_mode = s.actual_mode;

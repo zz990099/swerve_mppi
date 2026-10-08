@@ -6,7 +6,6 @@
 #include <numeric>
 
 #include "behavior_fixture.hpp"
-#include "swerve_mppi/execution/chassis_executor.hpp"
 #include "swerve_mppi/planning/controller.hpp"
 
 // Counts ordinary C++ allocations during compute, excluding fixture/reporting.
@@ -50,7 +49,7 @@ void run(
   c.path_lookahead_m = lookahead;
   c.path_weight = path_weight;
   Controller controller(c);
-  ChassisExecutor executor(c);
+  NominalChassis plant(c);
   auto input =
     scenario_input(scenario == "dense_curve" || scenario == "obstacles" ? "curve" : scenario);
   if (scenario == "dense_curve") {
@@ -101,7 +100,7 @@ void run(
       completion = tick;
       break;
     }
-    auto result = executor.update(output, input.vehicle);
+    auto result = plant.update(output, input.vehicle);
     check(!result.feedback.fault, "benchmark execution fault");
     auto previous = input.vehicle.actual_mode;
     const auto from = input.vehicle.pose;

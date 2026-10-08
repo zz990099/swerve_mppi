@@ -13,7 +13,7 @@ class Planner;
 }
 // Public planning boundary: body velocity, explicit mode requests and
 // diagnostics. Joint targets and execution actions stay inside
-// prediction/execution layers.
+// private prediction code.
 class Controller
 {
 public:

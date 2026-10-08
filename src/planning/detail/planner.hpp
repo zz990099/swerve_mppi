@@ -1,5 +1,5 @@
 #pragma once
-
+#include "planning/detail/mode_manager.hpp"
 #include "swerve_mppi/navigation/navigation.hpp"
 #include "swerve_mppi/planning/optimizer.hpp"
 
@@ -11,25 +11,24 @@ public:
   explicit Planner(
     const Config & config, std::shared_ptr<const TrajectoryValidator> validator = nullptr,
     PlanningBudget::Now now = {});
-  JointCommand compute(const ControllerInput & input);
+  Prediction compute(const ControllerInput & input);
   void reset();
   TransitionPhase transition_phase() const { return mode_manager_.phase(); }
 
 private:
-  JointCommand compute_impl(const ControllerInput & input, const PlanningBudget & budget);
-  JointCommand compute_tracking(const ControllerInput & input, const PlanningBudget & budget);
-  JointCommand compute_goal(const ControllerInput & input, const GoalState & goal);
-  JointCommand request_mode(const ControllerInput & input, DriveMode mode, const Control & intent);
-  JointCommand apply_control(const ControllerInput & input, Control control);
-  JointCommand continue_alignment(const ControllerInput & input);
-  JointCommand planning_stop(const ControllerInput & input);
-  JointCommand check_stopping(const ControllerInput & input, JointCommand out);
+  Prediction compute_impl(const ControllerInput & input, const PlanningBudget & budget);
+  Prediction compute_tracking(const ControllerInput & input, const PlanningBudget & budget);
+  Prediction compute_goal(const ControllerInput & input, const GoalState & goal);
+  Prediction request_mode(const ControllerInput & input, DriveMode mode, const Control & intent);
+  Prediction apply_control(const ControllerInput & input, Control control);
+  Prediction continue_alignment(const ControllerInput & input);
+  Prediction planning_stop(const ControllerInput & input);
+  Prediction check_stopping(const ControllerInput & input, Prediction out);
   bool safe_control(const ControllerInput & input, const Branch & branch, const Control & control);
   std::optional<Control> safe_reduction(
     const ControllerInput & input, const Branch & branch, Control control);
   std::shared_ptr<const TrajectoryValidator> validator_;
   RolloutEngine safety_rollout_;
-  ActuationModel safety_actuation_;
   Trajectory safety_trace_;
   Config config_;
   PlanningBudget::Now now_;

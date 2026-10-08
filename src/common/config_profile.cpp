@@ -22,12 +22,12 @@ struct Parameter
   void (*write)(Config &, const ConfigValue &);
 };
 template <auto Member>
-Parameter parameter(std::string_view name, std::string_view unit, ConfigScope scope)
+Parameter parameter(std::string_view name, std::string_view unit)
 {
   using T = std::decay_t<decltype(Config{}.*Member)>;
   constexpr bool real = std::is_same_v<T, double>;
   return {
-    {name, unit, real ? ConfigValueType::Real : ConfigValueType::UnsignedInteger, scope},
+    {name, unit, real ? ConfigValueType::Real : ConfigValueType::UnsignedInteger},
     [](const Config & config) -> ConfigValue {
       if constexpr (real) {
         return config.*Member;
@@ -52,101 +52,74 @@ Parameter parameter(std::string_view name, std::string_view unit, ConfigScope sc
     }};
 }
 const Parameter parameters[] = {
-  parameter<&Config::wheelbase_m>("wheelbase_m", "m", ConfigScope::Execution),
-  parameter<&Config::track_m>("track_m", "m", ConfigScope::Execution),
-  parameter<&Config::wheel_radius_m>("wheel_radius_m", "m", ConfigScope::Execution),
-  parameter<&Config::robot_radius_m>("robot_radius_m", "m", ConfigScope::Execution),
-  parameter<&Config::collision_margin_m>("collision_margin_m", "m", ConfigScope::Execution),
-  parameter<&Config::max_wheel_speed_mps>("max_wheel_speed_mps", "m/s", ConfigScope::Execution),
-  parameter<&Config::max_wheel_accel_mps2>("max_wheel_accel_mps2", "m/s^2", ConfigScope::Execution),
-  parameter<&Config::steering_limit_rad>("steering_limit_rad", "rad", ConfigScope::Execution),
-  parameter<&Config::max_steer_rate_radps>("max_steer_rate_radps", "rad/s", ConfigScope::Execution),
-  parameter<&Config::max_vx_mps>("max_vx_mps", "m/s", ConfigScope::Execution),
-  parameter<&Config::max_crab_speed_mps>("max_crab_speed_mps", "m/s", ConfigScope::Execution),
-  parameter<&Config::max_spin_radps>("max_spin_radps", "rad/s", ConfigScope::Execution),
-  parameter<&Config::max_yaw_rate_radps>("max_yaw_rate_radps", "rad/s", ConfigScope::Execution),
-  parameter<&Config::min_turn_radius_m>("min_turn_radius_m", "m", ConfigScope::Execution),
-  parameter<&Config::max_linear_accel_mps2>(
-    "max_linear_accel_mps2", "m/s^2", ConfigScope::Execution),
-  parameter<&Config::max_linear_decel_mps2>(
-    "max_linear_decel_mps2", "m/s^2", ConfigScope::Execution),
-  parameter<&Config::max_angular_accel_radps2>(
-    "max_angular_accel_radps2", "rad/s^2", ConfigScope::Execution),
-  parameter<&Config::max_angular_decel_radps2>(
-    "max_angular_decel_radps2", "rad/s^2", ConfigScope::Execution),
-  parameter<&Config::steering_tolerance_rad>(
-    "steering_tolerance_rad", "rad", ConfigScope::Execution),
-  parameter<&Config::drive_steering_limit_rad>(
-    "drive_steering_limit_rad", "rad", ConfigScope::Execution),
-  parameter<&Config::drive_kinematic_tolerance_mps>(
-    "drive_kinematic_tolerance_mps", "m/s", ConfigScope::Execution),
-  parameter<&Config::stopped_linear_mps>("stopped_linear_mps", "m/s", ConfigScope::Execution),
-  parameter<&Config::stopped_angular_radps>(
-    "stopped_angular_radps", "rad/s", ConfigScope::Execution),
-  parameter<&Config::stopped_wheel_speed_mps>(
-    "stopped_wheel_speed_mps", "m/s", ConfigScope::Execution),
-  parameter<&Config::feedback_linear_tolerance_mps>(
-    "feedback_linear_tolerance_mps", "m/s", ConfigScope::Execution),
-  parameter<&Config::feedback_angular_tolerance_radps>(
-    "feedback_angular_tolerance_radps", "rad/s", ConfigScope::Execution),
-  parameter<&Config::minimum_mode_dwell_s>("minimum_mode_dwell_s", "s", ConfigScope::Execution),
-  parameter<&Config::alignment_min_s>("alignment_min_s", "s", ConfigScope::Execution),
-  parameter<&Config::confirmation_prediction_s>(
-    "confirmation_prediction_s", "s", ConfigScope::Planning),
-  parameter<&Config::confirmation_timeout_s>("confirmation_timeout_s", "s", ConfigScope::Execution),
-  parameter<&Config::switch_cost>("switch_cost", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::switch_hysteresis>(
-    "switch_hysteresis", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::dt_s>("dt_s", "s", ConfigScope::Execution),
-  parameter<&Config::compute_budget_ratio>(
-    "compute_budget_ratio", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::max_path_points>("max_path_points", "dimensionless", ConfigScope::Execution),
-  parameter<&Config::max_obstacles>("max_obstacles", "dimensionless", ConfigScope::Execution),
-  parameter<&Config::horizon_steps>("horizon_steps", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::stopping_horizon_steps>(
-    "stopping_horizon_steps", "dimensionless", ConfigScope::Execution),
-  parameter<&Config::safety_reduction_attempts>(
-    "safety_reduction_attempts", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::samples_per_branch>(
-    "samples_per_branch", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::iterations>("iterations", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::temperature>("temperature", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::noise_v_mps>("noise_v_mps", "m/s", ConfigScope::Planning),
-  parameter<&Config::noise_w_radps>("noise_w_radps", "rad/s", ConfigScope::Planning),
-  parameter<&Config::noise_correlation>(
-    "noise_correlation", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::control_correction_weight>(
-    "control_correction_weight", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::random_seed>("random_seed", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::path_weight>("path_weight", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::goal_weight>("goal_weight", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::yaw_weight>("yaw_weight", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::effort_weight>("effort_weight", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::clearance_weight>("clearance_weight", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::path_heading_weight>(
-    "path_heading_weight", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::smoothness_weight>(
-    "smoothness_weight", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::goal_speed_weight>(
-    "goal_speed_weight", "dimensionless", ConfigScope::Planning),
-  parameter<&Config::path_lookahead_m>("path_lookahead_m", "m", ConfigScope::Planning),
-  parameter<&Config::path_lookahead_turn_rad>(
-    "path_lookahead_turn_rad", "rad", ConfigScope::Planning),
-  parameter<&Config::path_search_window_m>("path_search_window_m", "m", ConfigScope::Planning),
-  parameter<&Config::path_progress_slack_m>("path_progress_slack_m", "m", ConfigScope::Planning),
-  parameter<&Config::goal_position_tolerance_m>(
-    "goal_position_tolerance_m", "m", ConfigScope::Planning),
-  parameter<&Config::goal_yaw_tolerance_rad>(
-    "goal_yaw_tolerance_rad", "rad", ConfigScope::Planning),
-  parameter<&Config::goal_settle_time_s>("goal_settle_time_s", "s", ConfigScope::Planning),
-  parameter<&Config::goal_slowdown_distance_m>(
-    "goal_slowdown_distance_m", "m", ConfigScope::Planning),
-  parameter<&Config::goal_docking_distance_m>(
-    "goal_docking_distance_m", "m", ConfigScope::Planning),
-  parameter<&Config::goal_translation_gain>("goal_translation_gain", "1/s", ConfigScope::Planning),
-  parameter<&Config::goal_rotation_gain>("goal_rotation_gain", "1/s", ConfigScope::Planning),
-  parameter<&Config::progress_timeout_s>("progress_timeout_s", "s", ConfigScope::Planning),
-  parameter<&Config::progress_distance_m>("progress_distance_m", "m", ConfigScope::Planning),
+  parameter<&Config::wheelbase_m>("wheelbase_m", "m"),
+  parameter<&Config::track_m>("track_m", "m"),
+  parameter<&Config::wheel_radius_m>("wheel_radius_m", "m"),
+  parameter<&Config::robot_radius_m>("robot_radius_m", "m"),
+  parameter<&Config::collision_margin_m>("collision_margin_m", "m"),
+  parameter<&Config::max_wheel_speed_mps>("max_wheel_speed_mps", "m/s"),
+  parameter<&Config::max_wheel_accel_mps2>("max_wheel_accel_mps2", "m/s^2"),
+  parameter<&Config::steering_limit_rad>("steering_limit_rad", "rad"),
+  parameter<&Config::max_steer_rate_radps>("max_steer_rate_radps", "rad/s"),
+  parameter<&Config::max_vx_mps>("max_vx_mps", "m/s"),
+  parameter<&Config::max_crab_speed_mps>("max_crab_speed_mps", "m/s"),
+  parameter<&Config::max_spin_radps>("max_spin_radps", "rad/s"),
+  parameter<&Config::max_yaw_rate_radps>("max_yaw_rate_radps", "rad/s"),
+  parameter<&Config::min_turn_radius_m>("min_turn_radius_m", "m"),
+  parameter<&Config::max_linear_accel_mps2>("max_linear_accel_mps2", "m/s^2"),
+  parameter<&Config::max_linear_decel_mps2>("max_linear_decel_mps2", "m/s^2"),
+  parameter<&Config::max_angular_accel_radps2>("max_angular_accel_radps2", "rad/s^2"),
+  parameter<&Config::max_angular_decel_radps2>("max_angular_decel_radps2", "rad/s^2"),
+  parameter<&Config::steering_tolerance_rad>("steering_tolerance_rad", "rad"),
+  parameter<&Config::drive_steering_limit_rad>("drive_steering_limit_rad", "rad"),
+  parameter<&Config::drive_kinematic_tolerance_mps>("drive_kinematic_tolerance_mps", "m/s"),
+  parameter<&Config::stopped_linear_mps>("stopped_linear_mps", "m/s"),
+  parameter<&Config::stopped_angular_radps>("stopped_angular_radps", "rad/s"),
+  parameter<&Config::stopped_wheel_speed_mps>("stopped_wheel_speed_mps", "m/s"),
+  parameter<&Config::feedback_linear_tolerance_mps>("feedback_linear_tolerance_mps", "m/s"),
+  parameter<&Config::feedback_angular_tolerance_radps>("feedback_angular_tolerance_radps", "rad/s"),
+  parameter<&Config::minimum_mode_dwell_s>("minimum_mode_dwell_s", "s"),
+  parameter<&Config::alignment_min_s>("alignment_min_s", "s"),
+  parameter<&Config::confirmation_prediction_s>("confirmation_prediction_s", "s"),
+  parameter<&Config::confirmation_timeout_s>("confirmation_timeout_s", "s"),
+  parameter<&Config::switch_cost>("switch_cost", "dimensionless"),
+  parameter<&Config::switch_hysteresis>("switch_hysteresis", "dimensionless"),
+  parameter<&Config::dt_s>("dt_s", "s"),
+  parameter<&Config::compute_budget_ratio>("compute_budget_ratio", "dimensionless"),
+  parameter<&Config::max_path_points>("max_path_points", "dimensionless"),
+  parameter<&Config::max_obstacles>("max_obstacles", "dimensionless"),
+  parameter<&Config::horizon_steps>("horizon_steps", "dimensionless"),
+  parameter<&Config::stopping_horizon_steps>("stopping_horizon_steps", "dimensionless"),
+  parameter<&Config::safety_reduction_attempts>("safety_reduction_attempts", "dimensionless"),
+  parameter<&Config::samples_per_branch>("samples_per_branch", "dimensionless"),
+  parameter<&Config::iterations>("iterations", "dimensionless"),
+  parameter<&Config::temperature>("temperature", "dimensionless"),
+  parameter<&Config::noise_v_mps>("noise_v_mps", "m/s"),
+  parameter<&Config::noise_w_radps>("noise_w_radps", "rad/s"),
+  parameter<&Config::noise_correlation>("noise_correlation", "dimensionless"),
+  parameter<&Config::control_correction_weight>("control_correction_weight", "dimensionless"),
+  parameter<&Config::random_seed>("random_seed", "dimensionless"),
+  parameter<&Config::path_weight>("path_weight", "dimensionless"),
+  parameter<&Config::goal_weight>("goal_weight", "dimensionless"),
+  parameter<&Config::yaw_weight>("yaw_weight", "dimensionless"),
+  parameter<&Config::effort_weight>("effort_weight", "dimensionless"),
+  parameter<&Config::clearance_weight>("clearance_weight", "dimensionless"),
+  parameter<&Config::path_heading_weight>("path_heading_weight", "dimensionless"),
+  parameter<&Config::smoothness_weight>("smoothness_weight", "dimensionless"),
+  parameter<&Config::goal_speed_weight>("goal_speed_weight", "dimensionless"),
+  parameter<&Config::path_lookahead_m>("path_lookahead_m", "m"),
+  parameter<&Config::path_lookahead_turn_rad>("path_lookahead_turn_rad", "rad"),
+  parameter<&Config::path_search_window_m>("path_search_window_m", "m"),
+  parameter<&Config::path_progress_slack_m>("path_progress_slack_m", "m"),
+  parameter<&Config::goal_position_tolerance_m>("goal_position_tolerance_m", "m"),
+  parameter<&Config::goal_yaw_tolerance_rad>("goal_yaw_tolerance_rad", "rad"),
+  parameter<&Config::goal_settle_time_s>("goal_settle_time_s", "s"),
+  parameter<&Config::goal_slowdown_distance_m>("goal_slowdown_distance_m", "m"),
+  parameter<&Config::goal_docking_distance_m>("goal_docking_distance_m", "m"),
+  parameter<&Config::goal_translation_gain>("goal_translation_gain", "1/s"),
+  parameter<&Config::goal_rotation_gain>("goal_rotation_gain", "1/s"),
+  parameter<&Config::progress_timeout_s>("progress_timeout_s", "s"),
+  parameter<&Config::progress_distance_m>("progress_distance_m", "m"),
 };
 const Parameter & find_parameter(std::string_view name)
 {
@@ -312,31 +285,9 @@ std::string write_config_profile(const Config & config)
   for (const auto & p : parameters) {
     output << p.info.name << " = ";
     std::visit([&](auto value) { output << value; }, p.read(config));
-    output << "  # " << p.info.unit << "; "
-           << (p.info.scope == ConfigScope::Execution ? "execution" : "planning") << '\n';
+    output << "  # " << p.info.unit << '\n';
   }
   return output.str();
-}
-std::vector<std::string_view> execution_config_mismatches(
-  const Config & planner, const Config & executor)
-{
-  validate(planner);
-  validate(executor);
-  std::vector<std::string_view> result;
-  for (const auto & p : parameters) {
-    if (p.info.scope == ConfigScope::Execution && p.read(planner) != p.read(executor)) {
-      result.push_back(p.info.name);
-    }
-  }
-  return result;
-}
-void require_execution_compatible(const Config & planner, const Config & executor)
-{
-  const auto mismatches = execution_config_mismatches(planner, executor);
-  if (!mismatches.empty()) {
-    throw std::invalid_argument(
-      "planning/execution configuration differs: " + std::string(mismatches.front()));
-  }
 }
 void validate_live_config(const Config & config, double maximum_budget_ratio)
 {

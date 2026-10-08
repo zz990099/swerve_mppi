@@ -6,6 +6,7 @@
 #include "common/detail/spatial_index.hpp"
 #include "planning/detail/planner.hpp"
 using namespace swerve_mppi;
+using namespace swerve_mppi::detail;
 namespace
 {
 void check(bool ok, const char * message)

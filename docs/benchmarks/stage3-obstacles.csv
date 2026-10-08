@@ -1,2 +1,0 @@
-scenario,seed,calls,completion_s,max_path_error_m,rms_path_error_m,mode_changes,p50_ms,p95_ms,p99_ms,max_ms,period_overruns,mean_allocations,peak_allocations,planning_calls,planning_p95_ms,planning_mean_allocations,evaluated_rollouts,feasible_rollouts,fallback_updates
-obstacles,42,70,6.9,0.0541618957,0.0297590143,2,0.024467,23.376801,26.221272,26.221272,0,37.6,89,29,24.078432,83.1034483,23553,17734,3

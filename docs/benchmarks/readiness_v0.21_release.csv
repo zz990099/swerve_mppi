@@ -1,4 +1,0 @@
-path_points,obstacles,repetitions,budget_ms,p50_ms,p95_ms,p99_ms,max_ms,min_headroom_ms,compute_timeouts,total_overruns,other_failures
-41,0,50,60,32.8053,41.2595,45.7804,45.7804,14.2196,0,0,0
-41,40,50,60,34.1933,40.0168,41.52,41.52,18.48,0,0,0
-41,128,50,60,34.7884,52.7713,65.5285,65.5285,-5.52854,2,2,0

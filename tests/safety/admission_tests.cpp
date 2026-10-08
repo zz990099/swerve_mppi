@@ -2,12 +2,11 @@
 #include <iostream>
 
 #include "behavior_fixture.hpp"
-#include "execution/detail/joint_timing.hpp"
 #include "planning/detail/planner.hpp"
-#include "swerve_mppi/execution/profile_runner.hpp"
 #include "swerve_mppi/feedback/feedback.hpp"
 
 using namespace swerve_mppi;
+using namespace swerve_mppi::detail;
 using namespace swerve_mppi::test;
 namespace
 {
@@ -19,13 +18,7 @@ ControllerInput input()
   in.reference_path = {{0, 0, 0}, {2, 0, 0}};
   return in;
 }
-detail::JointCommandEnvelope envelope(
-  const ControllerInput & in, const JointCommand & out, std::uint64_t sequence = 1,
-  std::uint64_t session = 1)
-{
-  const double now = in.vehicle.stamp_s;
-  return {session, sequence, now, out, now, now, now + .025, CommandTask::capture(in)};
-}
+
 void test_inconsistent_feedback_cannot_certify_stopping()
 {
   Config c;
@@ -81,21 +74,9 @@ void test_inconsistent_feedback_cannot_certify_stopping()
     check(
       out.action == Action::SafeStop && out.failure_reason == FailureReason::InconsistentFeedback,
       "inconsistent feedback cannot produce a healthy planning stop");
-    JointCommand brake;
-    brake.action = Action::Brake;
-    const auto raw = ModeExecutor(c, in.vehicle.actual_mode).update(brake, in.vehicle);
-    check(
-      raw.feedback.fault && !ActuationModel(c).plan(in.vehicle, raw) &&
-        !ActuationModel(c).plan_stopping(in.vehicle, Action::Brake, in.vehicle.steering_angles),
-      "neither raw supervision nor the nominal actuator model may certify "
-      "a false stop");
-    detail::JointTimedExecutor timed(c, 1, in.vehicle.actual_mode);
-    const auto guarded = timed.update(envelope(in, brake), in, 1);
-    check(
-      guarded.safety_error == ExecutionSafetyError::InconsistentFeedback &&
-        guarded.execution.feedback.fault && !guarded.actuation,
-      "guarded execution must latch instead of falling back through an "
-      "invalid model");
+    Trajectory interval;
+    RolloutEngine(c).generate_stopping_interval(in.vehicle, in.vehicle.steering_angles, interval);
+    check(!interval.valid, "stopping/alignment prediction must reject inconsistent feedback");
     Trajectory stop;
     RolloutEngine(c).generate_stop(in.vehicle, stop);
     check(
@@ -110,23 +91,6 @@ void test_inconsistent_feedback_cannot_certify_stopping()
       TrajectoryValidator(c).check(in, supplied) == TrajectoryStatus::Invalid,
       "a caller-supplied trace cannot bypass state admission");
   }
-  auto residual = input().vehicle;
-  residual.velocity.vx = .001;
-  check(is_stopped(residual, c), "recovery case must be below stopped thresholds");
-  bool rejected = false;
-  try {
-    ProfileRunner(c).reset(residual);
-  } catch (const std::invalid_argument &) {
-    rejected = true;
-  }
-  check(rejected, "diagnostic-valid residual must not authorize stopped profile recovery");
-  rejected = false;
-  try {
-    ModeExecutor(c).reset(residual);
-  } catch (const std::invalid_argument &) {
-    rejected = true;
-  }
-  check(rejected, "diagnostic-valid residual must not authorize stopped executor recovery");
   auto state = input().vehicle;
   state.wheel_speeds.fill(.2);
   state.velocity = {.2 + c.feedback_linear_tolerance_mps, 0, c.feedback_angular_tolerance_radps};
@@ -264,191 +228,7 @@ void test_workload_admission_and_configuration_caps()
     detail::Planner(c).compute(in).action != Action::SafeStop,
     "input size boundaries must be inclusive");
 }
-void test_profile_sampling_watchdog_and_recovery()
-{
-  Config c;
-  c.compute_budget_ratio = 0;
-  auto in = input();
-  detail::Planner controller(c);
-  detail::JointTimedExecutor executor(c, 1);
-  const auto command = controller.compute(in);
-  const auto result = executor.update(envelope(in, command), in, 1);
-  check(
-    result.actuation && result.execution.action == Action::Drive,
-    "test must start with a guarded Drive profile");
-  ProfileRunner runner(c);
-  check(runner.install(result, 1, 10), "healthy guarded profile must install at its start");
-  const auto mid = runner.sample(1.05, 10.05);
-  check(
-    mid && std::abs(
-             mid->wheel_angular_speeds[0] -
-             .5 * result.execution.wheel_speed_targets[0] / c.wheel_radius_m) < 1e-9,
-    "runner must sample full-tick interpolation and convert m/s to joint "
-    "rad/s");
-  check(runner.sample(1.1, 10.1).has_value(), "rounded exact tick endpoint must remain sampleable");
-  check(
-    !runner.sample(1.10001, 10.10001) && runner.fault() && !runner.install(result, 1, 11),
-    "expired Drive must latch and cannot be held or replayed");
-  runner.reset(in.vehicle);
-  executor.reset(in.vehicle, 2);
-  const auto recovered = executor.update(envelope(in, command, 1, 2), in, 1);
-  check(
-    runner.install(recovered, 1, 20), "verified recovery and a new session may restart execution");
-  check(
-    !runner.sample(1, 20.50001) && runner.fault(),
-    "wall watchdog must expire a profile even while simulation time is "
-    "paused");
-  runner.reset(in.vehicle);
-  check(
-    runner.install(recovered, 1, 30) && !runner.sample(1.01, 29.99) && runner.fault(),
-    "backwards wall time must fail closed");
-  runner.reset(in.vehicle);
-  check(
-    runner.install(recovered, 1, 40) && !runner.sample(.99, 40.01),
-    "backwards application time must fail closed");
-  auto moving = in.vehicle;
-  moving.wheel_speeds.fill(.2);
-  moving.velocity.vx = .2;
-  bool rejected = false;
-  try {
-    runner.reset(moving);
-  } catch (const std::invalid_argument &) {
-    rejected = true;
-  }
-  check(rejected && runner.fault(), "moving recovery must preserve the actuator fault latch");
-  runner.reset(in.vehicle);
-  auto invalid = recovered;
-  invalid.safety_error = ExecutionSafetyError::CommandRejected;
-  check(
-    !runner.install(invalid, 1, 50) && runner.fault(),
-    "a rejection cannot smuggle an attached Drive profile into execution");
-  runner.reset(in.vehicle);
-  auto changed = in;
-  changed.path_id = 2;
-  detail::JointTimedExecutor fallback_executor(c, 3);
-  const auto fallback = fallback_executor.update(envelope(in, command, 1, 3), changed, 1);
-  check(
-    fallback.safety_error == ExecutionSafetyError::TaskMismatch && fallback.actuation &&
-      runner.install(fallback, 1, 60) && runner.sample(1.05, 60.05),
-    "a separately checked task-rejection stop must remain executable");
-  runner.reset(in.vehicle);
-  check(runner.install(recovered, 1, 70), "start boundary test");
-  auto next = in;
-  next.vehicle.stamp_s = 1.1;
-  detail::JointTimedExecutor next_executor(c, 4);
-  const auto next_result = next_executor.update(envelope(next, command, 1, 4), next, 1.1);
-  check(
-    runner.install(next_result, 1.1, 70.1),
-    "the next checked profile may replace the previous one at the exact "
-    "boundary");
-  runner.reset(in.vehicle);
-  check(runner.install(recovered, 1, 80), "start missed boundary test");
-  check(
-    !runner.install(next_result, 1.1, 80.50001) && runner.fault(),
-    "install cannot renew a missed wall watchdog");
-  runner.reset(in.vehicle);
-  check(runner.install(recovered, 1, 90), "start missed tick test");
-  next.vehicle.stamp_s = 1.2;
-  detail::JointTimedExecutor late_executor(c, 5);
-  const auto late = late_executor.update(envelope(next, command, 1, 5), next, 1.2);
-  check(
-    late.actuation && !runner.install(late, 1.2, 90.2) && runner.fault(),
-    "a fresh new result cannot conceal a missed profile boundary");
-}
 
-void test_pending_transition_fallback_profiles()
-{
-  Config c;
-  c.compute_budget_ratio = 0;
-  for (bool task_mismatch : {true, false}) {
-    auto in = input();
-    class RejectOnce final : public TrajectoryConstraint
-    {
-    public:
-      mutable bool reject = false;
-      bool allows(const ControllerInput &, const Trajectory &) const override
-      {
-        const bool allowed = !reject;
-        reject = false;
-        return allowed;
-      }
-    };
-    auto validator = std::make_shared<TrajectoryValidator>(c);
-    auto reject_once = std::make_shared<RejectOnce>();
-    if (!task_mismatch) {
-      validator->add(reject_once);
-    }
-    detail::JointTimedExecutor executor(c, 1, DriveMode::DualAckermann, {}, validator);
-    ProfileRunner runner(c);
-    JointCommand request;
-    request.action = Action::RequestMode;
-    request.requested_mode = DriveMode::Crab;
-    request.mode_request = JointModeRequest{
-      17, DriveMode::Crab, DriveModel(c).steering_for_entry(DriveMode::Crab, {0, .3, 0}, {})};
-    request.steering_targets = request.mode_request->steering_targets;
-    auto result = executor.update(envelope(in, request), in, in.vehicle.stamp_s);
-    check(result.actuation && runner.install(result, 1, 10), "start pending alignment");
-    // Reject one candidate preview; its independently rechecked fallback is
-    // safe.
-    reject_once->reject = !task_mismatch;
-    const auto frozen = request.mode_request->steering_targets;
-    bool confirmed = false;
-    for (std::uint64_t tick = 1; tick < 30; ++tick) {
-      in.vehicle = result.actuation->endpoint().state;  // Nominal plant regression only.
-      in.vehicle.stamp_s = 1 + tick * c.dt_s;
-      auto latest = in;
-      if (task_mismatch) {
-        latest.path_id = 2;
-      }
-      result = executor.update(envelope(in, request, tick + 1), latest, in.vehicle.stamp_s);
-      if (tick == 1) {
-        check(
-          result.safety_error == (task_mismatch ? ExecutionSafetyError::TaskMismatch
-                                                : ExecutionSafetyError::CommandRejected) &&
-            result.execution.action == Action::RequestMode,
-          "reviewed rejection must preserve the active alignment fallback");
-      }
-      check(
-        result.actuation && !result.execution.feedback.fault &&
-          result.execution.feedback.request_id == 17 &&
-          result.execution.steering_targets == frozen &&
-          result.execution.wheel_speed_targets == std::array<double, 4>{} &&
-          runner.install(result, in.vehicle.stamp_s, 10 + tick * c.dt_s) &&
-          runner.sample(in.vehicle.stamp_s + .05, 10 + tick * c.dt_s + .05),
-        "checked pending fallback must sample with frozen identity/geometry "
-        "and zero drive");
-      if (result.execution.feedback.confirmed) {
-        check(
-          result.execution.action == Action::Hold &&
-            result.execution.feedback.actual_mode == DriveMode::Crab,
-          "original request must complete a stopped handover");
-        confirmed = true;
-        break;
-      }
-    }
-    check(confirmed, "checked fallback must permit original mode confirmation");
-    check(
-      !runner.sample(in.vehicle.stamp_s + c.dt_s + .001, 20) && runner.fault(),
-      "fallback permission must not weaken expiry");
-  }
-  // A task mismatch may not extend a pending request's fixed deadline.
-  auto in = input();
-  detail::JointTimedExecutor executor(c, 2);
-  JointCommand request;
-  request.action = Action::RequestMode;
-  request.requested_mode = DriveMode::Crab;
-  request.mode_request = JointModeRequest{1, DriveMode::Crab, {1, 1, 1, 1}};
-  auto result = executor.update(envelope(in, request, 1, 2), in, 1);
-  for (std::uint64_t tick = 1; tick < 40 && !result.execution.feedback.fault; ++tick) {
-    in.vehicle.stamp_s = 1 + tick * c.dt_s;  // Deliberately stalled steering.
-    auto latest = in;
-    latest.path_id = 2;
-    result = executor.update(envelope(in, request, tick + 1, 2), latest, in.vehicle.stamp_s);
-  }
-  check(
-    result.execution.feedback.fault && !result.actuation,
-    "task rejection retries cannot renew the original alignment deadline");
-}
 void test_injected_validator_geometry()
 {
   Config c;
@@ -463,7 +243,7 @@ void test_injected_validator_geometry()
       foreign.track_m /= 2;
     }
     auto validator = std::make_shared<TrajectoryValidator>(foreign);
-    for (int consumer = 0; consumer < 4; ++consumer) {
+    for (int consumer = 0; consumer < 3; ++consumer) {
       bool rejected = false;
       try {
         if (consumer == 0) {
@@ -474,9 +254,6 @@ void test_injected_validator_geometry()
         }
         if (consumer == 2) {
           CriticManager critics(c, validator);
-        }
-        if (consumer == 3) {
-          detail::JointTimedExecutor executor(c, 1, DriveMode::Spin, {}, validator);
         }
       } catch (const std::invalid_argument &) {
         rejected = true;
@@ -494,13 +271,11 @@ void test_injected_validator_geometry()
   in.vehicle.steering_angles = wheels.angles;
   in.vehicle.velocity = Kinematics(c).forward(wheels.speeds, wheels.angles);
   auto validator = std::make_shared<TrajectoryValidator>(c);
-  JointCommand brake;
-  brake.action = Action::Brake;
-  detail::JointTimedExecutor executor(c, 1, DriveMode::Spin, {}, validator);
-  const auto result = executor.update(envelope(in, brake), in, 1);
+  Trajectory stop;
+  RolloutEngine(c).generate_stop(in.vehicle, stop);
   check(
-    result.actuation && !result.execution.feedback.fault,
-    "matching custom geometry must admit and validate a spinning stop");
+    validator->check(in, stop) == TrajectoryStatus::Valid,
+    "matching geometry must validate a spinning stopping prediction");
 }
 class NarrowFirstYaw final : public TrajectoryConstraint
 {
@@ -568,11 +343,10 @@ int main()
     test_inconsistent_feedback_cannot_certify_stopping();
     test_shared_budget_and_late_result_rejection();
     test_workload_admission_and_configuration_caps();
-    test_profile_sampling_watchdog_and_recovery();
-    test_pending_transition_fallback_profiles();
+
     test_injected_validator_geometry();
     test_retry_exploration_and_explicit_reset();
-    std::cout << "Admission, compute-budget and profile-runner regressions passed\n";
+    std::cout << "Admission and compute-budget regressions passed\n";
     return 0;
   } catch (const std::exception & error) {
     std::cerr << error.what() << '\n';

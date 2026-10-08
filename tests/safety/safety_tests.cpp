@@ -1,11 +1,10 @@
 #include <iostream>
 
 #include "behavior_fixture.hpp"
-#include "execution/detail/joint_timing.hpp"
 #include "planning/detail/planner.hpp"
-#include "swerve_mppi/execution/timing.hpp"
 
 using namespace swerve_mppi;
+using namespace swerve_mppi::detail;
 using namespace swerve_mppi::test;
 namespace
 {
@@ -166,7 +165,7 @@ void test_temporary_failure_stops_and_recovers()
 {
   const auto c = deterministic();
   detail::Planner controller(c);
-  ModeExecutor executor(c);
+  test::NominalChassis executor(c);
   auto in = straight();
   in.vehicle.velocity.vx = .2;
   in.vehicle.wheel_speeds.fill(.2);
@@ -195,7 +194,7 @@ void test_unsafe_stopping_latches_fault()
 {
   const auto c = deterministic();
   detail::Planner controller(c);
-  ModeExecutor executor(c);
+  test::NominalChassis executor(c);
   auto in = straight();
   in.vehicle.velocity.vx = .3;
   in.vehicle.wheel_speeds.fill(.3);
@@ -221,7 +220,7 @@ void test_capture_checks_one_command_then_stop()
 {
   const auto c = deterministic();
   detail::Planner controller(c);
-  ModeExecutor executor(c);
+  test::NominalChassis executor(c);
   auto in = straight();
   in.reference_path.back().x = .2;
   in.obstacles = {{.9, 0, .05}};
@@ -248,7 +247,7 @@ void test_terminal_brakes_share_stopping_validation()
     Config c;
     c.max_wheel_accel_mps2 = .2;
     detail::Planner controller(c);
-    ModeExecutor executor(c);
+    test::NominalChassis executor(c);
     auto in = straight();
     in.reference_path = {{0, 0, route == 1 || route == 3 ? 1.0 : 0.0}};
     if (route == 2) {
@@ -289,7 +288,7 @@ void test_safe_terminal_braking_retains_navigation_status()
 {
   Config c;
   detail::Planner controller(c);
-  ModeExecutor executor(c);
+  test::NominalChassis executor(c);
   auto in = straight();
   in.reference_path = {{0, 0, 1}};
   in.vehicle.velocity.vx = .1;
@@ -310,7 +309,7 @@ void test_drive_requires_complete_stopping_continuation()
   c.max_linear_decel_mps2 = .1;
   for (double goal : {2.0, .2}) {
     detail::Planner controller(c);
-    ModeExecutor executor(c);
+    test::NominalChassis executor(c);
     auto in = straight();
     in.reference_path.back().x = goal;
     in.obstacles = {{.64, 0, .05}};
@@ -364,7 +363,7 @@ void test_first_drive_deceleration_matches_execution()
       TrajectoryValidator(c).check(in, unsafe) == TrajectoryStatus::Collision,
     "decelerating first Drive must include its full-period displacement");
   detail::Planner controller(c);
-  ModeExecutor executor(c);
+  test::NominalChassis executor(c);
   const auto output = controller.compute(in);
   check(
     output.action == Action::Drive && output.safety_reductions > 0 && output.body_command.vx < .048,
@@ -372,7 +371,7 @@ void test_first_drive_deceleration_matches_execution()
   auto result = executor.update(output, in.vehicle);
   check(!result.feedback.fault, "reduced Drive must satisfy the same executor contract");
   actuate(in.vehicle, result, c);
-  JointCommand brake;
+  Prediction brake;
   brake.action = Action::Brake;
   brake.requested_mode = in.vehicle.actual_mode;
   actuate(in.vehicle, executor.update(brake, in.vehicle), c);
@@ -389,7 +388,7 @@ void test_stopping_budget_reduction_restores_progress()
   auto in = straight();
   in.reference_path.back().x = 1;
   detail::Planner controller(c);
-  ModeExecutor executor(c);
+  test::NominalChassis executor(c);
   const auto output = controller.compute(in);
   check(
     output.action == Action::Drive && output.safety_reductions > 0 &&
@@ -423,7 +422,8 @@ void test_overspeed_feedback_uses_checked_braking()
   in.vehicle.wheel_speeds.fill(1);
   const auto output = detail::Planner(c).compute(in);
   check(
-    output.action == Action::Brake && !ModeExecutor(c).update(output, in.vehicle).feedback.fault,
+    output.action == Action::Brake &&
+      !test::NominalChassis(c).update(output, in.vehicle).feedback.fault,
     "measured overspeed must recover by checked Brake instead of an "
     "overspeed Drive");
 }
@@ -434,7 +434,7 @@ void test_zero_intent_braking_executes_with_measured_residual()
   c.max_wheel_accel_mps2 = .1;
   c.samples_per_branch = c.iterations = 1;
   detail::Planner controller(c);
-  ModeExecutor executor(c);
+  test::NominalChassis executor(c);
   auto in = straight();
   in.vehicle.wheel_speeds = {.3, .24, .24, .3};
   in.vehicle.velocity = Kinematics(c).forward(in.vehicle.wheel_speeds, in.vehicle.steering_angles);
@@ -476,7 +476,7 @@ void test_pending_request_rechecks_fresh_stopping_constraints()
   Config c;
   c.max_wheel_accel_mps2 = .2;
   detail::Planner controller(c);
-  ModeExecutor executor(c);
+  test::NominalChassis executor(c);
   auto in = straight();
   in.reference_path = {{0, 0, 1}};
   const auto request = controller.compute(in);
@@ -523,111 +523,45 @@ public:
     return in.obstacles.empty() || trace.final_state.steering_angles == in.vehicle.steering_angles;
   }
 };
-void test_pending_request_rechecks_actual_steering()
+
+void test_pending_alignment_checks_fresh_constraints()
 {
-  for (bool guarded : {false, true}) {
-    for (double residual : {0.0, .004}) {
-      Config c;
-      auto validator = std::make_shared<TrajectoryValidator>(c);
-      validator->add(std::make_shared<SteeringLock>());
-      detail::Planner controller(c, validator);
-      ModeExecutor direct(c);
-      detail::JointTimedExecutor timed(c, 10, DriveMode::DualAckermann, {}, validator);
-      auto in = straight();
-      in.reference_path = {{0, 0, 1}};
-      std::uint64_t sequence = 0;
-      auto execute = [&](const JointCommand & command) {
-        if (!guarded) {
-          return direct.update(command, in.vehicle);
-        }
-        const double now = in.vehicle.stamp_s;
-        return timed
-          .update(
-            detail::JointCommandEnvelope{
-              10, ++sequence, now, command, now, now, now + .025, CommandTask::capture(in)},
-            in, now)
-          .execution;
-      };
-      const auto first = controller.compute(in);
-      check(
-        first.action == Action::RequestMode && first.mode_request,
-        "test must begin an explicit Spin request");
-      actuate(in.vehicle, execute(first), c);
-      check(
-        !in.vehicle.mode_confirmed && in.vehicle.steering_angles[0] != 0,
-        "test must reach measured steering in an unfinished transition");
-      const auto retry = controller.compute(in);
-      check(
-        retry.action == Action::RequestMode && retry.mode_request &&
-          retry.mode_request->id == first.mode_request->id &&
-          retry.mode_request->steering_targets == first.mode_request->steering_targets,
-        "safe retries must preserve the immutable request payload");
-      const auto continued = execute(retry);
-      check(
-        !continued.feedback.fault && !continued.feedback.confirmed,
-        "a safe retry must continue without granting mode confirmation");
-      actuate(in.vehicle, continued, c);
-      in.vehicle.wheel_speeds.fill(residual);
-      in.vehicle.velocity =
-        Kinematics(c).forward(in.vehicle.wheel_speeds, in.vehicle.steering_angles);
-      in.obstacles = {{100, 100, .05}};
-      Trajectory brake;
-      RolloutEngine(c).generate_stop(in.vehicle, brake);
-      check(
-        validator->check(in, brake) == TrajectoryStatus::Valid,
-        "the reviewed steering constraint must still allow the stationary "
-        "brake");
-      const auto rejected = controller.compute(in);
-      check(
-        rejected.action == Action::SafeStop &&
-          rejected.failure_reason == FailureReason::UnsafeStoppingTrajectory &&
-          !rejected.mode_request && !rejected.goal_reached &&
-          rejected.steering_targets == in.vehicle.steering_angles,
-        "pending requests must validate actual steering, including "
-        "residual braking");
-      const auto stopped = execute(rejected);
-      check(
-        stopped.feedback.fault && stopped.action == Action::SafeStop &&
-          stopped.steering_targets == in.vehicle.steering_angles &&
-          stopped.feedback.actual_mode == DriveMode::DualAckermann &&
-          stopped.feedback.request_id == first.mode_request->id,
-        "both execution paths must latch fault before forbidden steering "
-        "continues");
-    }
+  for (double residual : {0.0, .004}) {
+    Config c;
+    c.compute_budget_ratio = 0;
+    auto validator = std::make_shared<TrajectoryValidator>(c);
+    validator->add(std::make_shared<SteeringLock>());
+    detail::Planner planner(c, validator);
+    NominalChassis plant(c);
+    auto in = straight();
+    in.reference_path = {{0, 0, 1}};
+    const auto first = planner.compute(in);
+    check(
+      first.action == Action::RequestMode && first.mode_request, "begin an explicit spin request");
+    actuate(in.vehicle, plant.update(first, in.vehicle), c);
+    const auto retry = planner.compute(in);
+    check(
+      retry.mode_request && retry.mode_request->id == first.mode_request->id,
+      "pending request identity must persist");
+    actuate(in.vehicle, plant.update(retry, in.vehicle), c);
+    in.vehicle.wheel_speeds.fill(residual);
+    in.vehicle.velocity =
+      Kinematics(c).forward(in.vehicle.wheel_speeds, in.vehicle.steering_angles);
+    in.obstacles = {{100, 100, .05}};
+    Trajectory brake;
+    RolloutEngine(c).generate_stop(in.vehicle, brake);
+    check(
+      validator->check(in, brake) == TrajectoryStatus::Valid,
+      "constraint allows holding measured steering during a stop");
+    const auto rejected = planner.compute(in);
+    check(
+      rejected.action == Action::SafeStop &&
+        rejected.failure_reason == FailureReason::UnsafeStoppingTrajectory &&
+        !rejected.mode_request,
+      "pending alignment must recheck fresh steering constraints after residual braking");
   }
 }
-void test_guarded_retry_rechecks_changed_steering_constraint()
-{
-  Config c;
-  auto validator = std::make_shared<TrajectoryValidator>(c);
-  validator->add(std::make_shared<SteeringLock>());
-  detail::Planner controller(c, validator);
-  detail::JointTimedExecutor executor(c, 10, DriveMode::DualAckermann, {}, validator);
-  auto in = straight();
-  in.reference_path = {{0, 0, 1}};
-  const auto source = in;
-  const auto request = controller.compute(source);
-  const auto first = executor.update(
-    detail::JointCommandEnvelope{10, 1, 1, request, 1, 1, 1.025, CommandTask::capture(source)}, in,
-    1);
-  check(first.actuation.has_value(), "safe initial transition must have a checked profile");
-  actuate(in.vehicle, first.execution, c);
-  in.obstacles = {{100, 100, .05}};
-  // A queued immutable retry was planned before the steering lock appeared.
-  const double now = in.vehicle.stamp_s;
-  const auto rejected = executor.update(
-    detail::JointCommandEnvelope{
-      10, 2, now, request, 1, now, now + .025, CommandTask::capture(source)},
-    in, now);
-  check(
-    rejected.timing_error == TimingError::None &&
-      rejected.safety_error == ExecutionSafetyError::UnsafeStoppingTrajectory &&
-      rejected.rejected_status == TrajectoryStatus::Rejected && !rejected.actuation &&
-      rejected.execution.feedback.fault &&
-      rejected.execution.steering_targets == in.vehicle.steering_angles,
-    "execution must independently reject forbidden alignment in a "
-    "committed retry/fallback");
-}
+
 void test_stop_rollout_preserves_unconfirmed_feedback()
 {
   Config c;
@@ -738,7 +672,7 @@ void test_residual_hold_obstacle()
     "without rolling "
     "steering");
   const auto output = detail::Planner(c).compute(in);
-  ModeExecutor executor(c, DriveMode::Crab);
+  test::NominalChassis executor(c);
   const auto execution = executor.update(output, in.vehicle);
   auto actual = in.vehicle;
   test::actuate(actual, execution, c);
@@ -767,8 +701,8 @@ int main()
     test_safe_terminal_braking_retains_navigation_status();
     test_stationary_terminal_hold_checks_constraints();
     test_pending_request_rechecks_fresh_stopping_constraints();
-    test_pending_request_rechecks_actual_steering();
-    test_guarded_retry_rechecks_changed_steering_constraint();
+
+    test_pending_alignment_checks_fresh_constraints();
     test_stop_rollout_preserves_unconfirmed_feedback();
     test_shared_hard_constraints();
     test_validator_configuration_contract();

@@ -1,3 +1,5 @@
+#include "planning/detail/mode_manager.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -6,16 +8,15 @@
 #include "common/detail/time_comparison.hpp"
 #include "safety/detail/validation.hpp"
 #include "swerve_mppi/feedback/feedback.hpp"
-#include "swerve_mppi/planning/mode.hpp"
 
-namespace swerve_mppi
+namespace swerve_mppi::detail
 {
 namespace
 {
 bool same_entry_geometry(
   const std::array<double, 4> & accepted, const std::array<double, 4> & planned)
 {
-  // The chassis executor chooses and freezes mechanical positions at first
+  // The chassis chooses and freezes mechanical positions at first
   // accepted application. A queued body request may select a different signed
   // wheel representation than prediction. Acknowledgement checks the same
   // rolling lines; it never commands a wrapped shortcut across a hard stop.
@@ -54,9 +55,9 @@ void ModeManager::begin(
   phase_ = TransitionPhase::Braking;
 }
 
-JointCommand ModeManager::update(const VehicleState & observed)
+Prediction ModeManager::update(const VehicleState & observed)
 {
-  JointCommand out;
+  Prediction out;
   out.phase = phase_;
   out.requested_mode = request_.mode;
   out.steering_targets = observed.steering_angles;
@@ -141,7 +142,6 @@ void ModeManager::reset()
   phase_ = TransitionPhase::Stable;
   last_stamp_s_ = -1.0;
   accepted_request_.reset();
-  // Never reuse an ID after cancellation/recovery within this controller
-  // session.
+  // Never reuse an ID after reset within this controller instance.
 }
-}  // namespace swerve_mppi
+}  // namespace swerve_mppi::detail

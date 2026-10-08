@@ -140,38 +140,7 @@ void test_rejected_profiles()
   rejects(
     [] { with_config_parameters({}, std::vector<ConfigParameter>(69, {"dt_s", .1})); }, "too many");
 }
-void test_execution_compatibility()
-{
-  Config baseline;
-  const auto values = config_parameters(baseline);
-  const auto & schema = config_schema();
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    auto changed = values[i];
-    if (auto * number = std::get_if<double>(&changed.value)) {
-      *number = std::nextafter(*number, std::numeric_limits<double>::infinity());
-    } else {
-      ++std::get<std::uint64_t>(changed.value);
-    }
-    const auto candidate = with_config_parameters(baseline, {changed});
-    const auto mismatches = execution_config_mismatches(baseline, candidate);
-    if (schema[i].scope == ConfigScope::Execution) {
-      check(
-        mismatches.size() == 1 && mismatches.front() == changed.name,
-        "shared mismatch was not identified exactly");
-      rejects([&] { require_execution_compatible(baseline, candidate); }, changed.name);
-    } else {
-      check(mismatches.empty(), "planning tuning was treated as an execution mismatch");
-      require_execution_compatible(baseline, candidate);
-    }
-  }
-  const auto candidate = parse_config_profile("wheel_radius_m=.11\nmax_linear_decel_mps2=.8");
-  check(
-    execution_config_mismatches(baseline, candidate).size() == 2,
-    "multiple mismatch diagnostics were lost");
-  Config invalid;
-  invalid.dt_s = 0;
-  rejects([&] { require_execution_compatible(invalid, invalid); }, "positive");
-}
+
 void test_live_budget_admission()
 {
   validate_live_config(Config{});
@@ -196,7 +165,7 @@ int main()
     test_complete_profile_and_locale();
     test_transactional_loading_and_model();
     test_rejected_profiles();
-    test_execution_compatibility();
+
     test_live_budget_admission();
     std::cout << "Configuration regressions passed\n";
     return 0;

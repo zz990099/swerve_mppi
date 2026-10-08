@@ -17,7 +17,6 @@ Planner::Planner(
   PlanningBudget::Now now)
 : validator_(validator ? std::move(validator) : std::make_shared<TrajectoryValidator>(config)),
   safety_rollout_(config),
-  safety_actuation_(config),
   config_(config),
   now_(std::move(now)),
   model_(config),
@@ -30,7 +29,7 @@ Planner::Planner(
   validator_->require_compatible(config_);
 }
 
-JointCommand Planner::compute(const ControllerInput & input)
+Prediction Planner::compute(const ControllerInput & input)
 {
   PlanningBudget budget(config_.dt_s * config_.compute_budget_ratio, now_);
   auto out = compute_impl(input, budget);
@@ -55,10 +54,10 @@ JointCommand Planner::compute(const ControllerInput & input)
   }
   return out;
 }
-JointCommand Planner::compute_impl(const ControllerInput & input, const PlanningBudget & budget)
+Prediction Planner::compute_impl(const ControllerInput & input, const PlanningBudget & budget)
 {
   safety_reductions_ = 0;
-  JointCommand stop;
+  Prediction stop;
   stop.requested_mode = input.vehicle.actual_mode;
   stop.phase = mode_manager_.phase();
   if (
@@ -130,7 +129,7 @@ JointCommand Planner::compute_impl(const ControllerInput & input, const Planning
   const bool spin_terminal_translation = path.goal_eligible &&
                                          input.heading_policy == PathHeadingPolicy::GoalOnly &&
                                          input.vehicle.actual_mode == DriveMode::Spin;
-  JointCommand out;
+  Prediction out;
   if (mode_manager_.active()) {
     out = mode_manager_.update(input.vehicle);
     out.control_policy = ControlPolicy::ModeTransition;
@@ -189,7 +188,7 @@ JointCommand Planner::compute_impl(const ControllerInput & input, const Planning
   out.safety_reductions = safety_reductions_;
   return out;
 }
-JointCommand Planner::compute_tracking(const ControllerInput & input, const PlanningBudget & budget)
+Prediction Planner::compute_tracking(const ControllerInput & input, const PlanningBudget & budget)
 {
   const auto branches = scheduler_.make_branches(input.vehicle);
   PlanningStats stats;
@@ -206,8 +205,8 @@ JointCommand Planner::compute_tracking(const ControllerInput & input, const Plan
     stats.feasible_rollouts += work.feasible_rollouts;
     stats.fallback_updates += work.fallback_updates;
     if (work.budget_exhausted || budget.expired()) {
-      JointCommand out;  // Expired work cannot authorize another expensive
-                         // stopping check.
+      Prediction out;  // Expired work cannot authorize another expensive
+                       // stopping check.
       out.failure_reason = FailureReason::ComputeTimeout;
       out.planning_stats = stats;
       out.planning_stats.budget_exhausted = true;
@@ -248,10 +247,10 @@ JointCommand Planner::compute_tracking(const ControllerInput & input, const Plan
   }
   return out;
 }
-JointCommand Planner::request_mode(
+Prediction Planner::request_mode(
   const ControllerInput & input, DriveMode mode, const Control & intent)
 {
-  JointCommand stop;
+  Prediction stop;
   stop.requested_mode = input.vehicle.actual_mode;
   stop.steering_targets = input.vehicle.steering_angles;
   try {
@@ -266,9 +265,9 @@ JointCommand Planner::request_mode(
   alignment_start_s_ = input.vehicle.stamp_s;
   return mode_manager_.update(input.vehicle);
 }
-JointCommand Planner::compute_goal(const ControllerInput & input, const GoalState & goal)
+Prediction Planner::compute_goal(const ControllerInput & input, const GoalState & goal)
 {
-  JointCommand out;
+  Prediction out;
   out.requested_mode = input.vehicle.actual_mode;
   out.steering_targets = input.vehicle.steering_angles;
   out.action = is_stopped(input.vehicle, config_) ? Action::Hold : Action::Brake;
@@ -323,9 +322,9 @@ JointCommand Planner::compute_goal(const ControllerInput & input, const GoalStat
   }
   return apply_control(input, control);
 }
-JointCommand Planner::continue_alignment(const ControllerInput & input)
+Prediction Planner::continue_alignment(const ControllerInput & input)
 {
-  JointCommand out;
+  Prediction out;
   out.requested_mode = input.vehicle.actual_mode;
   out.steering_targets = input.vehicle.steering_angles;
   if (
@@ -338,9 +337,9 @@ JointCommand Planner::continue_alignment(const ControllerInput & input)
   }
   return apply_control(input, *alignment_control_);
 }
-JointCommand Planner::apply_control(const ControllerInput & input, Control control)
+Prediction Planner::apply_control(const ControllerInput & input, Control control)
 {
-  JointCommand out;
+  Prediction out;
   out.requested_mode = input.vehicle.actual_mode;
   out.steering_targets = input.vehicle.steering_angles;
   // A zero intent is braking even when measured joints still imply motion.
@@ -421,28 +420,26 @@ bool Planner::safe_control(
   return validator_->check(input, safety_trace_) == TrajectoryStatus::Valid &&
          is_stopped(safety_trace_.final_state, config_);
 }
-JointCommand Planner::planning_stop(const ControllerInput & input)
+Prediction Planner::planning_stop(const ControllerInput & input)
 {
   optimizer_.clear_warm_start();
   alignment_control_.reset();
-  JointCommand out;
+  Prediction out;
   out.requested_mode = input.vehicle.actual_mode;
   out.steering_targets = input.vehicle.steering_angles;
   out.action = is_stopped(input.vehicle, config_) ? Action::Hold : Action::Brake;
   out.failure_reason = FailureReason::NoFeasiblePlan;
   return out;
 }
-JointCommand Planner::check_stopping(const ControllerInput & input, JointCommand out)
+Prediction Planner::check_stopping(const ControllerInput & input, Prediction out)
 {
-  const auto plan =
-    safety_actuation_.plan_stopping(input.vehicle, out.action, out.steering_targets);
-  if (plan) {
-    safety_rollout_.generate_execution(*plan, safety_trace_);
-    if (
-      validator_->check(input, safety_trace_) == TrajectoryStatus::Valid &&
-      is_stopped(safety_trace_.final_state, config_)) {
-      return out;
-    }
+  const auto & target =
+    out.action == Action::Brake ? input.vehicle.steering_angles : out.steering_targets;
+  safety_rollout_.generate_stopping_interval(input.vehicle, target, safety_trace_);
+  if (
+    validator_->check(input, safety_trace_) == TrajectoryStatus::Valid &&
+    is_stopped(safety_trace_.final_state, config_)) {
+    return out;
   }
   optimizer_.clear_warm_start();
   alignment_control_.reset();

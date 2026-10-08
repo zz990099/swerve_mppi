@@ -1,63 +1,49 @@
-# Preparation before further simulation integration
+# Staged implementation plan
 
-This series changes the standalone algorithm core and offline verification only.
-The companion repository already contains a ROS planner, execution controller and
-nominal Gazebo regressions. This preparation series neither extends that
-integration nor runs new physical acceptance. Historical results are not evidence
-for newly introduced core behavior.
+Target boundary: a ROS-independent planner returns body velocity and explicit mode
+requests; the independent Gazebo chassis executes those requests. No old execution
+or transport interface will receive compatibility wrappers. Complete one stage per
+iteration, test it, and push directly to main before starting the next stage.
 
-The existing module separation remains useful: navigation prepares the local
-task, planning evaluates mode branches and continuous controls, models predict
-motion, safety validates continuations, and execution owns guarded actuation.
-Preserve these boundaries and incrementally improve their contracts. A wholesale
-rewrite would discard tested mode/stop semantics without resolving the current
-configuration, timing and uncertainty gaps. Nav2 MPPI can guide optimizer/noise/
-critic ownership and lifecycle boundaries; its body-twist interface does not
-replace the swerve mode handshake or the execution supervisor.
-
-| Stage | Deliverable | Acceptance boundary |
+| Stage | Status | Deliverable and acceptance |
 | --- | --- | --- |
-| 1: configuration foundation (complete, 0.21.1) | Complete typed registry, portable profiles, execution compatibility API, resolved benchmark configuration, current-status documentation | Configuration and installed-consumer regressions; existing core suite; no ROS/Gazebo code changes |
-| 2: timing and workload diagnostics (complete, 0.21.2) | Separate controller and full-pipeline costs, per-call work/status traces, nine-case matrix with configuration/build/source/host evidence | Recording versus strict acceptance; deterministic accounting tests and CLI/manifest cross-checks; target-host procedure; no library callback instrumentation |
-| 3: model and feedback preparation (complete, 0.21.3) | Independent observation/bounded residual API, explicit nominal-only fault/stop policy, 720-sample independent lag/noise/slip/delay matrix | Fault/stop/mode invariants remain fail-closed; model prediction error is measured against independent observations; no silent tolerance widening |
-| 4: adapter readiness (complete, 0.21.4) | Complete peer profile parser, immutable adapter/frame/clock contract, explicit profile revocation, serialized offline owner fixture and acceptance checklist | Reviewable pre-integration interface and offline acceptance matrix; no new simulator/ROS wiring |
+| 1. Planning/execution ownership | Complete in 0.22 | Remove production executors, profile sampling, session/sequence and peer adapter contracts; privatize prediction commands; remove obsolete companion preparation tools; preserve planning regressions, nominal closed-loop behavior and installed-consumer checks |
+| 2. Current chassis prediction | Next | Match Python speed/steering limits, normal zero, brake-align-confirm transitions and same-mode realignment; preserve mode dwell/hysteresis and measured acknowledgement; add offline parity tests against current chassis semantics |
+| 3. Observation, timing and faults | Pending | One timestamp representation; preserve observation time separately from computation and command expiry; define freshness, pairing, reset and rejection; separate numerical consistency from measured uncertainty; review control/model periods and warm-start shifts |
+| 4. Current interface offline adapter | Pending | Map rad/s to m/s, modes, request IDs, frozen receipts and mode age; retain accepted ID/entry on ordinary drive/hold; reject stale outputs; compare only shared chassis parameters; test message sequences without running ROS/Gazebo |
+| 5. ROS and physical integration | Pending | Separate algorithm-side ROS package; validate straight/crab/spin and transitions, then paths, obstacles, stopping and delay; add Nav2 wrapper after basic closed-loop acceptance |
 
-Stage 1 adds APIs and measurement support. It does not make configuration agreement
-automatic across processes, relax the 1e-9 nominal model agreement gate, prove the
-60 ms target-host budget, or address live executor scheduling stalls.
+## Next: stage 2
 
-Stage 2 preserves the bounded input policy and all safety gates. Controller timing
-includes path preparation, geometry, optimization and safety work; it is not an
-optimizer-only measurement. Changing input density and sample/horizon profiles
-supports scaling comparisons. Process CPU gaps are hints rather than proof of
-scheduling causes; internal critic/rollout profiling and live executor stall
-diagnosis remain separate investigations. CI records timing; strict runtime
-acceptance belongs on the intended CPU. See BUDGET_DIAGNOSTICS.md.
+Use the current Python chassis contract as the behavior reference. Compare the core's
+limits and normal stopping law with that implementation before choosing model
+parameters. The current affine joint interpolation and proportional braking are
+nominal assumptions, not commands the chassis has agreed to execute.
 
-Stage 3 preserves nominal model admission and supplies a stateless diagnostic
-sidecar, not an automatically enforced independent-motion gate. The offline plant
-exposes prediction error despite encoder/body agreement and false encoder-only
-stop evidence during chassis coasting. Noisy bounded residuals remain inadmissible;
-accepting them requires reviewed robust stopping/transition envelopes and physical
-identification. See MODEL_FEEDBACK.md for the exact uncertainty and fault policy.
+Predict normal zero holding steering, explicit brake-align-confirm mode changes,
+and automatic realignment within a mode. Use the chassis's accepted steering receipt
+after request acceptance. Never infer actual confirmation from elapsed predicted time.
+Keep switch cost, hysteresis, minimum mode age and immutable pending requests.
 
-Stage 4 supplies startup contract and original frame/clock/stamp checks plus
-ProfileRunner::cancel for immediate external-fault profile revocation. A serialized
-offline owner fixture exercises binding to an independent current callback clock,
-strict independent motion, complete command/task lifetime, continuous stopped
-recovery and acknowledged drain/endpoint stop. The contract APIs do not automatically
-arm or retrofit external callers. See ADAPTER_READINESS.md and ADAPTER_ACCEPTANCE.md.
+Acceptance covers all six directed mode changes, signed reverse motion, ordinary
+zero, same-mode realignment and transition timing/target limits. Retain separate
+model-error measurements: matching deterministic command semantics does not establish
+Gazebo servo/contact or physical stopping accuracy. Do not add ROS/Gazebo wiring in
+this stage.
 
-Preparation stages 1..4 are complete. A separately requested follow-up now audits
-and prepares the companion without connecting it. Stage 5 (complete, 0.21.5) adds
-the pinned source audit, configuration provenance and offline candidate preflight.
-See SIMULATION_MIGRATION_AUDIT.md for concrete evidence and migration obligations.
-The companion remains unchanged, and prepared candidates are not runtime exports
-or physical acceptance.
+## Remaining sequence
 
-Next preparation batches keep the same no-integration boundary: versioned wire
-records and bounded decoding fixtures, then serialized revocation/recovery and
-acknowledgement fixtures, then independent measurement/calibration specifications.
-Actual ROS/Gazebo migration and physical tests require a later integration request.
-Independent noisy/slipping motion, robust braking guarantees and target-host
-scheduling acceptance remain open. A Nav2 plugin remains subsequent work.
+Stage 3 removes the exact observation/application-time assumption and the dual
+seconds/nanoseconds ingress, and defines bounded observation-age and failure handling.
+Do not make old data current by relabelling timestamps. Physical uncertainty requires
+an explicit admission policy; merely loosening 1e-9 gates is insufficient.
+
+Stage 4 adds only the current command/state mapping and offline sequence tests. It
+must preserve request identity, accepted geometry and source-result lifetime while
+supporting normal stop and deliberate fault recovery. No full planning-profile
+exchange with the chassis is required.
+
+Stage 5 starts live integration. The Gazebo repository continues to contain only the
+chassis plant and its execution logic. ROS task/path/obstacle handling and later Nav2
+integration belong to the algorithm-side adapter. Measure physical tracking and
+stopping error before treating nominal trajectory checks as plant-level evidence.

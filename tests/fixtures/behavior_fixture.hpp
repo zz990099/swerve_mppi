@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "swerve_mppi/execution/executor.hpp"
+#include "chassis_fixture.hpp"
 namespace swerve_mppi::test
 {
 inline void check(bool ok, const char * message)
@@ -34,9 +34,9 @@ inline double measured_clearance(
 }
 // Independent encoder fixture. It does not call DriveModel, TransitionModel,
 // Kinematics::forward or a controller prediction to advance its state.
-inline void actuate(VehicleState & s, const ExecutionResult & command, const Config & c)
+inline void actuate(VehicleState & s, const PlantTargets & command, const Config & c)
 {
-  const bool moving_steering = command.action == Action::Drive;
+  const bool moving_steering = command.action == detail::Action::Drive;
   const bool stopped = std::hypot(s.velocity.vx, s.velocity.vy) <= c.stopped_linear_mps &&
                        std::abs(s.velocity.wz) <= c.stopped_angular_radps &&
                        std::all_of(s.wheel_speeds.begin(), s.wheel_speeds.end(), [&](double v) {

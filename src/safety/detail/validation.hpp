@@ -6,11 +6,7 @@
 #include "swerve_mppi/feedback/feedback.hpp"
 namespace swerve_mppi::detail
 {
-inline bool valid_action(Action action)
-{
-  return action == Action::Drive || action == Action::Brake || action == Action::RequestMode ||
-         action == Action::Hold || action == Action::SafeStop;
-}
+
 inline bool valid_mode(DriveMode mode)
 {
   return mode == DriveMode::DualAckermann || mode == DriveMode::Spin || mode == DriveMode::Crab;
@@ -35,7 +31,7 @@ inline bool steering_aligned(
   }
   return true;
 }
-inline bool same_request(const JointModeRequest & a, const JointModeRequest & b)
+inline bool same_request(const AcceptedModeRequest & a, const AcceptedModeRequest & b)
 {
   return a.id == b.id && a.mode == b.mode && a.steering_targets == b.steering_targets &&
          a.entry_velocity.vx == b.entry_velocity.vx && a.entry_velocity.vy == b.entry_velocity.vy &&

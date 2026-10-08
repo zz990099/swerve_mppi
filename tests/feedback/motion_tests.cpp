@@ -4,8 +4,6 @@
 
 #include "behavior_fixture.hpp"
 #include "motion_fixture.hpp"
-#include "swerve_mppi/execution/chassis_executor.hpp"
-#include "swerve_mppi/execution/profile_runner.hpp"
 #include "swerve_mppi/planning/controller.hpp"
 
 using namespace swerve_mppi;
@@ -120,7 +118,7 @@ void test_observation_contract()
     !observer.assess(state, stamp, observed).encoder_stationary,
     "cancelling encoder velocities do not prove stopped wheels");
 }
-void test_nominal_gates_and_recovery()
+void test_nominal_admission_and_chassis_fault()
 {
   Config c;
   c.compute_budget_ratio = 0;
@@ -140,51 +138,18 @@ void test_nominal_gates_and_recovery()
   check(
     !output.command && output.failure_reason == FailureReason::InconsistentFeedback,
     "planner must withhold authorization on small observed residual");
-  for (bool switching : {false, true}) {
-    Output command;
-    command.command = ChassisCommand{};
-    if (switching) {
-      command.command->mode = DriveMode::Crab;
-      command.command->mode_request = ModeRequest{7, DriveMode::Crab, {0, .3, 0}};
-    } else {
-      command.command->target_velocity.vx = .3;
-    }
-    TimedExecutor executor(c, 1);
-    ProfileRunner runner(c);
-    const auto make = [&](std::uint64_t sequence, std::uint64_t session) {
-      const double t = input.vehicle.stamp_s;
-      return CommandEnvelope{session, sequence, t,        command,
-                             t,       t,        t + .025, CommandTask::capture(input)};
-    };
-    auto rejected = executor.update(make(1, 1), input, input.vehicle.stamp_s);
-    check(
-      !rejected.actuation && rejected.execution.feedback.fault &&
-        rejected.execution.action == Action::SafeStop &&
-        rejected.safety_error == ExecutionSafetyError::InconsistentFeedback &&
-        rejected.execution.feedback.actual_mode == DriveMode::DualAckermann &&
-        rejected.execution.feedback.request_id == 0,
-      "residual motion must latch stop without committing a mode request");
-    check(
-      !runner.install(rejected, input.vehicle.stamp_s, 1) && runner.fault() &&
-        !runner.sample(input.vehicle.stamp_s, 1),
-      "no actuator profile after rejected observation");
-    // A healthy encoder packet alone does not clear either fault latch.
-    input.vehicle.velocity = {};
-    input.vehicle.stamp_s += c.dt_s;
-    auto retried = executor.update(make(2, 1), input, input.vehicle.stamp_s);
-    check(
-      !retried.actuation && retried.execution.feedback.fault,
-      "fault persists after residual disappears");
-    executor.reset(input.vehicle, 2);
-    runner.reset(input.vehicle);
-    auto recovered = executor.update(make(1, 2), input, input.vehicle.stamp_s);
-    check(
-      recovered.actuation && !recovered.execution.feedback.fault,
-      "deliberate stopped recovery with renewed session");
-    input.vehicle.velocity.vx = .001;
-    input.vehicle.stamp_s = 1;
-  }
+  input.vehicle.velocity = {};
+  input.vehicle.stamp_s += c.dt_s;
+  input.vehicle.mode_fault = true;
+  check(!controller.compute(input).command, "chassis fault must withhold motion authorization");
+  controller.reset();
+  input.vehicle.mode_fault = false;
+  input.vehicle.stamp_s += c.dt_s;
+  check(
+    controller.compute(input).command.has_value(),
+    "healthy observation permits a fresh plan after reset");
 }
+
 void test_independent_probe()
 {
   Config c;
@@ -264,7 +229,7 @@ int main()
 {
   try {
     test_observation_contract();
-    test_nominal_gates_and_recovery();
+    test_nominal_admission_and_chassis_fault();
     test_independent_probe();
     std::cout << "motion observation and independent perturbation checks passed\n";
   } catch (const std::exception & e) {
