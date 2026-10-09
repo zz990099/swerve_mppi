@@ -9,25 +9,25 @@ namespace swerve_mppi
 struct StampedPose
 {
   Pose2d pose;  // Fixed world/odometry frame, never the body frame.
-  double stamp_s = -1;
-  std::int64_t stamp_ns = -1;  // Original transport stamp; used by make_at_nanoseconds.
+  TimestampNs stamp_ns = kInvalidTimestamp;
 };
 // ROS-independent representation of ONE complete JointState observation.
-// Position is rad; velocity is rad/s. All required joints must share stamp_s.
+// Position is rad; velocity is rad/s. All required joints share stamp_ns.
 // At most 64 names are admitted; required joints must occur exactly once.
 struct JointObservation
 {
-  double stamp_s = -1;
+  TimestampNs stamp_ns = kInvalidTimestamp;
   std::vector<std::string> names;
   std::vector<double> positions;
   std::vector<double> velocities;
-  std::int64_t stamp_ns = -1;
 };
 enum class SnapshotError
 {
   None,
   InvalidTime,
   Unsynchronized,
+  Stale,
+  Future,
   MissingJoint,
   InvalidFeedback
 };
@@ -46,17 +46,12 @@ public:
   explicit FeedbackAdapter(const Config & config, std::string joint_prefix = "");
   SnapshotResult make(
     const JointObservation & joints, const StampedPose & pose, const ModeFeedback & mode,
-    double application_s) const;
-  // ROS ingress: compare original integer stamps before converting once to
-  // seconds. The legacy stamp_s fields are ignored on this entry point.
-  SnapshotResult make_at_nanoseconds(
-    const JointObservation & joints, const StampedPose & pose, const ModeFeedback & mode,
-    std::int64_t application_ns) const;
+    TimestampNs planning_stamp_ns) const;
 
 private:
   SnapshotResult assemble(
     const JointObservation & joints, const Pose2d & pose, const ModeFeedback & mode,
-    double stamp_s) const;
+    TimestampNs stamp_ns) const;
   Config config_;
   std::array<std::string, 8> names_;
 };

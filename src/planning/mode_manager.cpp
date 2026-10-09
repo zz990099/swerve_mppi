@@ -50,8 +50,8 @@ void ModeManager::begin(
     {intent.vx, intent.vy, intent.wz}};
   last_request_id_ = request_.id;
   accepted_request_.reset();
-  start_s_ = observed.stamp_s;
-  last_stamp_s_ = -1.0;
+  start_ns_ = observed.stamp_ns;
+  last_stamp_ns_ = kInvalidTimestamp;
   phase_ = TransitionPhase::Braking;
 }
 
@@ -74,15 +74,15 @@ Prediction ModeManager::update(const VehicleState & observed)
     return out;
   }
   if (
-    observed.stamp_s < start_s_ || observed.stamp_s <= last_stamp_s_ || observed.mode_fault ||
+    observed.stamp_ns < start_ns_ || observed.stamp_ns <= last_stamp_ns_ || observed.mode_fault ||
     phase_ == TransitionPhase::Fault ||
-    detail::deadline_exceeded(observed.stamp_s, start_s_, config_.confirmation_timeout_s)) {
+    detail::deadline_exceeded(observed.stamp_ns, start_ns_, config_.confirmation_timeout_s)) {
     phase_ = TransitionPhase::Fault;
     out.phase = phase_;
     out.action = Action::SafeStop;
     return out;
   }
-  last_stamp_s_ = observed.stamp_s;
+  last_stamp_ns_ = observed.stamp_ns;
   const auto & accepted = observed.accepted_mode_request;
   const auto invalid_acceptance = [&]() {
     phase_ = TransitionPhase::Fault;
@@ -140,7 +140,7 @@ Prediction ModeManager::update(const VehicleState & observed)
 void ModeManager::reset()
 {
   phase_ = TransitionPhase::Stable;
-  last_stamp_s_ = -1.0;
+  last_stamp_ns_ = kInvalidTimestamp;
   accepted_request_.reset();
   // Never reuse an ID after reset within this controller instance.
 }

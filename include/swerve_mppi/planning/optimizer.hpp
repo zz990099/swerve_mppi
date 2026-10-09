@@ -18,9 +18,10 @@ public:
     const Config & config, std::shared_ptr<const TrajectoryValidator> validator = nullptr);
   Solution optimize(
     const ControllerInput & input, const Branch & branch, const PlanningBudget * budget = nullptr);
-  // Advance a warm start only after the controller actually issues its drive
-  // action.
+  // Retain a warm start only after the controller actually issues Drive.
   void accept(const Solution & solution, DriveMode mode);
+  // Advance the retained sequence by elapsed model intervals before reuse.
+  void advance_warm_start(std::size_t intervals);
   // Discard a stale proposal without replaying previously sampled noise.
   void clear_warm_start();
   // Explicit deterministic restart, including the configured random seed.
@@ -30,6 +31,10 @@ public:
 private:
   friend class detail::Planner;
   bool prepare(const ControllerInput & input) { return critics_.prepare(input); }
+  void set_initial_prediction(const ChassisPrediction * prediction)
+  {
+    initial_prediction_ = prediction ? std::optional<ChassisPrediction>(*prediction) : std::nullopt;
+  }
   Solution optimize(
     const ControllerInput & input, const Branch & branch, const PlanningBudget * budget,
     bool geometry_prepared);
@@ -52,5 +57,6 @@ private:
   NoiseGenerator noise_;
   DriveMode warm_mode_ = DriveMode::DualAckermann;
   std::vector<Control> warm_start_;
+  std::optional<ChassisPrediction> initial_prediction_;
 };
 }  // namespace swerve_mppi

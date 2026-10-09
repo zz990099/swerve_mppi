@@ -6,31 +6,6 @@
 
 namespace swerve_mppi
 {
-enum class MotionSource
-{
-  IndependentBody,
-  EncoderDerived
-};
-// Body-frame velocity at the original source timestamp. Error bounds are
-// deterministic norm bounds, not variance, standard deviation or confidence.
-struct MotionObservation
-{
-  Twist2d velocity;
-  std::int64_t stamp_ns = -1;
-  MotionSource source = MotionSource::EncoderDerived;
-  double linear_error_bound_mps = 0;
-  double angular_error_bound_radps = 0;
-};
-enum class MotionStatus
-{
-  Invalid,
-  Missing,
-  Unsynchronized,
-  CorrelatedSource,
-  NominalAgreement,
-  BoundedDisagreement,
-  EnvelopeExceeded
-};
 struct MotionAssessment
 {
   MotionStatus status = MotionStatus::Invalid;
@@ -45,15 +20,14 @@ struct MotionAssessment
 };
 // Stateless diagnostic sidecar: never changes VehicleState, authorizes Drive,
 // certifies a stopping trajectory, latches a fault or resets an executor.
-// Encoder timestamps must be the original integer stamps, not reconstructed
-// from state.stamp_s. An exact common timestamp is required; freshness alone
-// does not establish coherence. The observation must be independently sourced.
+// Source timestamps stay integer nanoseconds. Configured pairing and age bounds
+// establish coherence; observations are never relabelled to planning time.
 class MotionObserver
 {
 public:
   explicit MotionObserver(const Config & config);
   MotionAssessment assess(
-    const VehicleState & state, std::int64_t encoder_stamp_ns,
+    const VehicleState & state, TimestampNs planning_stamp_ns,
     const std::optional<MotionObservation> & observation) const;
 
 private:

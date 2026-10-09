@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "common/detail/time_comparison.hpp"
 #include "model/detail/nominal_motion.hpp"
 #include "safety/detail/validation.hpp"
 #include "swerve_mppi/feedback/feedback.hpp"
@@ -137,7 +138,7 @@ ChassisPrediction DriveModel::alignment_seed(
   auto memory = seed(s);
   memory.phase = TransitionPhase::Braking;
   memory.alignment = angles;
-  memory.transition_start_s = s.stamp_s;
+  memory.transition_start_ns = s.stamp_ns;
   return memory;
 }
 StepResult DriveModel::step(const VehicleState & s, const Control & u, double dt) const
@@ -161,7 +162,7 @@ StepResult DriveModel::step(
     !detail::valid_steering(m.commanded_angles, config_) ||
     !detail::valid_steering(m.alignment, config_) || !std::isfinite(m.limited_velocity.vx) ||
     !std::isfinite(m.limited_velocity.vy) || !std::isfinite(m.limited_velocity.wz) ||
-    !std::isfinite(m.transition_start_s) || !std::isfinite(m.aligned_since_s) ||
+    m.transition_start_ns < 0 || m.aligned_since_ns < kInvalidTimestamp ||
     (m.phase != TransitionPhase::Stable && m.phase != TransitionPhase::Braking &&
      m.phase != TransitionPhase::Aligning)) {
     out.valid = false;
@@ -206,7 +207,12 @@ StepResult DriveModel::step(
     curvature_accel =
       std::max(curvature_accel, std::hypot(before.vx, before.vy) * std::abs(before.wz));
     previous = before;
-    const double now = start.stamp_s + (tick + 1) * h;
+    const auto now_value = add_duration(start.stamp_ns, (tick + 1) * h);
+    if (!now_value) {
+      out.valid = false;
+      return out;
+    }
+    const TimestampNs now = *now_value;
     const double wheel_delta = config_.max_wheel_accel_mps2 / config_.wheel_radius_m * h;
     const double steer_delta = config_.max_steer_rate_radps * h;
     bool drive = false;
@@ -240,14 +246,14 @@ StepResult DriveModel::step(
         } else {
           m.alignment = targets(velocity).angles;
           m.phase = TransitionPhase::Braking;
-          m.transition_start_s = now;
-          m.aligned_since_s = -1;
+          m.transition_start_ns = now;
+          m.aligned_since_ns = -1;
         }
       }
     }
     if (!drive) {
       out.aligning = true;
-      if (now - m.transition_start_s > config_.confirmation_timeout_s) {
+      if (detail::deadline_exceeded(now, m.transition_start_ns, config_.confirmation_timeout_s)) {
         out.valid = false;
         return out;
       }
@@ -261,15 +267,17 @@ StepResult DriveModel::step(
         [](double v) { return v == 0; });
       if (!stopped || !commanded_zero) {
         m.phase = TransitionPhase::Braking;
-        m.aligned_since_s = -1;
+        m.aligned_since_ns = -1;
       } else {
         m.phase = TransitionPhase::Aligning;
         approach(m.commanded_angles, m.alignment, steer_delta);
         if (detail::steering_aligned(out.state.steering_angles, m.alignment, config_)) {
-          if (m.aligned_since_s < 0) m.aligned_since_s = now;
-          if (now - m.aligned_since_s >= config_.alignment_min_s) m.phase = TransitionPhase::Stable;
+          if (m.aligned_since_ns < 0) m.aligned_since_ns = now;
+          if (detail::deadline_exceeded(now, m.aligned_since_ns, config_.alignment_min_s)) {
+            m.phase = TransitionPhase::Stable;
+          }
         } else
-          m.aligned_since_s = -1;
+          m.aligned_since_ns = -1;
       }
     }
     out.state.steering_angles = m.commanded_angles;
@@ -279,7 +287,12 @@ StepResult DriveModel::step(
   }
   out.steering_targets = m.commanded_angles;
   out.wheel_speed_targets = out.state.wheel_speeds;
-  out.state.stamp_s += dt;
+  const auto end_stamp = add_duration(out.state.stamp_ns, dt);
+  if (!end_stamp) {
+    out.valid = false;
+    return out;
+  }
+  out.state.stamp_ns = *end_stamp;
   out.state.time_in_mode_s += dt;
   // Discrete velocity jumps represented by a bounded linear ramp plus its
   // sample-and-hold discrepancy. Also cover curved motion and reversal.

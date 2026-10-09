@@ -6,6 +6,8 @@
 #include <optional>
 #include <vector>
 
+#include "swerve_mppi/common/time.hpp"
+
 namespace swerve_mppi
 {
 
@@ -76,7 +78,7 @@ struct VehicleState
   // Echo of the chassis's active/last completed request; zero means startup.
   std::uint64_t mode_request_id = 0;
   double time_in_mode_s = 0.0;
-  double stamp_s = 0.0;
+  TimestampNs stamp_ns = 0;
   // Chassis-owned first-accepted request, retained through completion.
   // Required when a pending planner request's ID has been accepted.
   std::optional<AcceptedModeRequest> accepted_mode_request{};
@@ -98,9 +100,62 @@ struct TrackingContext
   PathHeadingPolicy heading_policy = PathHeadingPolicy::FollowPath;
 };
 
+enum class MotionSource
+{
+  IndependentBody,
+  EncoderDerived
+};
+enum class MotionPolicy
+{
+  EncoderNominal,
+  RequireIndependent
+};
+struct MotionObservation
+{
+  Twist2d velocity;
+  TimestampNs stamp_ns = kInvalidTimestamp;
+  MotionSource source = MotionSource::EncoderDerived;
+  double linear_error_bound_mps = 0;
+  double angular_error_bound_radps = 0;
+};
+enum class MotionStatus
+{
+  Invalid,
+  Missing,
+  Stale,
+  Future,
+  Unsynchronized,
+  CorrelatedSource,
+  NominalAgreement,
+  BoundedDisagreement,
+  EnvelopeExceeded
+};
+enum class PredictionHistoryStatus
+{
+  ColdStart,
+  Synchronized,
+  MissingApplication,
+  ApplicationUncertain,
+  InvalidApplication,
+  Diverged
+};
+struct CommandApplication
+{
+  std::uint64_t command_id = 0;
+  TimestampNs published_stamp_ns = kInvalidTimestamp;
+  TimestampNs earliest_stamp_ns = kInvalidTimestamp;
+  TimestampNs latest_stamp_ns = kInvalidTimestamp;
+};
+
 struct ControllerInput
 {
   VehicleState vehicle;
+  // Decision clock in the same domain as source observation stamps.
+  TimestampNs planning_stamp_ns = 0;
+  std::optional<MotionObservation> motion_observation;
+  MotionPolicy motion_policy = MotionPolicy::EncoderNominal;
+  // Publication/application window for the preceding controller output.
+  std::optional<CommandApplication> previous_command_application;
   std::vector<Pose2d> reference_path;
   std::vector<CircleObstacle> obstacles;
   // Change this ID to restart an identical path as a new task. Geometry changes
@@ -129,6 +184,7 @@ struct ModeFeedback
   // Exact immutable request accepted by the chassis, including mechanical entry
   // positions. Empty before a request has been accepted.
   std::optional<AcceptedModeRequest> accepted_mode_request{};
+  TimestampNs stamp_ns = 0;
 };
 
 enum class FailureReason
@@ -136,6 +192,10 @@ enum class FailureReason
   None,
   InvalidInput,
   NonmonotonicTime,
+  ClockFault,
+  StaleObservation,
+  MotionUncertainty,
+  FaultLatched,
   InvalidPath,
   FeedbackFault,
   NoFeasiblePlan,
@@ -185,6 +245,9 @@ struct PlanningDiagnostics
   double cross_track_error_m = 0.0;
   double goal_distance_m = 0.0;
   double goal_yaw_error_rad = 0.0;
+  MotionStatus motion_status = MotionStatus::Missing;
+  PredictionHistoryStatus prediction_history = PredictionHistoryStatus::ColdStart;
+  double observation_age_s = 0.0;
 };
 
 // Body-frame entry intent specifies alignment geometry; it never authorizes
@@ -203,10 +266,30 @@ struct ChassisCommand
 };
 struct Output : PlanningDiagnostics
 {
+  std::uint64_t command_id = 0;
+  TimestampNs observation_stamp_ns = kInvalidTimestamp;
+  TimestampNs computed_stamp_ns = kInvalidTimestamp;
+  TimestampNs published_stamp_ns = kInvalidTimestamp;
+  TimestampNs valid_until_ns = kInvalidTimestamp;
   // A valid zero target requests a nominal stop and retains the mode. Absence
   // means no authorized command: the consumer must stop/latch, never reuse
   // Drive.
   std::optional<ChassisCommand> command;
 };
+inline bool command_valid_at(const Output & output, TimestampNs stamp_ns)
+{
+  return output.command && output.command_id != 0 && output.published_stamp_ns >= 0 &&
+         stamp_ns >= output.published_stamp_ns && stamp_ns <= output.valid_until_ns;
+}
+inline bool set_publication_stamp(Output & output, TimestampNs stamp_ns)
+{
+  if (
+    !output.command || output.command_id == 0 || output.published_stamp_ns >= 0 ||
+    stamp_ns < output.computed_stamp_ns || stamp_ns > output.valid_until_ns) {
+    return false;
+  }
+  output.published_stamp_ns = stamp_ns;
+  return true;
+}
 
 }  // namespace swerve_mppi

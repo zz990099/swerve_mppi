@@ -15,7 +15,7 @@ void test_observation_contract()
   Config c;
   MotionObserver observer(c);
   VehicleState state;
-  state.stamp_s = 1;
+  state.stamp_ns = *duration_nanoseconds(1.0);
   constexpr std::int64_t stamp = 1000000000;
   MotionObservation observed{{}, stamp, MotionSource::IndependentBody};
   auto result = observer.assess(state, stamp, observed);
@@ -30,18 +30,18 @@ void test_observation_contract()
     "encoder-derived odometry cannot prove independent motion");
   check(observer.assess(state, stamp, {}).status == MotionStatus::Missing, "missing observation");
   observed.source = MotionSource::IndependentBody;
-  ++observed.stamp_ns;
+  observed.stamp_ns += *duration_nanoseconds(c.observation_pairing_tolerance_s) + 1;
   check(
     observer.assess(state, stamp, observed).status == MotionStatus::Unsynchronized,
     "one nanosecond must reject coherence");
   // Adjacent source ns collapse in double at a large epoch; integer stamps do not.
   constexpr std::int64_t epoch = 1700000000000000000;
-  state.stamp_s = std::chrono::duration<double>(std::chrono::nanoseconds(epoch)).count();
+  state.stamp_ns = epoch;
   observed.stamp_ns = epoch + 1;
   check(
-    observer.assess(state, epoch, observed).status == MotionStatus::Unsynchronized,
-    "large-epoch coherence must use original integer stamps");
-  state.stamp_s = 1;
+    observer.assess(state, epoch, observed).status == MotionStatus::NominalAgreement,
+    "large-epoch pairing tolerance must use original integer stamps");
+  state.stamp_ns = *duration_nanoseconds(1.0);
   observed.stamp_ns = stamp;
   for (int variant = 0; variant < 7; ++variant) {
     auto bad = observed;
@@ -76,8 +76,8 @@ void test_observation_contract()
   check(
     observer.assess(state, -1, observed).status == MotionStatus::Invalid, "invalid encoder time");
   check(
-    observer.assess(state, stamp + 100, observed).status == MotionStatus::Invalid,
-    "encoder metadata must describe the supplied snapshot");
+    observer.assess(state, stamp + 100, observed).status == MotionStatus::NominalAgreement,
+    "planning time may differ from the paired source timestamp");
   state.wheel_speeds[0] = c.max_wheel_speed_mps + 1;
   check(observer.assess(state, stamp, observed).status == MotionStatus::Invalid, "invalid joints");
   state.wheel_speeds = {};
@@ -139,12 +139,14 @@ void test_nominal_admission_and_chassis_fault()
     !output.command && output.failure_reason == FailureReason::InconsistentFeedback,
     "planner must withhold authorization on small observed residual");
   input.vehicle.velocity = {};
-  input.vehicle.stamp_s += c.dt_s;
+  input.vehicle.stamp_ns = *add_duration(input.vehicle.stamp_ns, c.model_period_s);
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
   input.vehicle.mode_fault = true;
   check(!controller.compute(input).command, "chassis fault must withhold motion authorization");
   controller.reset();
   input.vehicle.mode_fault = false;
-  input.vehicle.stamp_s += c.dt_s;
+  input.vehicle.stamp_ns = *add_duration(input.vehicle.stamp_ns, c.model_period_s);
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
   check(
     controller.compute(input).command.has_value(),
     "healthy observation permits a fresh plan after reset");
@@ -195,7 +197,7 @@ void test_independent_probe()
   check(hidden_stop["body_lag"] > 0, "body inertia must expose false encoder-only stop evidence");
   // Analytical plant oracle: one-second linear ramp from rest to .4 m/s.
   Config ramp_config = c;
-  ramp_config.dt_s = 1;
+  ramp_config.model_period_s = 1;
   test::MotionPlant plant(ramp_config, DriveMode::DualAckermann, {"nominal"});
   plant.advance({}, {.4, .4, .4, .4});
   check(

@@ -23,6 +23,14 @@ navigation and planning-budget parameters control the optimizer and task policy.
 regressions; live callers must use a positive budget. Input size and stopping-horizon
 limits bound work without truncating paths or obstacles.
 
+Timing configuration has three independent periods: `planning_period_s` defines the
+live compute budget, `model_period_s` defines the MPPI/trajectory grid, and
+`chassis_period_s` defines command-mechanics substeps. Pairing, observation age/gap,
+future tolerance, command lifetime and application uncertainty are explicit bounds.
+History steering/wheel tolerances admit only reconciliation error; they do not relax
+the strict encoder/body nominal model gate. All configured periods convert to positive
+integer nanoseconds during validation.
+
 Shared chassis defaults match the current Python configuration: body caps 0.8 m/s
 and 0.8 rad/s, 100 Hz updates, wheel caps 2 m/s and 4 m/s^2, steering rate 2.5 rad/s,
 0.05 rad measured alignment tolerance, 0.05 s alignment dwell and 5 s transition

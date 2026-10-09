@@ -50,7 +50,8 @@ std::vector<Control> Optimizer::seed(
     Control u;
     if (mode == DriveMode::DualAckermann) {
       u.vx = clamp(
-        local_x / (config_.dt_s * config_.horizon_steps), -config_.max_vx_mps, config_.max_vx_mps);
+        local_x / (config_.model_period_s * config_.horizon_steps), -config_.max_vx_mps,
+        config_.max_vx_mps);
       if (std::abs(u.vx) < 0.15 && std::abs(local_y) > 0.2) {
         u.vx = 0.35;
       }
@@ -61,8 +62,8 @@ std::vector<Control> Optimizer::seed(
       u.wz =
         clamp(angle_distance(goal.yaw, pose.yaw), -config_.max_spin_radps, config_.max_spin_radps);
     } else {
-      u.vx = local_x / (config_.dt_s * config_.horizon_steps);
-      u.vy = local_y / (config_.dt_s * config_.horizon_steps);
+      u.vx = local_x / (config_.model_period_s * config_.horizon_steps);
+      u.vy = local_y / (config_.model_period_s * config_.horizon_steps);
     }
     controls[i] = model_.project(u, mode);
   }
@@ -78,7 +79,8 @@ Solution Optimizer::optimize(
   const ControllerInput & input, const Branch & branch, const PlanningBudget * budget,
   bool geometry_prepared)
 {
-  PlanningBudget local_budget(budget ? 0 : config_.dt_s * config_.compute_budget_ratio);
+  PlanningBudget local_budget(
+    budget ? 0 : config_.planning_period_s * config_.compute_budget_ratio);
   const auto & active_budget = budget ? *budget : local_budget;
   Solution result;
   result.branch = branch;
@@ -131,7 +133,9 @@ Solution Optimizer::optimize(
     return result;
   };
   auto evaluate = [&](const std::vector<Control> & controls) {
-    rollout_.generate(input.vehicle, branch, controls, proposal_);
+    rollout_.generate(
+      input.vehicle, branch, controls, proposal_,
+      initial_prediction_ ? &*initial_prediction_ : nullptr);
     ++stats.evaluated_rollouts;
     const double cost = critics_.score_prepared(input, proposal_);
     stats.feasible_rollouts += std::isfinite(cost);
@@ -254,8 +258,20 @@ void Optimizer::accept(const Solution & solution, DriveMode mode)
   }
   warm_mode_ = mode;
   warm_start_ = solution.controls;
-  std::rotate(warm_start_.begin(), warm_start_.begin() + 1, warm_start_.end());
-  warm_start_.back() = solution.controls.back();
+}
+void Optimizer::advance_warm_start(std::size_t intervals)
+{
+  if (warm_start_.empty()) {
+    return;
+  }
+  if (intervals >= warm_start_.size()) {
+    clear_warm_start();
+    return;
+  }
+  for (std::size_t i = 0; i < intervals; ++i) {
+    std::rotate(warm_start_.begin(), warm_start_.begin() + 1, warm_start_.end());
+    warm_start_.back() = warm_start_[warm_start_.size() - 2];
+  }
 }
 void Optimizer::clear_warm_start() { warm_start_.clear(); }
 void Optimizer::reset()

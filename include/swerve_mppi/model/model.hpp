@@ -46,8 +46,8 @@ struct ChassisPrediction
   std::array<double, 4> commanded_angles{};
   std::array<double, 4> commanded_wheel_radps{};
   std::array<double, 4> alignment{};
-  double transition_start_s = 0;
-  double aligned_since_s = -1;
+  TimestampNs transition_start_ns = 0;
+  TimestampNs aligned_since_ns = kInvalidTimestamp;
 };
 
 struct StepResult
@@ -71,9 +71,9 @@ public:
   bool feasible(const Control & control, DriveMode mode) const;
   Control project(const Control & control, DriveMode mode) const;
   // Cold prediction from an observation; this is an explicit nominal assumption.
-  StepResult step(const VehicleState & start, const Control & control, double dt_s) const;
+  StepResult step(const VehicleState & start, const Control & control, double model_period_s) const;
   StepResult step(
-    const VehicleState & start, const Control & control, double dt_s,
+    const VehicleState & start, const Control & control, double model_period_s,
     const ChassisPrediction & prediction) const;
   ChassisPrediction seed(const VehicleState & observed) const;
   ChassisPrediction alignment_seed(

@@ -1,7 +1,6 @@
 #include "swerve_mppi/feedback/motion_observer.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 
 #include "safety/detail/validation.hpp"
@@ -11,13 +10,10 @@ namespace swerve_mppi
 {
 MotionObserver::MotionObserver(const Config & config) : config_(config) { validate(config_); }
 MotionAssessment MotionObserver::assess(
-  const VehicleState & state, std::int64_t encoder_stamp_ns,
+  const VehicleState & state, TimestampNs planning_stamp_ns,
   const std::optional<MotionObservation> & observation) const
 {
-  if (
-    encoder_stamp_ns < 0 || !detail::valid_vehicle(state, config_) ||
-    state.stamp_s !=
-      std::chrono::duration<double>(std::chrono::nanoseconds(encoder_stamp_ns)).count()) {
+  if (planning_stamp_ns < 0 || !detail::valid_vehicle(state, config_)) {
     return {};
   }
   if (!observation) {
@@ -35,8 +31,21 @@ MotionAssessment MotionObserver::assess(
     return {};
   }
   MotionAssessment out;
-  if (o.stamp_ns != encoder_stamp_ns) {
+  const auto pairing = duration_nanoseconds(config_.observation_pairing_tolerance_s);
+  const auto age = duration_nanoseconds(config_.max_observation_age_s);
+  const auto future = duration_nanoseconds(config_.future_observation_tolerance_s);
+  const auto skew =
+    state.stamp_ns > o.stamp_ns ? state.stamp_ns - o.stamp_ns : o.stamp_ns - state.stamp_ns;
+  if (!pairing || skew > *pairing) {
     out.status = MotionStatus::Unsynchronized;
+    return out;
+  }
+  if (!future || (o.stamp_ns > planning_stamp_ns && o.stamp_ns - planning_stamp_ns > *future)) {
+    out.status = MotionStatus::Future;
+    return out;
+  }
+  if (!age || (planning_stamp_ns > o.stamp_ns && planning_stamp_ns - o.stamp_ns > *age)) {
+    out.status = MotionStatus::Stale;
     return out;
   }
   if (o.source != MotionSource::IndependentBody) {
@@ -57,8 +66,6 @@ MotionAssessment MotionObserver::assess(
       return {};
     }
   }
-  // No tolerance epsilon on declared bounds: numerical agreement is a
-  // separate nominal category and never absorbs nonzero uncertainty.
   if (
     out.linear_residual_upper_mps > config_.feedback_linear_tolerance_mps ||
     out.angular_residual_upper_radps > config_.feedback_angular_tolerance_radps) {

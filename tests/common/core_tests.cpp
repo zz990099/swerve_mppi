@@ -21,7 +21,8 @@ ControllerInput make_input()
 {
   ControllerInput input;
   input.vehicle.time_in_mode_s = 2.0;
-  input.vehicle.stamp_s = 1.0;
+  input.vehicle.stamp_ns = *duration_nanoseconds(1.0);
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
   input.reference_path = {{0.0, 0.0, 0.0}, {0.0, 1.4, 0.0}};
   return input;
 }
@@ -43,7 +44,7 @@ void test_mode_kinematics()
 
   VehicleState crab;
   crab.actual_mode = DriveMode::Crab;
-  const auto first = model.step(crab, {0.0, 0.5, 0.0}, config.dt_s);
+  const auto first = model.step(crab, {0.0, 0.5, 0.0}, config.model_period_s);
   check(
     first.valid && std::abs(first.state.pose.y) < 1e-9 &&
       std::abs(first.state.steering_angles[0]) > 0.0,
@@ -51,7 +52,7 @@ void test_mode_kinematics()
   VehicleState rolling = first.state;
   auto memory = first.prediction;
   for (int i = 0; i < 10; ++i) {
-    const auto next = model.step(rolling, {0.0, 0.5, 0.0}, config.dt_s, memory);
+    const auto next = model.step(rolling, {0.0, 0.5, 0.0}, config.model_period_s, memory);
     rolling = next.state;
     memory = next.prediction;
   }
@@ -94,38 +95,38 @@ void test_confirmation_and_timeout()
   config.compute_budget_ratio = 0;  // Functional regression; budgets have separate clock tests.
   ModeManager manager(config);
   VehicleState observed;
-  observed.stamp_s = 1.0;
+  observed.stamp_ns = *duration_nanoseconds(1.0);
   manager.begin(DriveMode::Crab, {}, observed);
   observed.velocity.vx = 0.2;
   observed.wheel_speeds.fill(0.2);
   check(manager.update(observed).action == Action::Brake, "mode change must brake first");
   observed.velocity = {};
   observed.wheel_speeds.fill(0);
-  observed.stamp_s = 1.1;
+  observed.stamp_ns = *duration_nanoseconds(1.1);
   check(
     manager.update(observed).action == Action::RequestMode,
     "stopped vehicle should request the new mode");
-  observed.stamp_s = 1.2;
+  observed.stamp_ns = *duration_nanoseconds(1.2);
   check(
     manager.update(observed).action == Action::RequestMode,
     "old actual mode must not be treated as confirmed");
   observed.actual_mode = DriveMode::Crab;
   observed.mode_confirmed = false;
-  observed.stamp_s += .01;
+  observed.stamp_ns = *add_duration(observed.stamp_ns, .01);
   check(
     manager.update(observed).action == Action::RequestMode,
     "mode value without an acknowledgement must not permit driving");
   observed.mode_confirmed = true;
   observed.mode_request_id = 1;
   observed.accepted_mode_request = AcceptedModeRequest{1, DriveMode::Crab, {}};
-  observed.stamp_s = 1.3;
+  observed.stamp_ns = *duration_nanoseconds(1.3);
   check(
     manager.update(observed).action == Action::Hold && !manager.active(),
     "confirmed switch must leave a zero-command handover cycle");
 
-  observed.stamp_s = 2.0;
+  observed.stamp_ns = *duration_nanoseconds(2.0);
   manager.begin(DriveMode::Spin, {}, observed);
-  observed.stamp_s = 2.0 + config.confirmation_timeout_s + 0.01;
+  observed.stamp_ns = *duration_nanoseconds(2.0 + config.confirmation_timeout_s + 0.01);
   check(
     manager.update(observed).action == Action::SafeStop && manager.active(),
     "confirmation timeout must latch a safe stop");
@@ -143,7 +144,7 @@ void test_mode_sampling_and_infeasibility()
   fresh.time_in_mode_s = 0.0;
   for (const Branch & b : scheduler.make_branches(fresh)) {
     check(
-      !b.switches || b.switch_step * config.dt_s >= 1.0 - 1e-9,
+      !b.switches || b.switch_step * config.model_period_s >= 1.0 - 1e-9,
       "dwell time must constrain future switching");
   }
   fresh.mode_confirmed = false;
@@ -177,7 +178,8 @@ void test_controller_lateral_goal()
   check(
     first.action == Action::RequestMode && first.requested_mode == DriveMode::Crab,
     "lateral goal should select crab and request its confirmation");
-  input.vehicle.stamp_s += config.dt_s;
+  input.vehicle.stamp_ns = *add_duration(input.vehicle.stamp_ns, config.model_period_s);
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
   check(
     controller.compute(input).action == Action::RequestMode,
     "pending switch must not issue lateral motion");
@@ -187,11 +189,13 @@ void test_controller_lateral_goal()
   input.vehicle.mode_request_id = first.mode_request->id;
   input.vehicle.accepted_mode_request = first.mode_request;
   input.vehicle.steering_angles = first.mode_request->steering_targets;
-  input.vehicle.stamp_s += config.dt_s;
+  input.vehicle.stamp_ns = *add_duration(input.vehicle.stamp_ns, config.model_period_s);
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
   check(
     controller.compute(input).action == Action::Hold,
     "acknowledgement must include a zero-command handover");
-  input.vehicle.stamp_s += config.dt_s;
+  input.vehicle.stamp_ns = *add_duration(input.vehicle.stamp_ns, config.model_period_s);
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
   const Prediction drive = controller.compute(input);
   check(
     drive.action == Action::Drive && drive.body_command.vy > 0,

@@ -56,7 +56,7 @@ inline void actuate(VehicleState & s, const PlantTargets & command, const Config
     const auto v = encoded();
     // Independent midpoint integration converges to sample-and-hold SE(2).
     constexpr int subdivisions = 64;
-    const double h = target.dt_s / subdivisions;
+    const double h = target.model_period_s / subdivisions;
     for (int j = 0; j < subdivisions; ++j) {
       const double yaw = s.pose.yaw + v.wz * h / 2;
       s.pose.x += (std::cos(yaw) * v.vx - std::sin(yaw) * v.vy) * h;
@@ -72,7 +72,7 @@ inline void actuate(VehicleState & s, const PlantTargets & command, const Config
     }
   };
   if (command.samples.empty())
-    sample({command.steering_targets, command.wheel_speed_targets, c.dt_s});
+    sample({command.steering_targets, command.wheel_speed_targets, c.model_period_s});
   else
     for (const auto & target : command.samples) sample(target);
   s.velocity = encoded();
@@ -82,12 +82,24 @@ inline void actuate(VehicleState & s, const PlantTargets & command, const Config
   s.mode_request_id = command.feedback.request_id;
   s.accepted_mode_request = command.feedback.accepted_mode_request;
   s.time_in_mode_s = command.feedback.time_in_mode_s;
-  s.stamp_s += c.dt_s;
+  s.stamp_ns = *add_duration(s.stamp_ns, c.model_period_s);
+}
+inline void advance_input(ControllerInput & input, const Output * output = nullptr)
+{
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
+  if (output && output->command_id != 0) {
+    input.previous_command_application = CommandApplication{
+      output->command_id, output->computed_stamp_ns, output->computed_stamp_ns,
+      output->computed_stamp_ns};
+  } else {
+    input.previous_command_application.reset();
+  }
 }
 inline ControllerInput scenario_input(const std::string & scenario)
 {
   ControllerInput input;
-  input.vehicle.stamp_s = 1;
+  input.vehicle.stamp_ns = *duration_nanoseconds(1.0);
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
   input.vehicle.time_in_mode_s = 2;
   if (scenario == "straight") {
     input.reference_path = {{0, 0, 0}, {1, 0, 0}};

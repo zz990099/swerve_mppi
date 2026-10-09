@@ -48,8 +48,8 @@ jobs:
         if: matrix.build_type == 'Debug'
         run: |
           cmake -S . -B build-ubsan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-Werror -fsanitize=undefined -fno-sanitize-recover=all"
-          cmake --build build-ubsan --target swerve_mppi_command_tests swerve_mppi_configuration_tests swerve_mppi_safety_tests swerve_mppi_model_tests --parallel 2
-          ctest --test-dir build-ubsan -R 'command_regressions|configuration_regressions|safety_regressions|model_regressions' --output-on-failure
+          cmake --build build-ubsan --target swerve_mppi_command_tests swerve_mppi_configuration_tests swerve_mppi_timing_tests swerve_mppi_safety_tests swerve_mppi_model_tests --parallel 2
+          ctest --test-dir build-ubsan -R 'command_regressions|configuration_regressions|timing_regressions|safety_regressions|model_regressions' --output-on-failure
 
       - name: Record independent motion probes (Release)
         if: matrix.build_type == 'Release'

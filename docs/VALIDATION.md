@@ -6,7 +6,10 @@ soft cost, while collision rejection remains a hard check.
 
 CMake/CTest checks kinematics, transition prediction, optimization, path progress,
 nominal stopping/constraints, planning budgets, configuration, public commands and
-feedback diagnostics. Fifteen closed-loop scenarios each run five seeds, including
+feedback diagnostics. Dedicated timing/lifecycle regressions cover bounded source
+pairing, stale/future samples, publication/expiry, exact and uncertain application,
+history divergence, fault latching/recovery and required independent motion.
+Fifteen closed-loop scenarios each run five seeds, including
 straight, lateral, curved, reverse, spin, final yaw, corners, loops, duplicate paths,
 near obstacles and translation starting in Spin.
 
@@ -44,6 +47,8 @@ watchdogs and physical Gazebo servo/contact dynamics.
 
 CI runs Debug and Release with `-Werror`, pinned ROS formatting, installed-consumer
 checks and selected UBSan regressions. It records planner performance and independent
-motion-probe artifacts. It pins companion commit `9358c96884d7fa4866cea7c053daa7a7cec82d8f` for offline
-Python parity. It does not run Gazebo or test removed transport/profile paths. Historical execution results remain in Git history and do
-not establish current readiness. Consult the workflow for the exact reviewed commit.
+motion-probe artifacts. It pins companion commit
+`9358c96884d7fa4866cea7c053daa7a7cec82d8f` for offline Python parity. It does not run
+Gazebo or test removed transport/profile paths. Historical execution results remain
+in Git history and do not establish current readiness. Consult the workflow for the
+exact reviewed commit.

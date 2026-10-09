@@ -81,7 +81,7 @@ void run(
     const auto end = std::chrono::steady_clock::now();
     counting = false;
     times.push_back(std::chrono::duration<double, std::milli>(end - begin).count());
-    overruns += times.back() > 1000 * c.dt_s;
+    overruns += times.back() > 1000 * c.model_period_s;
     total_allocations += allocations;
     peak_allocations = std::max(peak_allocations, allocations);
     if (output.planning_stats.branches > 0) {
@@ -105,6 +105,7 @@ void run(
     auto previous = input.vehicle.actual_mode;
     const auto from = input.vehicle.pose;
     actuate(input.vehicle, result, c);
+    advance_input(input, &output);
     minimum_clearance =
       std::min(minimum_clearance, measured_clearance(from, input.vehicle.pose, input.obstacles, c));
     check(minimum_clearance > 0, "benchmark measured motion entered an inflated obstacle");
@@ -120,8 +121,9 @@ void run(
   if (scenario == "near_obstacles") {
     check(minimum_clearance < .2, "near obstacles must exercise the clearance region");
   }
-  std::cout << scenario << ',' << seed << ',' << times.size() << ',' << completion * c.dt_s << ','
-            << max_error << ',' << std::sqrt(squared_error / times.size()) << ',' << switches << ','
+  std::cout << scenario << ',' << seed << ',' << times.size() << ','
+            << completion * c.model_period_s << ',' << max_error << ','
+            << std::sqrt(squared_error / times.size()) << ',' << switches << ','
             << percentile(times, .5) << ',' << percentile(times, .95) << ','
             << percentile(times, .99) << ',' << *std::max_element(times.begin(), times.end()) << ','
             << overruns << ',' << static_cast<double>(total_allocations) / times.size() << ','

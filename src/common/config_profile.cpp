@@ -86,8 +86,18 @@ const Parameter parameters[] = {
   parameter<&Config::confirmation_timeout_s>("confirmation_timeout_s", "s"),
   parameter<&Config::switch_cost>("switch_cost", "dimensionless"),
   parameter<&Config::switch_hysteresis>("switch_hysteresis", "dimensionless"),
-  parameter<&Config::dt_s>("dt_s", "s"),
+  parameter<&Config::model_period_s>("model_period_s", "s"),
+  parameter<&Config::planning_period_s>("planning_period_s", "s"),
   parameter<&Config::compute_budget_ratio>("compute_budget_ratio", "dimensionless"),
+  parameter<&Config::observation_pairing_tolerance_s>("observation_pairing_tolerance_s", "s"),
+  parameter<&Config::max_observation_age_s>("max_observation_age_s", "s"),
+  parameter<&Config::max_observation_gap_s>("max_observation_gap_s", "s"),
+  parameter<&Config::future_observation_tolerance_s>("future_observation_tolerance_s", "s"),
+  parameter<&Config::command_lifetime_s>("command_lifetime_s", "s"),
+  parameter<&Config::max_command_application_uncertainty_s>(
+    "max_command_application_uncertainty_s", "s"),
+  parameter<&Config::history_steering_tolerance_rad>("history_steering_tolerance_rad", "rad"),
+  parameter<&Config::history_wheel_tolerance_mps>("history_wheel_tolerance_mps", "m/s"),
   parameter<&Config::max_path_points>("max_path_points", "dimensionless"),
   parameter<&Config::max_obstacles>("max_obstacles", "dimensionless"),
   parameter<&Config::horizon_steps>("horizon_steps", "dimensionless"),
@@ -297,8 +307,8 @@ void validate_live_config(const Config & config, double maximum_budget_ratio)
   if (
     !std::isfinite(maximum_budget_ratio) || maximum_budget_ratio <= 0 || maximum_budget_ratio > 1 ||
     config.compute_budget_ratio <= 0 || config.compute_budget_ratio > maximum_budget_ratio ||
-    !std::isfinite(config.dt_s * config.compute_budget_ratio) ||
-    config.dt_s * config.compute_budget_ratio <= 0) {
+    !std::isfinite(config.planning_period_s * config.compute_budget_ratio) ||
+    config.planning_period_s * config.compute_budget_ratio <= 0) {
     throw std::invalid_argument(
       "live configuration requires a positive representable compute budget within its maximum "
       "ratio");

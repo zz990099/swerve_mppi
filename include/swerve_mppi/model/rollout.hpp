@@ -36,7 +36,7 @@ public:
   // Reuse caller-owned vector capacity. Controls must not alias out.controls.
   void generate(
     const VehicleState & initial, const Branch & branch, const std::vector<Control> & controls,
-    Trajectory & out) const;
+    Trajectory & out, const ChassisPrediction * initial_prediction = nullptr) const;
 
   // Zero drive with measured steering retained. Braking must remain checkable
   // during an unconfirmed mode transition; it never synthesizes confirmation.
@@ -45,25 +45,27 @@ public:
   // Predict one braking/alignment interval, then the complete stopping tail.
   // Preserves measured mode feedback; this prediction never authorizes actuation.
   void generate_stopping_interval(
-    const VehicleState & initial, const std::array<double, 4> & steering_targets,
-    Trajectory & out) const;
+    const VehicleState & initial, const std::array<double, 4> & steering_targets, Trajectory & out,
+    const ChassisPrediction * initial_prediction = nullptr) const;
 
   // Commit entry/alignment through the first Drive, then brake to zero. Uses
   // stopping_horizon_steps rather than the optimization horizon; fails closed.
   void generate_continuation(
     const VehicleState & initial, const Branch & branch, const Control & first_control,
-    Trajectory & out) const;
+    Trajectory & out, const ChassisPrediction * initial_prediction = nullptr) const;
 
   // Predict an already-pending same-mode alignment from its frozen geometry.
   // Unconfirmed measurements remain unconfirmed; no live Drive is authorized.
   void generate_alignment_continuation(
     const VehicleState & initial, const Control & intent,
-    const std::array<double, 4> & frozen_angles, Trajectory & out) const;
+    const std::array<double, 4> & frozen_angles, Trajectory & out,
+    const ChassisPrediction * initial_prediction = nullptr) const;
 
 private:
   void stopping_rollout(
     const VehicleState & initial, const Branch & branch, const Control * first_control,
-    Trajectory & out, const std::array<double, 4> * frozen_angles = nullptr) const;
+    Trajectory & out, const std::array<double, 4> * frozen_angles = nullptr,
+    const ChassisPrediction * initial_prediction = nullptr) const;
   Config config_;
   DriveModel model_;
   TransitionModel transition_;

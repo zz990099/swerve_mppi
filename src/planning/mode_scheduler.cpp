@@ -17,7 +17,8 @@ std::vector<Branch> ModeScheduler::make_branches(const VehicleState & state) con
   if (!state.mode_confirmed || state.mode_fault) {
     return branches;
   }
-  const auto ticks = detail::duration_ticks(wait, config_.dt_s, config_.horizon_steps - 1);
+  const auto ticks =
+    detail::duration_ticks(wait, config_.model_period_s, config_.horizon_steps - 1);
   if (!ticks) {
     return branches;
   }

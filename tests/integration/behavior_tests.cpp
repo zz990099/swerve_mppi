@@ -87,6 +87,7 @@ void run(const std::string & scenario, unsigned seed)
     }
     const auto from = input.vehicle.pose;
     actuate(input.vehicle, result, c);
+    advance_input(input, &command);
     minimum_clearance =
       std::min(minimum_clearance, measured_clearance(from, input.vehicle.pose, input.obstacles, c));
     check(minimum_clearance > 0, "measured motion must remain outside inflated obstacles");

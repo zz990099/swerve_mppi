@@ -73,17 +73,17 @@ public:
     bool held = false)
   {
     const auto before = state;
-    const double h = config_.dt_s / substeps;
+    const double h = config_.model_period_s / substeps;
     for (int step = 0; step < substeps; ++step) {
       const double t = (step + .5) * h;
-      const double angle_fraction = held ? 0 : t / config_.dt_s;
+      const double angle_fraction = held ? 0 : t / config_.model_period_s;
       const auto prior_wheels = state.wheel_speeds;
       for (std::size_t i = 0; i < 4; ++i) {
         state.steering_angles[i] =
           before.steering_angles[i] + (angles[i] - before.steering_angles[i]) * angle_fraction;
-        const double target =
-          held ? held_speeds_[i]
-               : before.wheel_speeds[i] + (speeds[i] - before.wheel_speeds[i]) * t / config_.dt_s;
+        const double target = held ? held_speeds_[i]
+                                   : before.wheel_speeds[i] + (speeds[i] - before.wheel_speeds[i]) *
+                                                                t / config_.model_period_s;
         if (perturbation_.wheel_lag_s > 0) {
           state.wheel_speeds[i] +=
             (target - state.wheel_speeds[i]) * (1 - std::exp(-h / perturbation_.wheel_lag_s));
@@ -131,7 +131,7 @@ public:
       body_velocity.vy *= 1 - perturbation_.slip_fraction;
       body_velocity.wz *= 1 - perturbation_.slip_fraction;
     }
-    stamp_ns += static_cast<std::int64_t>(std::llround(config_.dt_s * 1e9));
+    stamp_ns += static_cast<std::int64_t>(std::llround(config_.model_period_s * 1e9));
     synchronize();
   }
   VehicleState state;
@@ -142,7 +142,7 @@ private:
   void synchronize()
   {
     state.velocity = encoder_twist();
-    state.stamp_s = std::chrono::duration<double>(std::chrono::nanoseconds(stamp_ns)).count();
+    state.stamp_ns = stamp_ns;
   }
   std::array<double, 4> held_speeds_{};
   Config config_;
@@ -167,16 +167,21 @@ struct MotionProbeRow
 inline std::vector<MotionProbeRow> run_motion_probe(const Config & c)
 {
   validate(c);
-  if (c.dt_s > 1 || c.dt_s < .001) {
-    throw std::invalid_argument("Probe requires dt_s in [0.001,1]");
+  if (c.model_period_s > 1 || c.model_period_s < .001) {
+    throw std::invalid_argument("Probe requires model_period_s in [0.001,1]");
   }
-  if (std::abs(c.dt_s / c.chassis_period_s - std::round(c.dt_s / c.chassis_period_s)) > 1e-9) {
+  if (
+    std::abs(
+      c.model_period_s / c.chassis_period_s - std::round(c.model_period_s / c.chassis_period_s)) >
+    1e-9) {
     throw std::invalid_argument(
       "Probe requires an integer number of chassis periods per model tick");
   }
-  const auto tick_ns = static_cast<std::int64_t>(std::llround(c.dt_s * 1e9));
-  if (std::chrono::duration<double>(std::chrono::nanoseconds(tick_ns)).count() != c.dt_s) {
-    throw std::invalid_argument("Probe dt_s must represent an exact integer nanosecond period");
+  const auto tick_ns = static_cast<std::int64_t>(std::llround(c.model_period_s * 1e9));
+  if (
+    std::chrono::duration<double>(std::chrono::nanoseconds(tick_ns)).count() != c.model_period_s) {
+    throw std::invalid_argument(
+      "Probe model_period_s must represent an exact integer nanosecond period");
   }
   std::vector<MotionProbeRow> rows;
   MotionObserver observer(c);
@@ -187,19 +192,21 @@ inline std::vector<MotionProbeRow> run_motion_probe(const Config & c)
                                                            : Control{0, 0, .5};
     for (const auto & p : motion_perturbations()) {
       Config micro = c;
-      micro.dt_s = c.chassis_period_s;
+      micro.model_period_s = c.chassis_period_s;
       MotionPlant plant(micro, mode, p);
       auto memory = model.seed(plant.state);
       MotionObservation previous{
         plant.body_velocity, plant.stamp_ns, MotionSource::IndependentBody};
       for (int tick = 0; tick < 40; ++tick) {
         const bool braking = tick >= 20;
-        const auto predicted = model.step(plant.state, braking ? Control{} : drive, c.dt_s, memory);
+        const auto predicted =
+          model.step(plant.state, braking ? Control{} : drive, c.model_period_s, memory);
         if (!predicted.valid) {
           throw std::runtime_error("Probe intent is incompatible with resolved configuration");
         }
         // Independently apply each command endpoint to a sample-and-hold plant.
-        const auto ticks = static_cast<std::size_t>(std::llround(c.dt_s / c.chassis_period_s));
+        const auto ticks =
+          static_cast<std::size_t>(std::llround(c.model_period_s / c.chassis_period_s));
         for (std::size_t substep = 0; substep < ticks; ++substep) {
           const auto target =
             model.step(plant.state, braking ? Control{} : drive, c.chassis_period_s, memory);

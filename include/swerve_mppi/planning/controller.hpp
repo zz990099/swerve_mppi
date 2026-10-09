@@ -26,6 +26,8 @@ public:
   Controller(Controller &&) noexcept;
   Controller & operator=(Controller &&) noexcept;
   Output compute(const ControllerInput & input);
+  bool recover(const ControllerInput & input);
+  // Deliberate offline restart. Live executors should use recover().
   void reset();
   TransitionPhase transition_phase() const;
 

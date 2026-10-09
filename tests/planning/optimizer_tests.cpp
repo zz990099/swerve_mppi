@@ -18,7 +18,8 @@ void check(bool ok, const char * message)
 ControllerInput input()
 {
   ControllerInput in;
-  in.vehicle.stamp_s = 1;
+  in.vehicle.stamp_ns = *duration_nanoseconds(1.0);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   in.vehicle.time_in_mode_s = 2;
   in.reference_path = {{0, 0, 0}, {1, 0, 0}};
   return in;
@@ -439,9 +440,10 @@ void test_optimizer_reset_and_closed_loop()
     // feedback.
     in.vehicle.wheel_speeds = out.wheel_speed_targets;
     in.vehicle.velocity = out.body_command;
-    in.vehicle.pose.x += out.body_command.vx * c.dt_s;
-    in.vehicle.stamp_s += c.dt_s;
-    in.vehicle.time_in_mode_s += c.dt_s;
+    in.vehicle.pose.x += out.body_command.vx * c.model_period_s;
+    in.vehicle.stamp_ns = *add_duration(in.vehicle.stamp_ns, c.model_period_s);
+    in.planning_stamp_ns = in.vehicle.stamp_ns;
+    in.vehicle.time_in_mode_s += c.model_period_s;
   }
   check(
     std::abs(initial - in.vehicle.pose.x) < initial * .5,
@@ -503,7 +505,9 @@ void test_reusable_rollouts_and_planning_stats()
   check(
     controller.compute(in).failure_reason == FailureReason::NonmonotonicTime,
     "clock faults must have an inspectable reason");
-  in.vehicle.stamp_s += c.dt_s;
+  in.vehicle.stamp_ns = *add_duration(in.vehicle.stamp_ns, c.model_period_s);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
+  check(controller.recover(in), "a fresh coherent observation must permit deliberate recovery");
   in.obstacles = {{0, 0, .1}};
   const auto blocked = controller.compute(in);
   check(

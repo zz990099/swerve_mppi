@@ -19,29 +19,34 @@ executor. Wheel command history uses rad/s internally to match the Python recurr
 `VehicleState`, model wheel outputs and `Output` retain their documented SI units.
 Rollouts retain memory through their horizon. A cold `DriveModel::step` seeds commanded
 joints and limited body velocity from measured joints/FK. That is an explicit nominal
-assumption, not a reconstruction of Python's hidden `limited` velocity. Stage 3 must
-reconcile issued command history, application uncertainty and observation age rather
-than pretending cold seeds are exact.
+assumption, not a reconstruction of Python's hidden `limited` velocity. The controller
+retains issued command history. Exact reported application is propagated and checked
+against measured joints before its prediction memory is reused. Missing or bounded-
+uncertain application remains explicit and cold-seeded; invalid history or divergence
+latches a fault.
 
 Pose prediction holds the previous nominal encoder target until the next chassis
 update, then applies the new target. SE(2) integration is exact per held interval;
 swept-path margins enclose intermediate curved/reversal motion. This model does not
 claim affine servo tracking, no-slip contact or physical stopping accuracy. Fractional
 prediction periods are divided into bounded substeps; parity is checked at the real
-100 Hz chassis cadence. Timer jitter/clock/freshness policy remains stage-3 work.
+100 Hz chassis cadence. Source time is integer nanoseconds; planning, model and chassis
+periods are separate, and warm starts advance by elapsed model intervals.
 
 `check_feedback` reports configurable encoder/body disagreement.
 `check_model_feedback` currently requires nominal agreement to numerical precision.
 `MotionObserver` independently assesses a timestamped body observation, bounded
-uncertainty and encoder-only versus independently observed stopping. It is diagnostic;
-it neither loosens planning admission nor establishes a physical braking guarantee.
-The strict numerical planning gate remains pending stage-3 replacement.
+uncertainty and encoder-only versus independently observed stopping. The strict
+encoder-derived numerical model gate remains unchanged. Independent motion is a
+separate admission policy: accepted residual bounds grow the hard trajectory margin
+over time, while exceeded envelopes and hidden motion at an encoder stop are rejected.
+This still does not establish a physical braking guarantee.
 
-`FeedbackAdapter` maps named encoders into core wheel order and units. Its existing
-seconds and integer-nanosecond entry points and exact snapshot/application matching
-remain pending stage-3 replacement. Do not adapt asynchronous data by rewriting its
-time. The adapter currently derives velocity from encoders; that identity does not
-prove absence of physical slip.
+`FeedbackAdapter` maps named encoders into core wheel order and units. It has one
+integer-nanosecond ingress. Joint, pose and mode samples pair within configured skew,
+age and future bounds; application time is not part of snapshot construction. The
+adapter derives nominal velocity from encoders, so that identity still does not prove
+absence of physical slip.
 
 With benchmarks enabled:
 

@@ -6,6 +6,8 @@
 #include <limits>
 #include <optional>
 
+#include "swerve_mppi/common/time.hpp"
+
 namespace swerve_mppi::detail
 {
 // Inclusive duration/deadline bounds. A nanosecond floor handles decimal tick
@@ -20,9 +22,15 @@ inline bool duration_exceeded(double elapsed, double limit)
 {
   return elapsed - limit > time_tolerance(elapsed, limit);
 }
-inline bool deadline_exceeded(double now, double begin, double limit)
+inline bool deadline_exceeded(TimestampNs now, TimestampNs begin, double limit)
 {
-  return now - begin - limit > std::max(time_tolerance(now, begin), time_tolerance(limit, limit));
+  const auto duration = duration_nanoseconds(limit);
+  return !duration || now < begin || now - begin > *duration;
+}
+inline bool elapsed_at_least(TimestampNs now, TimestampNs begin, double minimum)
+{
+  const auto duration = duration_nanoseconds(minimum);
+  return duration && now >= begin && now - begin >= *duration;
 }
 inline bool elapsed_at_least(double now, double begin, double minimum)
 {

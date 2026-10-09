@@ -15,7 +15,7 @@ struct JointSample
 {
   std::array<double, 4> angles{};
   std::array<double, 4> speeds{};
-  double dt_s = 0;
+  double model_period_s = 0;
 };
 struct PlantTargets
 {
@@ -40,7 +40,7 @@ public:
       measured.mode_confirmed,
       measured.mode_fault,
       measured.mode_request_id,
-      measured.time_in_mode_s + config_.dt_s,
+      measured.time_in_mode_s + config_.model_period_s,
       measured.accepted_mode_request};
     auto reject = [&]() {
       fault_ = true;
@@ -76,17 +76,17 @@ public:
     if (begin_) {
       memory_->phase = TransitionPhase::Braking;
       memory_->alignment = accepted_->steering_targets;
-      memory_->transition_start_s = measured.stamp_s;
-      memory_->aligned_since_s = -1;
+      memory_->transition_start_ns = measured.stamp_ns;
+      memory_->aligned_since_ns = -1;
       begin_ = false;
     }
     const auto & v = command.target_velocity;
     if (pending_ && (v.vx != 0 || v.vy != 0 || v.wz != 0)) return reject();
     if (!pending_ && command.mode != measured.actual_mode) return reject();
     auto state = measured;
-    const auto ticks =
-      static_cast<std::size_t>(std::ceil(config_.dt_s / config_.chassis_period_s - 1e-12));
-    const double h = config_.dt_s / ticks;
+    const auto ticks = static_cast<std::size_t>(
+      std::ceil(config_.model_period_s / config_.chassis_period_s - 1e-12));
+    const double h = config_.model_period_s / ticks;
     bool aligning = false;
     for (std::size_t tick = 0; tick < ticks; ++tick) {
       const auto next = model_.step(state, {v.vx, v.vy, v.wz}, h, *memory_);

@@ -6,6 +6,7 @@
 
 #include "common/detail/spatial_index.hpp"
 #include "safety/detail/validation.hpp"
+#include "swerve_mppi/feedback/motion_observer.hpp"
 
 namespace swerve_mppi
 {
@@ -67,6 +68,14 @@ TrajectoryStatus TrajectoryValidator::check_indexed(
     const auto & current = input.vehicle.pose;
     const auto & initial = trajectory.poses.front();
     constexpr double anchor_tolerance = 1e-9;
+    const auto motion = MotionObserver(config_).assess(
+      input.vehicle, input.planning_stamp_ns, input.motion_observation);
+    const bool bounded_motion = motion.status == MotionStatus::NominalAgreement ||
+                                motion.status == MotionStatus::BoundedDisagreement;
+    const double residual_growth_mps =
+      bounded_motion ? motion.linear_residual_upper_mps +
+                         config_.robot_radius_m * motion.angular_residual_upper_radps
+                     : 0.0;
     const double yaw_error = angle_distance(initial.yaw, current.yaw);
     if (
       !std::isfinite(yaw_error) ||
@@ -113,7 +122,9 @@ TrajectoryStatus TrajectoryValidator::check_indexed(
     for (std::size_t i = 0; i < trajectory.poses.size(); ++i) {
       const double margin =
         i == 0 || trajectory.sweep_margins_m.empty() ? 0 : trajectory.sweep_margins_m[i - 1];
-      status = check_segment(trajectory.poses[i == 0 ? 0 : i - 1], trajectory.poses[i], margin);
+      const double uncertainty_margin = i * config_.model_period_s * residual_growth_mps;
+      status = check_segment(
+        trajectory.poses[i == 0 ? 0 : i - 1], trajectory.poses[i], margin + uncertainty_margin);
       if (status != TrajectoryStatus::Valid) {
         return status;
       }

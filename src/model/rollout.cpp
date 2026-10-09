@@ -18,8 +18,8 @@ void RolloutEngine::generate_stop(const VehicleState & initial, Trajectory & out
   stopping_rollout(initial, {initial.actual_mode, 0, false}, nullptr, out);
 }
 void RolloutEngine::generate_stopping_interval(
-  const VehicleState & initial, const std::array<double, 4> & steering_targets,
-  Trajectory & out) const
+  const VehicleState & initial, const std::array<double, 4> & steering_targets, Trajectory & out,
+  const ChassisPrediction * initial_prediction) const
 {
   out.valid = false;
   out.poses.clear();
@@ -34,8 +34,12 @@ void RolloutEngine::generate_stopping_interval(
     check_model_feedback(initial, config_).status != FeedbackStatus::Valid) {
     return;
   }
-  auto memory = model_.alignment_seed(initial, steering_targets);
-  const auto endpoint = model_.step(initial, {}, config_.dt_s, memory);
+  auto memory = initial_prediction ? *initial_prediction : model_.seed(initial);
+  memory.phase = TransitionPhase::Braking;
+  memory.alignment = steering_targets;
+  memory.transition_start_ns = initial.stamp_ns;
+  memory.aligned_since_ns = kInvalidTimestamp;
+  const auto endpoint = model_.step(initial, {}, config_.model_period_s, memory);
   memory = endpoint.prediction;
   if (
     !endpoint.valid || !std::isfinite(endpoint.sweep_margin_m) || endpoint.sweep_margin_m < 0 ||
@@ -61,7 +65,7 @@ void RolloutEngine::generate_stopping_interval(
     if (steps >= config_.stopping_horizon_steps) {
       return;
     }
-    const auto next = model_.step(out.final_state, {}, config_.dt_s, memory);
+    const auto next = model_.step(out.final_state, {}, config_.model_period_s, memory);
     if (!next.valid) {
       return;
     }
@@ -76,19 +80,21 @@ void RolloutEngine::generate_stopping_interval(
 }
 void RolloutEngine::generate_continuation(
   const VehicleState & initial, const Branch & branch, const Control & first_control,
-  Trajectory & out) const
+  Trajectory & out, const ChassisPrediction * initial_prediction) const
 {
-  stopping_rollout(initial, branch, &first_control, out);
+  stopping_rollout(initial, branch, &first_control, out, nullptr, initial_prediction);
 }
 void RolloutEngine::generate_alignment_continuation(
   const VehicleState & initial, const Control & intent, const std::array<double, 4> & frozen_angles,
-  Trajectory & out) const
+  Trajectory & out, const ChassisPrediction * initial_prediction) const
 {
-  stopping_rollout(initial, {initial.actual_mode, 0, false}, &intent, out, &frozen_angles);
+  stopping_rollout(
+    initial, {initial.actual_mode, 0, false}, &intent, out, &frozen_angles, initial_prediction);
 }
 void RolloutEngine::stopping_rollout(
   const VehicleState & initial, const Branch & branch, const Control * first_control,
-  Trajectory & out, const std::array<double, 4> * frozen_angles) const
+  Trajectory & out, const std::array<double, 4> * frozen_angles,
+  const ChassisPrediction * initial_prediction) const
 {
   out.valid = false;
   out.poses.clear();
@@ -118,8 +124,9 @@ void RolloutEngine::stopping_rollout(
     return;
   }
   if (frozen_angles && !detail::valid_steering(*frozen_angles, config_)) return;
-  auto memory = frozen_angles ? model_.alignment_seed(out.final_state, *frozen_angles)
-                              : model_.seed(out.final_state);
+  auto memory = frozen_angles        ? model_.alignment_seed(out.final_state, *frozen_angles)
+                : initial_prediction ? *initial_prediction
+                                     : model_.seed(out.final_state);
   out.controls.resize(steps);
   out.active_controls.resize(steps, false);
   const std::size_t alignment_begin = steps;
@@ -136,13 +143,14 @@ void RolloutEngine::stopping_rollout(
   while (pending || !at_rest()) {
     if (
       steps >= config_.stopping_horizon_steps ||
-      (pending && detail::duration_exceeded(
-                    (steps - alignment_begin) * config_.dt_s, config_.confirmation_timeout_s))) {
+      (pending &&
+       detail::duration_exceeded(
+         (steps - alignment_begin) * config_.model_period_s, config_.confirmation_timeout_s))) {
       return;
     }
     const Control control =
       pending ? model_.project(*first_control, out.final_state.actual_mode) : Control{};
-    const auto next = model_.step(out.final_state, control, config_.dt_s, memory);
+    const auto next = model_.step(out.final_state, control, config_.model_period_s, memory);
     if (!next.valid) {
       return;
     }
@@ -167,7 +175,7 @@ Trajectory RolloutEngine::generate(
 }
 void RolloutEngine::generate(
   const VehicleState & initial, const Branch & branch, const std::vector<Control> & controls,
-  Trajectory & out) const
+  Trajectory & out, const ChassisPrediction * initial_prediction) const
 {
   out.valid = false;
   out.poses.clear();
@@ -183,7 +191,7 @@ void RolloutEngine::generate(
     (branch.switches &&
      (branch.mode == initial.actual_mode || branch.switch_step >= config_.horizon_steps ||
       !detail::elapsed_at_least(
-        initial.time_in_mode_s + branch.switch_step * config_.dt_s, 0,
+        initial.time_in_mode_s + branch.switch_step * config_.model_period_s, 0,
         config_.minimum_mode_dwell_s)))) {
     return;
   }
@@ -191,7 +199,7 @@ void RolloutEngine::generate(
   out.poses.push_back(initial.pose);
   out.controls.resize(controls.size());
   out.active_controls.assign(controls.size(), false);
-  auto memory = model_.seed(initial);
+  auto memory = initial_prediction ? *initial_prediction : model_.seed(initial);
   std::size_t step = 0;
   bool switched = false;
   std::optional<Control> alignment;
@@ -225,11 +233,11 @@ void RolloutEngine::generate(
     if (
       continuing_alignment &&
       detail::duration_exceeded(
-        (step - alignment_begin) * config_.dt_s, config_.confirmation_timeout_s)) {
+        (step - alignment_begin) * config_.model_period_s, config_.confirmation_timeout_s)) {
       return;
     }
     const Control control = alignment.value_or(model_.project(controls[step], mode));
-    const auto next = model_.step(out.final_state, control, config_.dt_s, memory);
+    const auto next = model_.step(out.final_state, control, config_.model_period_s, memory);
     if (!next.valid) {
       return;
     }

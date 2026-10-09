@@ -58,7 +58,7 @@ def run(tool, root, wheel_cap, wheel_accel):
             assert plant.receive(cmd, stamp, stamp)
             plant.step(now, now)
             assert plant.fault == 0, (source, target, tick, plant.fault)
-            rows.append(' '.join(map(str, (now-stamp, stamp, int(target if new_request else plant.actual_mode),
+            rows.append(' '.join(map(str, (now-stamp, round(stamp * 1e9), int(target if new_request else plant.actual_mode),
                        *velocity, int(new_request), *entry, *measured_angles,
                        *(v * .1 for v in measured_speeds)))))
             expected.append((int(plant.phase), *plant.angles, *(v * .1 for v in plant.speeds),

@@ -34,15 +34,15 @@ double TransitionModel::rollout(
   auto memory = model_.alignment_seed(state, angles);
   do {
     if (steps >= maximum) return -1.0;
-    const auto next = model_.step(state, {}, config_.dt_s, memory);
+    const auto next = model_.step(state, {}, config_.model_period_s, memory);
     if (!next.valid) return -1.0;
     state = next.state;
     memory = next.prediction;
     ++steps;
     detail::append_motion(next, trace, sweep_margins, error);
   } while (memory.phase != TransitionPhase::Stable);
-  const auto confirmation =
-    detail::duration_ticks(config_.confirmation_prediction_s, config_.dt_s, maximum - steps);
+  const auto confirmation = detail::duration_ticks(
+    config_.confirmation_prediction_s, config_.model_period_s, maximum - steps);
   if (!confirmation) {
     return -1.0;
   }
@@ -55,12 +55,12 @@ double TransitionModel::rollout(
   // The deadline applies at receipt of confirmation, before the final handover
   // cycle ends. First Drive may occur one tick after that receipt deadline.
   if (detail::duration_exceeded(
-        (steps + wait - 1 - begin) * config_.dt_s, config_.confirmation_timeout_s)) {
+        (steps + wait - 1 - begin) * config_.model_period_s, config_.confirmation_timeout_s)) {
     return -1.0;
   }
   steps += wait;
   for (std::size_t i = 0; i < wait; ++i) {
-    const auto next = model_.step(state, {}, config_.dt_s, memory);
+    const auto next = model_.step(state, {}, config_.model_period_s, memory);
     if (!next.valid) return -1.0;
     memory = next.prediction;
     state = next.state;
@@ -71,6 +71,6 @@ double TransitionModel::rollout(
   state.accepted_mode_request.reset();
   state.mode_confirmed = true;
   state.time_in_mode_s = 0.0;
-  return (steps - begin) * config_.dt_s;
+  return (steps - begin) * config_.model_period_s;
 }
 }  // namespace swerve_mppi

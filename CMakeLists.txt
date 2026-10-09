@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.23.0 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.24.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -53,7 +53,7 @@ if(SWERVE_MPPI_BUILD_TESTS)
   target_include_directories(swerve_mppi_tests PRIVATE src tests/fixtures)
   add_test(NAME swerve_mppi_tests COMMAND swerve_mppi_tests)
   foreach(suite_path
-    feedback/motion common/configuration model/model planning/optimizer navigation/navigation
+    feedback/motion common/configuration common/timing model/model planning/optimizer navigation/navigation
     safety/safety safety/admission planning/command
   )
     get_filename_component(suite "${suite_path}" NAME)
@@ -92,7 +92,7 @@ if(SWERVE_MPPI_BUILD_TESTS)
       -DTEST_COMPILER=${CMAKE_CXX_COMPILER}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_test.cmake)
   set_tests_properties(
-    swerve_mppi_tests motion_regressions configuration_regressions model_regressions optimizer_regressions
+    swerve_mppi_tests motion_regressions configuration_regressions timing_regressions model_regressions optimizer_regressions
     navigation_regressions safety_regressions admission_regressions command_regressions installed_consumer
     PROPERTIES TIMEOUT 60
   )

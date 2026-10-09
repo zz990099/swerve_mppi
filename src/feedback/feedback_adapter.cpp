@@ -1,9 +1,7 @@
 #include "swerve_mppi/feedback/feedback_adapter.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
-#include <limits>
 
 #include "swerve_mppi/model/model.hpp"
 
@@ -20,42 +18,30 @@ FeedbackAdapter::FeedbackAdapter(const Config & config, std::string prefix) : co
 }
 SnapshotResult FeedbackAdapter::make(
   const JointObservation & joints, const StampedPose & pose, const ModeFeedback & mode,
-  double application_s) const
+  TimestampNs planning_stamp_ns) const
 {
-  for (double t : {joints.stamp_s, pose.stamp_s, application_s}) {
-    if (!std::isfinite(t) || t < 0) {
-      return {SnapshotError::InvalidTime, std::nullopt};
-    }
-  }
-  // Only floating conversion roundoff, never a transport freshness allowance.
-  // Use integer source stamps for ROS; doubles cannot distinguish adjacent ns
-  // at large epochs. There is deliberately no fixed nanosecond tolerance here.
-  const auto same = [](double a, double b) {
-    return std::abs(a - b) <=
-           4 * std::numeric_limits<double>::epsilon() * std::max(std::abs(a), std::abs(b));
-  };
-  if (!same(joints.stamp_s, pose.stamp_s) || !same(joints.stamp_s, application_s)) {
-    return {SnapshotError::Unsynchronized, std::nullopt};
-  }
-  return assemble(joints, pose.pose, mode, joints.stamp_s);
-}
-SnapshotResult FeedbackAdapter::make_at_nanoseconds(
-  const JointObservation & joints, const StampedPose & pose, const ModeFeedback & mode,
-  std::int64_t application_ns) const
-{
-  if (joints.stamp_ns < 0 || pose.stamp_ns < 0 || application_ns < 0) {
+  if (joints.stamp_ns < 0 || pose.stamp_ns < 0 || mode.stamp_ns < 0 || planning_stamp_ns < 0) {
     return {SnapshotError::InvalidTime, std::nullopt};
   }
-  if (joints.stamp_ns != pose.stamp_ns || joints.stamp_ns != application_ns) {
+  const auto oldest = std::min({joints.stamp_ns, pose.stamp_ns, mode.stamp_ns});
+  const auto newest = std::max({joints.stamp_ns, pose.stamp_ns, mode.stamp_ns});
+  const auto pairing = duration_nanoseconds(config_.observation_pairing_tolerance_s);
+  const auto age = duration_nanoseconds(config_.max_observation_age_s);
+  const auto future = duration_nanoseconds(config_.future_observation_tolerance_s);
+  if (!pairing || newest - oldest > *pairing) {
     return {SnapshotError::Unsynchronized, std::nullopt};
   }
-  const double seconds =
-    std::chrono::duration<double>(std::chrono::nanoseconds(joints.stamp_ns)).count();
-  return assemble(joints, pose.pose, mode, seconds);
+  if (!future || (newest > planning_stamp_ns && newest - planning_stamp_ns > *future)) {
+    return {SnapshotError::Future, std::nullopt};
+  }
+  if (!age || (planning_stamp_ns > newest && planning_stamp_ns - newest > *age)) {
+    return {SnapshotError::Stale, std::nullopt};
+  }
+  return assemble(joints, pose.pose, mode, newest);
 }
 SnapshotResult FeedbackAdapter::assemble(
   const JointObservation & joints, const Pose2d & pose, const ModeFeedback & mode,
-  double stamp_s) const
+  TimestampNs stamp_ns) const
 {
   if (
     joints.names.size() > 64 || joints.positions.size() != joints.names.size() ||
@@ -64,7 +50,7 @@ SnapshotResult FeedbackAdapter::assemble(
   }
   VehicleState state;
   state.pose = pose;
-  state.stamp_s = stamp_s;
+  state.stamp_ns = stamp_ns;
   state.actual_mode = mode.actual_mode;
   state.mode_confirmed = mode.confirmed;
   state.mode_fault = mode.fault;

@@ -164,12 +164,12 @@ void history_and_alignment()
       hold.valid && hold.prediction.phase != TransitionPhase::Stable,
       "elapsed steering time cannot fake measured alignment");
     memory = hold.prediction;
-    delayed.stamp_s += .01;
+    delayed.stamp_ns = *add_duration(delayed.stamp_ns, .01);
   }
   check(
-    memory.alignment == target && memory.aligned_since_s < 0,
+    memory.alignment == target && memory.aligned_since_ns < 0,
     "pending alignment target freezes and failed measurements reset dwell");
-  memory.transition_start_s = -10;
+  memory.transition_start_ns = -10;
   check(
     !model.step(delayed, {}, .01, memory).valid, "transition deadline rejects stalled alignment");
   state = moving(c, DriveMode::DualAckermann, {.3, 0, 0});
@@ -188,7 +188,7 @@ void independent_pose_and_sweep()
 {
   for (double dt : {.1, .2, .8}) {
     Config c;
-    c.dt_s = dt;
+    c.model_period_s = dt;
     DriveModel model(c);
     for (Control u : {Control{.4, 0, .3}, {-.3, 0, -.2}}) {
       auto start = moving(c, DriveMode::DualAckermann, {.3, 0, .2});
@@ -257,11 +257,11 @@ void transitions_and_sweep()
         "bounded transition budget fails closed");
     }
   }
-  c.dt_s = .8;
+  c.model_period_s = .8;
   c.robot_radius_m = .001;
   c.collision_margin_m = 0;
   auto state = moving(c, DriveMode::DualAckermann, {.03, 0, 0});
-  const auto reversal = DriveModel(c).step(state, {-.04, 0, 0}, c.dt_s);
+  const auto reversal = DriveModel(c).step(state, {-.04, 0, 0}, c.model_period_s);
   check(
     reversal.valid && reversal.sweep_margin_m > 0,
     "signed reversal must enclose interior excursions");

@@ -13,7 +13,8 @@ namespace
 ControllerInput input()
 {
   ControllerInput in;
-  in.vehicle.stamp_s = 1;
+  in.vehicle.stamp_ns = *duration_nanoseconds(1.0);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   in.vehicle.time_in_mode_s = 2;
   in.reference_path = {{0, 0, 0}, {2, 0, 0}};
   return in;
@@ -80,7 +81,7 @@ void test_inconsistent_feedback_cannot_certify_stopping()
     Trajectory stop;
     RolloutEngine(c).generate_stop(in.vehicle, stop);
     check(
-      !stop.valid && !DriveModel(c).step(in.vehicle, {}, c.dt_s).valid &&
+      !stop.valid && !DriveModel(c).step(in.vehicle, {}, c.model_period_s).valid &&
         !std::isfinite(Optimizer(c).optimize(in, {}).cost),
       "standalone nominal models and optimization must reject the reviewed "
       "disagreement");
@@ -310,7 +311,8 @@ void test_retry_exploration_and_explicit_reset()
     "fixed seed must initially miss the narrow feasible band");
   auto recover = [&]() {
     for (int tick = 1; tick <= 100; ++tick) {
-      in.vehicle.stamp_s = 1 + tick * c.dt_s;
+      in.vehicle.stamp_ns = *duration_nanoseconds(1 + tick * c.model_period_s);
+      in.planning_stamp_ns = in.vehicle.stamp_ns;
       const auto out = controller.compute(in);
       if (out.action == Action::Drive) {
         return std::make_pair(tick, out);
@@ -323,7 +325,8 @@ void test_retry_exploration_and_explicit_reset()
   };
   const auto recovered = recover();
   controller.reset();
-  in.vehicle.stamp_s = 1;
+  in.vehicle.stamp_ns = *duration_nanoseconds(1.0);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   const auto replay = controller.compute(in);
   check(
     replay.action == first.action && replay.failure_reason == first.failure_reason &&

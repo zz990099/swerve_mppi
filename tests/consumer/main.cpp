@@ -36,7 +36,7 @@ int main()
   RolloutEngine(config).generate_stopping_interval({}, {}, stop);
   const auto motion =
     MotionObserver(config).assess({}, 0, MotionObservation{{}, 0, MotionSource::IndependentBody});
-  const auto missing = FeedbackAdapter(config).make_at_nanoseconds({}, {}, {}, 0);
+  const auto missing = FeedbackAdapter(config).make({}, {}, {}, 0);
   return hold.command && hold.command->target_velocity.vx == 0 && !hold.command->mode_request &&
              !rejected.command && stop.valid && restored.random_seed == 7 &&
              restored.max_linear_accel_mps2 == .5 &&

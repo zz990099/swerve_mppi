@@ -108,7 +108,8 @@ void test_short_paths_preserve_segment_order()
     in.vehicle.pose = {.01, .03, 0};
     in.vehicle.time_in_mode_s = 2;
     for (int tick = 0; tick < 8; ++tick) {
-      in.vehicle.stamp_s = 1 + tick * c.dt_s;
+      in.vehicle.stamp_ns = *duration_nanoseconds(1 + tick * c.model_period_s);
+      in.planning_stamp_ns = in.vehicle.stamp_ns;
       const auto reference = manager.update(in);
       check(
         reference.progress_m < .05 && reference.remaining_m > .5,
@@ -176,30 +177,30 @@ void test_completion_requires_measured_stop()
   PathReference path;
   path.goal_eligible = true;
   VehicleState state;
-  state.stamp_s = 1;
+  state.stamp_ns = *duration_nanoseconds(1.0);
   state.wheel_speeds.fill(.1);
   check(
     !manager.update(state, path, false).complete, "zero body odometry cannot hide moving wheels");
-  state.stamp_s = 4.1;
+  state.stamp_ns = *duration_nanoseconds(4.1);
   check(
     manager.update(state, path, false).stalled,
     "persistent wheel motion at the goal must expose a stall");
   state.wheel_speeds.fill(0);
-  state.stamp_s = 5;
+  state.stamp_ns = *duration_nanoseconds(5.0);
   check(
     !manager.update(state, path, false).complete, "first stopped sample cannot complete the dwell");
-  state.stamp_s = 5.2;
+  state.stamp_ns = *duration_nanoseconds(5.2);
   state.mode_confirmed = false;
   check(!manager.update(state, path, true).complete, "pending execution must reset settling");
   state.mode_confirmed = true;
-  state.stamp_s = 6;
+  state.stamp_ns = *duration_nanoseconds(6.0);
   check(!manager.update(state, path, false).complete, "confirmation must begin a fresh dwell");
-  state.stamp_s = 6.31;
+  state.stamp_ns = *duration_nanoseconds(6.31);
   check(
     !manager.update(state, path, false).complete,
     "missing measured samples cannot count toward continuous stopped dwell");
   for (int tick = 1; tick <= 3; ++tick) {
-    state.stamp_s = 6.31 + tick * c.dt_s;
+    state.stamp_ns = *duration_nanoseconds(6.31 + tick * c.model_period_s);
     manager.update(state, path, false);
   }
   check(
@@ -217,7 +218,8 @@ void test_effective_target_and_goal_eligibility()
   PathManager manager(c);
   GoalManager goal(c);
   ControllerInput in;
-  in.vehicle.stamp_s = 1;
+  in.vehicle.stamp_ns = *duration_nanoseconds(1.0);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   in.vehicle.time_in_mode_s = 2;
   in.reference_path = {{0, 0, 0}, {.2, 0, 0}, {.2, .08, 0}, {.12, .08, 0}};
   in.vehicle.pose = {.12, 0, 0};
@@ -235,13 +237,15 @@ void test_effective_target_and_goal_eligibility()
     "small goal errors and remaining length cannot override missing "
     "terminal eligibility");
   in.vehicle.pose = {.2, 0, 0};
-  in.vehicle.stamp_s += c.dt_s;
+  in.vehicle.stamp_ns = *add_duration(in.vehicle.stamp_ns, c.model_period_s);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   path = manager.update(in);
   check(
     path.target_kind == PathTargetKind::Corner && !path.goal_eligible && path.target.y == .08,
     "capturing one corner cannot grant eligibility through the next corner");
   in.vehicle.pose = {.2, .08, 0};
-  in.vehicle.stamp_s += c.dt_s;
+  in.vehicle.stamp_ns = *add_duration(in.vehicle.stamp_ns, c.model_period_s);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   path = manager.update(in);
   check(
     path.target_kind == PathTargetKind::Goal && path.goal_eligible &&
@@ -256,14 +260,16 @@ void test_replan_execution_boundaries()
   c.noise_v_mps = c.noise_w_radps = 0;
   detail::Planner controller(c);
   ControllerInput in;
-  in.vehicle.stamp_s = 1;
+  in.vehicle.stamp_ns = *duration_nanoseconds(1.0);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   in.vehicle.time_in_mode_s = 2;
   in.reference_path = {{0, 0, 1}};
   const auto request = controller.compute(in);
   check(
     request.action == Action::RequestMode && request.mode_request.has_value(),
     "terminal yaw must request a measured Spin transition");
-  in.vehicle.stamp_s += c.dt_s;
+  in.vehicle.stamp_ns = *add_duration(in.vehicle.stamp_ns, c.model_period_s);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   in.reference_path = {{0, 0, 0}, {1, 0, 0}};
   const auto retry = controller.compute(in);
   check(
@@ -271,16 +277,19 @@ void test_replan_execution_boundaries()
       retry.mode_request->id == request.mode_request->id &&
       retry.mode_request->steering_targets == request.mode_request->steering_targets,
     "replan must not mutate an already issued execution request");
-  in.vehicle.stamp_s += c.confirmation_timeout_s;
+  in.vehicle.stamp_ns = *add_duration(in.vehicle.stamp_ns, c.confirmation_timeout_s);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   check(
     controller.compute(in).action == Action::SafeStop,
     "replan must not extend a pending request deadline");
   controller.reset();
-  in.vehicle.stamp_s += c.dt_s;
+  in.vehicle.stamp_ns = *add_duration(in.vehicle.stamp_ns, c.model_period_s);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   in.vehicle.actual_mode = DriveMode::Crab;
   in.reference_path = {{0, 0, 0}, {0, 1.4, 0}};
   check(controller.compute(in).action == Action::Hold, "lateral path must begin local alignment");
-  in.vehicle.stamp_s += c.dt_s;
+  in.vehicle.stamp_ns = *add_duration(in.vehicle.stamp_ns, c.model_period_s);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   in.reference_path = {{0, 0, 0}, {1, 0, 0}};
   const auto replanned = controller.compute(in);
   check(
@@ -292,20 +301,26 @@ void test_task_restart_and_stall()
 {
   Config c;
   c.compute_budget_ratio = 0;  // Functional regression; budgets have separate clock tests.
+  c.max_observation_gap_s = .5;
   detail::Planner controller(c);
   ControllerInput input;
-  input.vehicle.stamp_s = 1;
+  input.vehicle.stamp_ns = *duration_nanoseconds(1.0);
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
   input.reference_path = {{0, 0, 0}};
   check(!controller.compute(input).goal_reached, "new task must settle before completion");
-  input.vehicle.stamp_s += .4;
+  input.vehicle.stamp_ns = *add_duration(input.vehicle.stamp_ns, .4);
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
   check(!controller.compute(input).goal_reached, "a sparse stopped sample must restart settling");
   for (int tick = 0; tick < 3; ++tick) {
-    input.vehicle.stamp_s += c.dt_s;
+    input.vehicle.stamp_ns = *add_duration(input.vehicle.stamp_ns, c.model_period_s);
+    input.planning_stamp_ns = input.vehicle.stamp_ns;
     controller.compute(input);
   }
-  input.vehicle.stamp_s += c.dt_s;
+  input.vehicle.stamp_ns = *add_duration(input.vehicle.stamp_ns, c.model_period_s);
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
   check(controller.compute(input).goal_reached, "regular measured stopped dwell must complete");
-  input.vehicle.stamp_s += .1;
+  input.vehicle.stamp_ns = *add_duration(input.vehicle.stamp_ns, .1);
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
   ++input.path_id;
   check(
     !controller.compute(input).goal_reached, "same geometry with a new ID must reset completion");
@@ -314,14 +329,14 @@ void test_task_restart_and_stall()
   path.goal = {1, 0, 0};
   path.remaining_m = 1;
   VehicleState state;
-  state.stamp_s = 1;
+  state.stamp_ns = *duration_nanoseconds(1.0);
   check(!manager.update(state, path, false).stalled, "new path must not report a stale stall");
-  state.stamp_s = 4.1;
+  state.stamp_ns = *duration_nanoseconds(4.1);
   check(
     manager.update(state, path, false).stalled,
     "no progress must expose a bounded-time diagnostic");
   state.pose.x = .1;
-  state.stamp_s += .1;
+  state.stamp_ns = *add_duration(state.stamp_ns, .1);
   path.progress_m = .1;
   check(
     !manager.update(state, path, false).stalled,
@@ -339,7 +354,8 @@ void test_large_angles_and_derived_errors()
       angle_distance(large, large) == 0,
     "finite angles must not overflow before periodic subtraction");
   ControllerInput input;
-  input.vehicle.stamp_s = 1;
+  input.vehicle.stamp_ns = *duration_nanoseconds(1.0);
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
   input.vehicle.actual_mode = DriveMode::Spin;
   input.vehicle.steering_angles = DriveModel(c).steering_for_mode(DriveMode::Spin, {});
   input.vehicle.pose.yaw = large;
@@ -382,8 +398,8 @@ void test_large_angles_and_derived_errors()
   auto normal_state = state;
   normal_state.pose.yaw = wrap_angle(large);
   for (auto control : {Control{.4, 0, 0}, Control{.4, 0, .1}, Control{}}) {
-    const auto a = DriveModel(c).step(state, control, c.dt_s);
-    const auto b = DriveModel(c).step(normal_state, control, c.dt_s);
+    const auto a = DriveModel(c).step(state, control, c.model_period_s);
+    const auto b = DriveModel(c).step(normal_state, control, c.model_period_s);
     check(
       a.valid && b.valid &&
         std::hypot(a.state.pose.x - b.state.pose.x, a.state.pose.y - b.state.pose.y) < 1e-12 &&
@@ -404,11 +420,16 @@ void test_path_numerical_boundaries()
   Config c;
   c.compute_budget_ratio = 0;
   const double large = std::numeric_limits<double>::max();
+  const auto make = [](Pose2d pose, std::vector<Pose2d> path) {
+    ControllerInput input;
+    input.vehicle.pose = pose;
+    input.reference_path = std::move(path);
+    return input;
+  };
   for (const auto & input : std::vector<ControllerInput>{
-         {{{1e308, 0, 0}}, {{-1e308, 0, 0}, {0, 0, 0}}},
-         {{{0, -1e308, 0}}, {{0, 1e308, 0}, {0, 0, 0}}},
-         {{{1e308, 0, 0}}, {{0, 0, 0}, {.25, 0, 0}}},
-         {{{large, large, 0}}, {{0, 0, 0}}}}) {
+         make({1e308, 0, 0}, {{-1e308, 0, 0}, {0, 0, 0}}),
+         make({0, -1e308, 0}, {{0, 1e308, 0}, {0, 0, 0}}),
+         make({1e308, 0, 0}, {{0, 0, 0}, {.25, 0, 0}}), make({large, large, 0}, {{0, 0, 0}})}) {
     bool rejected = false;
     try {
       PathManager(c).update(input);

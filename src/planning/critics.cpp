@@ -154,10 +154,10 @@ public:
     double cost = 0.0;
     for (std::size_t i = 1; i < trajectory.poses.size(); ++i) {
       const auto match = path_match(trajectory.poses[i], input.reference_path, index_);
-      cost += config_.dt_s * config_.path_weight * match.distance * match.distance;
+      cost += config_.model_period_s * config_.path_weight * match.distance * match.distance;
       if (input.tracking && input.tracking->heading_policy == PathHeadingPolicy::FollowPath) {
         const double yaw = angle_distance(trajectory.poses[i].yaw, match.yaw);
-        cost += config_.dt_s * config_.path_heading_weight * yaw * yaw;
+        cost += config_.model_period_s * config_.path_heading_weight * yaw * yaw;
       }
     }
     return cost;
@@ -184,7 +184,7 @@ public:
     double cost = 0.0;
     for (std::size_t i = 1; i < trajectory.poses.size(); ++i) {
       cost +=
-        config_.dt_s *
+        config_.model_period_s *
         segment_obstacle_cost(trajectory.poses[i - 1], trajectory.poses[i], input, config_, index_);
     }
     return cost;
@@ -231,7 +231,8 @@ public:
   {
     double cost = 0.0;
     for (const auto & u : trajectory.controls) {
-      cost += config_.dt_s * config_.effort_weight * (u.vx * u.vx + u.vy * u.vy + u.wz * u.wz);
+      cost +=
+        config_.model_period_s * config_.effort_weight * (u.vx * u.vx + u.vy * u.vy + u.wz * u.wz);
     }
     return cost;
   }

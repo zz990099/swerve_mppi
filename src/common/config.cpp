@@ -2,6 +2,8 @@
 
 #include <cmath>
 #include <stdexcept>
+
+#include "swerve_mppi/common/time.hpp"
 namespace swerve_mppi
 {
 void validate(const Config & c)
@@ -40,7 +42,13 @@ void validate(const Config & c)
     c.steering_tolerance_rad,
     c.drive_steering_limit_rad,
     c.confirmation_timeout_s,
-    c.dt_s,
+    c.model_period_s,
+    c.planning_period_s,
+    c.max_observation_age_s,
+    c.max_observation_gap_s,
+    c.command_lifetime_s,
+    c.history_steering_tolerance_rad,
+    c.history_wheel_tolerance_mps,
     c.temperature};
   for (const double value : positive) {
     if (!std::isfinite(value) || value <= 0.0) {
@@ -50,6 +58,9 @@ void validate(const Config & c)
   const double nonnegative[] = {
     c.feedback_linear_tolerance_mps,
     c.feedback_angular_tolerance_radps,
+    c.observation_pairing_tolerance_s,
+    c.future_observation_tolerance_s,
+    c.max_command_application_uncertainty_s,
     c.compute_budget_ratio,
     c.control_correction_weight,
     c.path_progress_slack_m,
@@ -95,6 +106,17 @@ void validate(const Config & c)
     c.stopping_horizon_steps < 2 || c.safety_reduction_attempts > 16 || c.samples_per_branch < 1 ||
     c.iterations < 1) {
     throw std::invalid_argument("MPPI horizon, sample count, and iterations invalid");
+  }
+  const auto chassis_period = duration_nanoseconds(c.chassis_period_s);
+  const auto model_period = duration_nanoseconds(c.model_period_s);
+  const auto planning_period = duration_nanoseconds(c.planning_period_s);
+  if (
+    !chassis_period || *chassis_period == 0 || !model_period || *model_period == 0 ||
+    !planning_period || *planning_period == 0 ||
+    c.observation_pairing_tolerance_s > c.max_observation_age_s ||
+    c.future_observation_tolerance_s > c.max_observation_age_s ||
+    c.max_command_application_uncertainty_s > c.command_lifetime_s) {
+    throw std::invalid_argument("invalid timing and command-history parameters");
   }
 }
 

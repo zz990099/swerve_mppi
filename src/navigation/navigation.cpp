@@ -236,12 +236,12 @@ GoalState GoalManager::update(const VehicleState & s, const PathReference & path
   }
   // Sparse or repeated observations cannot establish continuous stopped dwell.
   if (
-    last_observation_s_ >= 0 &&
-    (s.stamp_s <= last_observation_s_ ||
-     detail::deadline_exceeded(s.stamp_s, last_observation_s_, 1.5 * config_.dt_s))) {
-    settle_start_ = -1;
+    last_observation_ns_ >= 0 &&
+    (s.stamp_ns <= last_observation_ns_ ||
+     detail::deadline_exceeded(s.stamp_ns, last_observation_ns_, 1.5 * config_.model_period_s))) {
+    settle_start_ = kInvalidTimestamp;
   }
-  last_observation_s_ = s.stamp_s;
+  last_observation_ns_ = s.stamp_ns;
   const double yaw = std::abs(out.yaw_error_rad);
   if (
     !position_acquired_ && path.goal_eligible &&
@@ -261,13 +261,13 @@ GoalState GoalManager::update(const VehicleState & s, const PathReference & path
     yaw <= config_.goal_yaw_tolerance_rad && s.mode_confirmed && !s.mode_fault &&
     is_stopped(s, config_)) {
     if (settle_start_ < 0) {
-      settle_start_ = s.stamp_s;
+      settle_start_ = s.stamp_ns;
     }
-    if (detail::elapsed_at_least(s.stamp_s, settle_start_, config_.goal_settle_time_s)) {
+    if (detail::elapsed_at_least(s.stamp_ns, settle_start_, config_.goal_settle_time_s)) {
       complete_ = true;
     }
   } else {
-    settle_start_ = -1;
+    settle_start_ = kInvalidTimestamp;
   }
   out.complete = complete_;
   out.status = complete_ ? NavigationStatus::Complete
@@ -283,20 +283,20 @@ GoalState GoalManager::update(const VehicleState & s, const PathReference & path
     path.progress_m - last_progress_ >= config_.progress_distance_m ||
     last_distance_ - out.distance_m >= config_.progress_distance_m ||
     (position_acquired_ && last_yaw_error_ - yaw >= config_.goal_yaw_tolerance_rad)) {
-    progress_stamp_ = s.stamp_s;
+    progress_stamp_ = s.stamp_ns;
     last_progress_ = path.progress_m;
     last_distance_ = out.distance_m;
     last_yaw_error_ = yaw;
   }
   out.stalled =
-    !complete_ && detail::elapsed_at_least(s.stamp_s, progress_stamp_, config_.progress_timeout_s);
+    !complete_ && detail::elapsed_at_least(s.stamp_ns, progress_stamp_, config_.progress_timeout_s);
   return out;
 }
 void GoalManager::reset()
 {
   position_acquired_ = complete_ = false;
-  settle_start_ = progress_stamp_ = -1;
-  last_observation_s_ = -1;
+  settle_start_ = progress_stamp_ = kInvalidTimestamp;
+  last_observation_ns_ = kInvalidTimestamp;
   last_progress_ = last_distance_ = last_yaw_error_ = 0;
 }
 }  // namespace swerve_mppi

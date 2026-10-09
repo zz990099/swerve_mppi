@@ -47,7 +47,7 @@ def main():
         for options in (['--unknown'], ['--config'], ['--print-config', '--print-config'],
                         ['--config', str(profile), '--config', str(profile)], ['--config', str(root / 'missing')]):
             assert subprocess.run([args.tool, *options], capture_output=True).returncode != 0
-        profile.write_text('dt_s=1.1\n')
+        profile.write_text('model_period_s=1.1\n')
         invalid = subprocess.run([args.tool, '--config', str(profile)], capture_output=True, text=True)
         assert invalid.returncode != 0 and not invalid.stdout
         profile.write_text('chassis_period_s=.0001\n')

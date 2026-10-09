@@ -11,7 +11,8 @@ namespace
 ControllerInput straight()
 {
   ControllerInput in;
-  in.vehicle.stamp_s = 1;
+  in.vehicle.stamp_ns = *duration_nanoseconds(1.0);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   in.vehicle.time_in_mode_s = 2;
   in.reference_path = {{0, 0, 0}, {2, 0, 0}};
   return in;
@@ -183,6 +184,7 @@ void test_temporary_failure_stops_and_recovers()
     !stopped.feedback.fault && stopped.feedback.actual_mode == DriveMode::DualAckermann,
     "checked planning stop must neither latch fault nor erase actual mode");
   actuate(in.vehicle, stopped, c);
+  advance_input(in);
   in.obstacles.clear();
   const auto resumed = controller.compute(in);
   check(
@@ -211,7 +213,8 @@ void test_unsafe_stopping_latches_fault()
     executor.update(command, in.vehicle).feedback.fault,
     "unsafe stopping must latch the execution fault");
   in.obstacles.clear();
-  in.vehicle.stamp_s += c.dt_s;
+  in.vehicle.stamp_ns = *add_duration(in.vehicle.stamp_ns, c.model_period_s);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   check(
     executor.update(controller.compute(in), in.vehicle).feedback.fault,
     "removing an obstacle must not automatically recover a latched fault");
@@ -238,6 +241,7 @@ void test_capture_checks_one_command_then_stop()
       break;
     }
     actuate(in.vehicle, execution, c);
+    advance_input(in);
   }
   check(completed, "capture before an obstacle must complete with measured stopped dwell");
 }
@@ -262,7 +266,8 @@ void test_terminal_brakes_share_stopping_validation()
         check(
           !executor.update(command, in.vehicle).feedback.fault,
           "safe settling must remain healthy before external motion");
-        in.vehicle.stamp_s += c.dt_s;
+        in.vehicle.stamp_ns = *add_duration(in.vehicle.stamp_ns, c.model_period_s);
+        in.planning_stamp_ns = in.vehicle.stamp_ns;
         if (tick == 4) {
           check(command.goal_reached, "test must establish completion before external motion");
         }
@@ -320,7 +325,8 @@ void test_drive_requires_complete_stopping_continuation()
       "tracking and capture must reject a first Drive whose full stop hits "
       "an obstacle");
     in.obstacles.clear();
-    in.vehicle.stamp_s += c.dt_s;
+    in.vehicle.stamp_ns = *add_duration(in.vehicle.stamp_ns, c.model_period_s);
+    in.planning_stamp_ns = in.vehicle.stamp_ns;
     const auto safe = controller.compute(in);
     check(
       safe.action == Action::Drive && !executor.update(safe, in.vehicle).feedback.fault,
@@ -335,7 +341,8 @@ void test_drive_requires_complete_stopping_continuation()
     "from rest one command period and one brake period fit the minimum budget");
   in.vehicle.velocity.vx = .2;
   in.vehicle.wheel_speeds.fill(.2);
-  in.vehicle.stamp_s += c.dt_s;
+  in.vehicle.stamp_ns = *add_duration(in.vehicle.stamp_ns, c.model_period_s);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   const auto fault = limited.compute(in);
   check(
     fault.action == Action::SafeStop &&
@@ -378,10 +385,12 @@ void test_first_drive_deceleration_matches_execution()
   auto result = executor.update(output, in.vehicle);
   check(!result.feedback.fault, "reduced Drive must satisfy the same executor contract");
   actuate(in.vehicle, result, c);
+  advance_input(in);
   Prediction brake;
   brake.action = Action::Brake;
   brake.requested_mode = in.vehicle.actual_mode;
   actuate(in.vehicle, executor.update(brake, in.vehicle), c);
+  advance_input(in);
   check(
     in.vehicle.pose.x < .008 && is_stopped(in.vehicle, c),
     "independent first Drive and Brake must stay outside the obstacle "
@@ -479,6 +488,7 @@ void test_pending_request_rechecks_fresh_stopping_constraints()
   const auto request = controller.compute(in);
   check(request.action == Action::RequestMode, "test must commit a Spin request");
   actuate(in.vehicle, executor.update(request, in.vehicle), c);
+  advance_input(in);
   check(!in.vehicle.mode_confirmed, "test must reach an unconfirmed measured transition");
   // External motion while the handshake is pending needs braking at the current
   // measured angles. Its stop must not assume that a mode has been confirmed.
@@ -497,6 +507,7 @@ void test_pending_request_rechecks_fresh_stopping_constraints()
     "safe pending-request braking cannot grant confirmation or latch a "
     "fault");
   actuate(in.vehicle, braking, c);
+  advance_input(in);
   // A new measured disturbance arrives with the changed world context.
   in.vehicle.wheel_speeds.fill(.3);
   in.vehicle.velocity = Kinematics(c).forward(in.vehicle.wheel_speeds, in.vehicle.steering_angles);
@@ -539,11 +550,13 @@ void test_pending_alignment_checks_fresh_constraints()
     check(
       first.action == Action::RequestMode && first.mode_request, "begin an explicit spin request");
     actuate(in.vehicle, plant.update(first, in.vehicle), c);
+    advance_input(in);
     const auto retry = planner.compute(in);
     check(
       retry.mode_request && retry.mode_request->id == first.mode_request->id,
       "pending request identity must persist");
     actuate(in.vehicle, plant.update(retry, in.vehicle), c);
+    advance_input(in);
     in.vehicle.wheel_speeds.fill(residual);
     in.vehicle.velocity =
       Kinematics(c).forward(in.vehicle.wheel_speeds, in.vehicle.steering_angles);
@@ -584,7 +597,8 @@ void test_stop_rollout_preserves_unconfirmed_feedback()
   check(
     !engine.generate(in.vehicle, {}, std::vector<Control>(c.horizon_steps)).valid,
     "unconfirmed feedback must still reject ordinary driving rollouts");
-  in.vehicle.stamp_s = -1;
+  in.vehicle.stamp_ns = -1;
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   engine.generate_stop(in.vehicle, stop);
   check(!stop.valid && stop.poses.empty(), "a failed reused stopping trace cannot retain validity");
 }
@@ -594,7 +608,7 @@ public:
   bool allows(const ControllerInput & input, const Trajectory & trajectory) const override
   {
     // A fresh world constraint activates after the first measured tick.
-    if (input.vehicle.stamp_s < 1.05) {
+    if (input.vehicle.stamp_ns < *duration_nanoseconds(1.05)) {
       return true;
     }
     for (const auto & pose : trajectory.poses) {
@@ -624,14 +638,16 @@ void test_shared_hard_constraints()
         controller.compute(in).action == Action::Hold,
         "unrestricted capture must begin committed alignment");
     }
-    in.vehicle.stamp_s += c.dt_s;
+    in.vehicle.stamp_ns = *add_duration(in.vehicle.stamp_ns, c.model_period_s);
+    in.planning_stamp_ns = in.vehicle.stamp_ns;
     const auto rejected = controller.compute(in);
     check(
       rejected.action == Action::Hold && rejected.failure_reason == FailureReason::NoFeasiblePlan,
       "tracking, capture and alignment must share injected hard constraints");
   }
   auto in = straight();
-  in.vehicle.stamp_s = 1.1;
+  in.vehicle.stamp_ns = *duration_nanoseconds(1.1);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   check(
     !std::isfinite(Optimizer(c, validator).optimize(in, {}).cost),
     "standalone optimizer must also enforce the injected hard validator");
@@ -650,12 +666,13 @@ void test_shared_hard_constraints()
 void test_residual_hold_obstacle()
 {
   Config c;
-  c.dt_s = .5;
+  c.model_period_s = .5;
   c.stopped_linear_mps = .25;
   c.stopped_wheel_speed_mps = .21;
   ControllerInput in;
   in.vehicle.actual_mode = DriveMode::Crab;
-  in.vehicle.stamp_s = 1;
+  in.vehicle.stamp_ns = *duration_nanoseconds(1.0);
+  in.planning_stamp_ns = in.vehicle.stamp_ns;
   in.vehicle.time_in_mode_s = 2;
   in.vehicle.velocity.vx = .2;
   in.vehicle.wheel_speeds.fill(.2);

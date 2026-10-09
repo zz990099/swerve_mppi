@@ -72,9 +72,9 @@ private:
   Config config_;
   bool position_acquired_ = false;
   bool complete_ = false;
-  double settle_start_ = -1;
-  double last_observation_s_ = -1;
-  double progress_stamp_ = -1;
+  TimestampNs settle_start_ = kInvalidTimestamp;
+  TimestampNs last_observation_ns_ = kInvalidTimestamp;
+  TimestampNs progress_stamp_ = kInvalidTimestamp;
   double last_progress_ = 0;
   double last_distance_ = 0;
   double last_yaw_error_ = 0;

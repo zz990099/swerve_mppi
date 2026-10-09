@@ -17,7 +17,8 @@ Request IDs increase above the last observed/issued ID. Retries preserve ID, tar
 mode and entry velocity. A pending transition cannot be overwritten by a new plan.
 Only a matching measured receipt, actual mode, stopped state and alignment can
 complete the planner's request. Controller reset clears planning state but does not
-recover, reset or stop a physical chassis.
+reset or stop a physical chassis. Live code must use the guarded recovery API rather
+than treating an unconditional offline reset as chassis recovery.
 
 `VehicleState` contains pose, body twist, steering angles, linear rolling wheel
 speeds, actual mode, confirmation/fault flags, last request ID, actual mode age and
@@ -26,12 +27,37 @@ and the mechanical steering geometry accepted by the chassis. Wheel order is
 FL, FR, RL, RR. Core wheel speeds are m/s; convert wire joint rad/s using wheel radius.
 
 Pose, path and obstacles share one world frame; velocities use body x-forward,
-y-left and positive yaw CCW. Maintain path identity/geometry between calls and
-supply fresh measured state. The current core expects one compute per `dt_s` and
-strictly advancing state time. Observation/application synchronization and control
-period decoupling are stage-3 work.
+y-left and positive yaw CCW. All source clocks use `TimestampNs` integer nanoseconds
+in one caller-selected domain. Joint, pose and mode sources may differ only within
+`observation_pairing_tolerance_s`; `FeedbackAdapter` retains the newest paired source
+stamp and never rewrites it to the planning time.
 
-A future current-interface adapter must retain the chassis's accepted request ID
+`ControllerInput::planning_stamp_ns` is the decision-clock sample for the compute.
+The vehicle observation must satisfy configured future, age and inter-observation-gap
+bounds. `Output` separately carries observation, computation, initially-unset
+publication and expiry stamps. Call `set_publication_stamp` exactly once immediately
+before sending, and require `command_valid_at` at consumption. An expired output is
+not a stop command and must never be reused.
+
+On the next input, `CommandApplication` identifies the preceding command and reports
+its publication plus earliest/latest application stamps. Exact bounded history is
+propagated and checked against measured joints. A missing report or nonzero admissible
+window is diagnosed and cold-seeded; invalid identity/time or excessive uncertainty
+is a fault. Publication/application stamps are evidence, not replacements for the
+source observation stamp.
+
+`MotionPolicy::EncoderNominal` explicitly selects encoder-only nominal planning.
+`RequireIndependent` requires a fresh `IndependentBody` observation with deterministic
+linear/angular error bounds. Admitted residual uncertainty expands collision margins;
+an exceeded envelope or hidden body motion while encoders report stopped withholds
+authorization.
+
+Clock, feedback, motion, compute and transition failures latch. `Controller::recover`
+requires a newer coherent observation; `reset` is an unconditional offline restart.
+`planning_period_s` controls the compute budget, `model_period_s` the rollout grid and
+`chassis_period_s` the command-mechanics substeps.
+
+The stage-4 current-interface adapter must retain the chassis's accepted request ID
 and entry velocity on ordinary drive/hold packets, pair state with odometry, and
 reject stale results. These wire responsibilities are not implemented by Controller.
 The algorithm may propose a mode change; actual braking, steering and confirmation

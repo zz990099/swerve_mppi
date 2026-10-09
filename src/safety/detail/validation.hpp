@@ -42,11 +42,10 @@ inline bool valid_vehicle(const VehicleState & vehicle, const Config & config)
   if (
     (vehicle.actual_mode != DriveMode::DualAckermann && vehicle.actual_mode != DriveMode::Spin &&
      vehicle.actual_mode != DriveMode::Crab) ||
-    vehicle.stamp_s < 0.0 || !std::isfinite(vehicle.stamp_s) || !std::isfinite(vehicle.pose.x) ||
-    !std::isfinite(vehicle.pose.y) || !std::isfinite(vehicle.pose.yaw) ||
-    !std::isfinite(vehicle.velocity.vx) || !std::isfinite(vehicle.velocity.vy) ||
-    !std::isfinite(vehicle.velocity.wz) || !std::isfinite(vehicle.time_in_mode_s) ||
-    vehicle.time_in_mode_s < 0.0) {
+    vehicle.stamp_ns < 0 || !std::isfinite(vehicle.pose.x) || !std::isfinite(vehicle.pose.y) ||
+    !std::isfinite(vehicle.pose.yaw) || !std::isfinite(vehicle.velocity.vx) ||
+    !std::isfinite(vehicle.velocity.vy) || !std::isfinite(vehicle.velocity.wz) ||
+    !std::isfinite(vehicle.time_in_mode_s) || vehicle.time_in_mode_s < 0.0) {
     return false;
   }
   for (double angle : vehicle.steering_angles) {
@@ -80,6 +79,11 @@ inline bool valid_input(const ControllerInput & input, const Config & config)
   if (
     input.heading_policy != PathHeadingPolicy::FollowPath &&
     input.heading_policy != PathHeadingPolicy::GoalOnly) {
+    return false;
+  }
+  if (
+    input.motion_policy != MotionPolicy::EncoderNominal &&
+    input.motion_policy != MotionPolicy::RequireIndependent) {
     return false;
   }
   if (input.tracking) {

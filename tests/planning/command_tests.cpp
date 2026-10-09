@@ -39,7 +39,7 @@ void test_public_velocity_is_nominal_intent()
     output.command && !output.command->mode_request && output.command->target_velocity.vx > 0,
     "straight task publishes a positive body target");
   const auto & v = output.command->target_velocity;
-  const auto next = DriveModel(c).step(input.vehicle, {v.vx, v.vy, v.wz}, c.dt_s);
+  const auto next = DriveModel(c).step(input.vehicle, {v.vx, v.vy, v.wz}, c.model_period_s);
   check(
     next.valid && v.vx > next.state.velocity.vx,
     "public velocity is nominal intent, not the rate-limited joint endpoint");
@@ -55,7 +55,8 @@ void test_mode_requests_wait_for_measured_confirmation()
   check(first.command && first.command->mode_request, "lateral task requests a mode");
   const auto request = *first.command->mode_request;
   for (int i = 1; i < 5; ++i) {
-    input.vehicle.stamp_s += c.dt_s;
+    input.vehicle.stamp_ns = *add_duration(input.vehicle.stamp_ns, c.model_period_s);
+    input.planning_stamp_ns = input.vehicle.stamp_ns;
     const auto retry = controller.compute(input);
     check(
       retry.command && retry.command->mode_request &&
@@ -66,7 +67,8 @@ void test_mode_requests_wait_for_measured_confirmation()
       "unconfirmed requests remain frozen zero-motion intents");
   }
   input.vehicle.mode_fault = true;
-  input.vehicle.stamp_s += c.dt_s;
+  input.vehicle.stamp_ns = *add_duration(input.vehicle.stamp_ns, c.model_period_s);
+  input.planning_stamp_ns = input.vehicle.stamp_ns;
   check(!controller.compute(input).command, "fault must withhold authorization");
 }
 void test_zero_and_invalid_output_are_distinct()

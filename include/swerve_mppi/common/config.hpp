@@ -59,12 +59,25 @@ struct Config
   double switch_cost = 1.0;
   double switch_hysteresis = 0.4;
 
-  // One compute call per model tick; arbitrary period ratios are not
-  // implemented.
-  double dt_s = 0.1;
-  // Fraction of dt_s allowed for the whole compute, measured by steady_clock.
+  // Prediction discretization. This does not define callback frequency.
+  double model_period_s = 0.1;
+  // Expected interval between planning decisions.
+  double planning_period_s = 0.1;
+  // Fraction of planning_period_s allowed for compute, measured by steady_clock.
   // Zero disables the clock budget for offline deterministic validation only.
   double compute_budget_ratio = 0.8;
+  // Source observations may be paired when their stamps differ by at most this
+  // amount, then are represented by the newest source stamp.
+  double observation_pairing_tolerance_s = 0.005;
+  double max_observation_age_s = 0.15;
+  double max_observation_gap_s = 0.30;
+  double future_observation_tolerance_s = 0.002;
+  double command_lifetime_s = 0.20;
+  double max_command_application_uncertainty_s = 0.02;
+  // Admission bounds for reconciling the preceding command prediction with
+  // the next measured joint observation.
+  double history_steering_tolerance_rad = 0.08;
+  double history_wheel_tolerance_mps = 0.08;
   // Reject oversize contexts before scanning them. Never truncate
   // obstacles/path.
   std::size_t max_path_points = 4096;

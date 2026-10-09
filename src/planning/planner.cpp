@@ -29,9 +29,231 @@ Planner::Planner(
   validator_->require_compatible(config_);
 }
 
+void Planner::latch(FailureReason reason)
+{
+  fault_latched_ = true;
+  latched_reason_ = reason;
+  optimizer_.clear_warm_start();
+  synchronized_prediction_.reset();
+  active_control_.reset();
+}
+
+bool Planner::temporal_admission(const ControllerInput & input, Prediction & stop)
+{
+  stop.steering_targets = input.vehicle.steering_angles;
+  if (!detail::valid_vehicle(input.vehicle, config_) || input.planning_stamp_ns < 0) {
+    stop.failure_reason = FailureReason::InvalidInput;
+    return false;
+  }
+  const auto future = *duration_nanoseconds(config_.future_observation_tolerance_s);
+  const auto age = *duration_nanoseconds(config_.max_observation_age_s);
+  const auto maximum_gap = *duration_nanoseconds(config_.max_observation_gap_s);
+  if (!add_duration(input.planning_stamp_ns, config_.command_lifetime_s)) {
+    stop.failure_reason = FailureReason::ClockFault;
+    latch(stop.failure_reason);
+    return false;
+  }
+  if (
+    input.vehicle.stamp_ns > input.planning_stamp_ns &&
+    input.vehicle.stamp_ns - input.planning_stamp_ns > future) {
+    stop.failure_reason = FailureReason::ClockFault;
+    latch(stop.failure_reason);
+    return false;
+  }
+  if (
+    input.planning_stamp_ns > input.vehicle.stamp_ns &&
+    input.planning_stamp_ns - input.vehicle.stamp_ns > age) {
+    stop.failure_reason = FailureReason::StaleObservation;
+    latch(stop.failure_reason);
+    return false;
+  }
+  if (
+    (last_stamp_ns_ >= 0 && input.vehicle.stamp_ns <= last_stamp_ns_) ||
+    (last_planning_stamp_ns_ >= 0 && input.planning_stamp_ns <= last_planning_stamp_ns_)) {
+    stop.failure_reason = FailureReason::NonmonotonicTime;
+    latch(FailureReason::ClockFault);
+    return false;
+  }
+  if (last_stamp_ns_ >= 0 && input.vehicle.stamp_ns - last_stamp_ns_ > maximum_gap) {
+    stop.failure_reason = FailureReason::StaleObservation;
+    latch(stop.failure_reason);
+    return false;
+  }
+  if (warm_start_stamp_ns_ >= 0) {
+    const auto model_period = *duration_nanoseconds(config_.model_period_s);
+    const auto elapsed = input.vehicle.stamp_ns - warm_start_stamp_ns_;
+    optimizer_.advance_warm_start(static_cast<std::size_t>(elapsed / model_period));
+    warm_start_stamp_ns_ = input.vehicle.stamp_ns;
+  }
+  last_stamp_ns_ = input.vehicle.stamp_ns;
+  last_planning_stamp_ns_ = input.planning_stamp_ns;
+  return true;
+}
+
+bool Planner::motion_admission(const ControllerInput & input, Prediction & stop)
+{
+  motion_assessment_ = MotionObserver(config_).assess(
+    input.vehicle, input.planning_stamp_ns, input.motion_observation);
+  stop.motion_status = motion_assessment_.status;
+  const auto status = motion_assessment_.status;
+  const bool accepted =
+    status == MotionStatus::NominalAgreement || status == MotionStatus::BoundedDisagreement;
+  if (
+    status == MotionStatus::EnvelopeExceeded ||
+    (accepted && motion_assessment_.encoder_stationary && !motion_assessment_.body_stationary)) {
+    stop.failure_reason = FailureReason::MotionUncertainty;
+    latch(stop.failure_reason);
+    return false;
+  }
+  if (
+    status == MotionStatus::Invalid || status == MotionStatus::Stale ||
+    status == MotionStatus::Future || status == MotionStatus::Unsynchronized ||
+    (input.motion_policy == MotionPolicy::RequireIndependent && !accepted)) {
+    stop.failure_reason = status == MotionStatus::Stale ? FailureReason::StaleObservation
+                                                        : FailureReason::MotionUncertainty;
+    latch(stop.failure_reason);
+    return false;
+  }
+  return true;
+}
+
+PredictionHistoryStatus Planner::synchronize_history(const ControllerInput & input)
+{
+  synchronized_prediction_.reset();
+  if (!issued_command_) {
+    return PredictionHistoryStatus::ColdStart;
+  }
+  if (!input.previous_command_application) {
+    optimizer_.clear_warm_start();
+    active_control_.reset();
+    return PredictionHistoryStatus::MissingApplication;
+  }
+  const auto & application = *input.previous_command_application;
+  const auto & issued = *issued_command_;
+  const auto maximum_uncertainty =
+    *duration_nanoseconds(config_.max_command_application_uncertainty_s);
+  if (
+    application.command_id != issued.id ||
+    application.published_stamp_ns < issued.computed_stamp_ns ||
+    application.published_stamp_ns > application.earliest_stamp_ns ||
+    application.earliest_stamp_ns < issued.computed_stamp_ns ||
+    application.earliest_stamp_ns < issued.observation.stamp_ns ||
+    application.latest_stamp_ns < application.earliest_stamp_ns ||
+    application.latest_stamp_ns > issued.valid_until_ns ||
+    application.latest_stamp_ns > input.vehicle.stamp_ns ||
+    application.latest_stamp_ns - application.earliest_stamp_ns > maximum_uncertainty) {
+    latch(FailureReason::ClockFault);
+    return PredictionHistoryStatus::InvalidApplication;
+  }
+  if (
+    application.earliest_stamp_ns != application.latest_stamp_ns || !issued.prediction_known ||
+    issued.command.mode_request || issued.command.mode != input.vehicle.actual_mode) {
+    optimizer_.clear_warm_start();
+    active_control_.reset();
+    return PredictionHistoryStatus::ApplicationUncertain;
+  }
+  VehicleState start = issued.observation;
+  auto prediction = issued.prediction;
+  if (application.earliest_stamp_ns > start.stamp_ns) {
+    const auto before_application = model_.step(
+      start, issued.pre_application_control,
+      duration_seconds(application.earliest_stamp_ns - start.stamp_ns), prediction);
+    if (!before_application.valid) {
+      latch(FailureReason::InconsistentFeedback);
+      return PredictionHistoryStatus::Diverged;
+    }
+    start = before_application.state;
+    prediction = before_application.prediction;
+  }
+  const Control control{
+    issued.command.target_velocity.vx, issued.command.target_velocity.vy,
+    issued.command.target_velocity.wz};
+  const auto predicted = model_.step(
+    start, control, duration_seconds(input.vehicle.stamp_ns - start.stamp_ns), prediction);
+  if (!predicted.valid) {
+    latch(FailureReason::InconsistentFeedback);
+    return PredictionHistoryStatus::Diverged;
+  }
+  for (std::size_t i = 0; i < 4; ++i) {
+    if (
+      std::abs(predicted.state.steering_angles[i] - input.vehicle.steering_angles[i]) >
+        config_.history_steering_tolerance_rad ||
+      std::abs(predicted.state.wheel_speeds[i] - input.vehicle.wheel_speeds[i]) >
+        config_.history_wheel_tolerance_mps) {
+      latch(FailureReason::InconsistentFeedback);
+      return PredictionHistoryStatus::Diverged;
+    }
+  }
+  synchronized_prediction_ = predicted.prediction;
+  active_control_ = control;
+  return PredictionHistoryStatus::Synchronized;
+}
+
+std::uint64_t Planner::record_command(
+  const ControllerInput & input, const ChassisCommand & command, TimestampNs computed_stamp_ns,
+  TimestampNs valid_until_ns)
+{
+  if (last_command_id_ == std::numeric_limits<std::uint64_t>::max()) {
+    latch(FailureReason::ClockFault);
+    return 0;
+  }
+  IssuedCommand issued;
+  issued.id = ++last_command_id_;
+  issued.observation = input.vehicle;
+  issued.command = command;
+  issued.computed_stamp_ns = computed_stamp_ns;
+  issued.valid_until_ns = valid_until_ns;
+  issued.prediction = synchronized_prediction_.value_or(model_.seed(input.vehicle));
+  issued.pre_application_control = active_control_.value_or(Control{});
+  issued.prediction_known = (synchronized_prediction_.has_value() && active_control_.has_value()) ||
+                            is_stopped(input.vehicle, config_);
+  issued_command_ = issued;
+  return issued.id;
+}
+
+bool Planner::recover(const ControllerInput & input)
+{
+  if (
+    !fault_latched_ || !detail::valid_input(input, config_) || input.vehicle.mode_fault ||
+    !input.vehicle.mode_confirmed || input.planning_stamp_ns < input.vehicle.stamp_ns ||
+    (last_stamp_ns_ >= 0 && input.vehicle.stamp_ns <= last_stamp_ns_) ||
+    (last_planning_stamp_ns_ >= 0 && input.planning_stamp_ns <= last_planning_stamp_ns_)) {
+    return false;
+  }
+  const auto age = *duration_nanoseconds(config_.max_observation_age_s);
+  if (input.planning_stamp_ns - input.vehicle.stamp_ns > age) {
+    return false;
+  }
+  const auto motion = MotionObserver(config_).assess(
+    input.vehicle, input.planning_stamp_ns, input.motion_observation);
+  const bool independent = motion.status == MotionStatus::NominalAgreement ||
+                           motion.status == MotionStatus::BoundedDisagreement;
+  if (
+    motion.status == MotionStatus::Invalid || motion.status == MotionStatus::Stale ||
+    motion.status == MotionStatus::Future || motion.status == MotionStatus::Unsynchronized ||
+    motion.status == MotionStatus::EnvelopeExceeded ||
+    (input.motion_policy == MotionPolicy::RequireIndependent && !independent)) {
+    return false;
+  }
+  reset();
+  fault_latched_ = false;
+  latched_reason_ = FailureReason::None;
+  return true;
+}
+
 Prediction Planner::compute(const ControllerInput & input)
 {
-  PlanningBudget budget(config_.dt_s * config_.compute_budget_ratio, now_);
+  if (fault_latched_) {
+    Prediction out;
+    out.requested_mode = input.vehicle.actual_mode;
+    out.failure_reason = FailureReason::FaultLatched;
+    out.control_policy = ControlPolicy::Fault;
+    out.navigation_status = NavigationStatus::Fault;
+    out.motion_status = motion_assessment_.status;
+    out.prediction_history = prediction_history_status_;
+    return out;
+  }
+  PlanningBudget budget(config_.planning_period_s * config_.compute_budget_ratio, now_);
   auto out = compute_impl(input, budget);
   // A slow bounded rollout or user critic can cross the cooperative deadline.
   // Never publish a late Drive/request, even if it was feasible before timeout.
@@ -51,6 +273,7 @@ Prediction Planner::compute(const ControllerInput & input)
     out.wheel_speed_targets.fill(0);
     out.body_command = {};
     out.planning_stats.budget_exhausted = true;
+    latch(FailureReason::ComputeTimeout);
   }
   return out;
 }
@@ -60,6 +283,9 @@ Prediction Planner::compute_impl(const ControllerInput & input, const PlanningBu
   Prediction stop;
   stop.requested_mode = input.vehicle.actual_mode;
   stop.phase = mode_manager_.phase();
+  if (!temporal_admission(input, stop)) {
+    return stop;
+  }
   if (
     input.reference_path.size() > config_.max_path_points ||
     input.obstacles.size() > config_.max_obstacles) {
@@ -71,18 +297,27 @@ Prediction Planner::compute_impl(const ControllerInput & input, const PlanningBu
     check_model_feedback(input.vehicle, config_).status == FeedbackStatus::Inconsistent) {
     stop.steering_targets = input.vehicle.steering_angles;
     stop.failure_reason = FailureReason::InconsistentFeedback;
+    latch(stop.failure_reason);
     return stop;
   }
   if (!detail::valid_input(input, config_)) {
     stop.failure_reason = FailureReason::InvalidInput;
     return stop;
   }
-  if (last_stamp_s_ >= 0 && input.vehicle.stamp_s <= last_stamp_s_) {
-    stop.failure_reason = FailureReason::NonmonotonicTime;
+  if (!motion_admission(input, stop)) {
     return stop;
   }
-  stop.steering_targets = input.vehicle.steering_angles;
-  last_stamp_s_ = input.vehicle.stamp_s;
+  prediction_history_status_ = synchronize_history(input);
+  stop.motion_status = motion_assessment_.status;
+  stop.prediction_history = prediction_history_status_;
+  stop.observation_age_s =
+    duration_seconds(std::max<TimestampNs>(0, input.planning_stamp_ns - input.vehicle.stamp_ns));
+  if (fault_latched_) {
+    stop.failure_reason = latched_reason_;
+    return stop;
+  }
+  optimizer_.set_initial_prediction(
+    synchronized_prediction_ ? &*synchronized_prediction_ : nullptr);
   PathReference path;
   try {
     path = path_manager_.update(input);
@@ -131,7 +366,7 @@ Prediction Planner::compute_impl(const ControllerInput & input, const PlanningBu
     alignment_control_ = last_drive_control_;
     alignment_targets_ = last_drive_alignment_;
     alignment_mode_ = input.vehicle.actual_mode;
-    alignment_start_s_ = input.vehicle.stamp_s;
+    alignment_start_ns_ = input.vehicle.stamp_ns;
     optimizer_.clear_warm_start();
   }
   // GoalOnly terminal translation cannot advance in Spin. A finite horizon
@@ -148,7 +383,7 @@ Prediction Planner::compute_impl(const ControllerInput & input, const PlanningBu
       out.failure_reason = FailureReason::TransitionFault;
     }
     if (out.action == Action::Hold && out.phase == TransitionPhase::Stable) {
-      alignment_start_s_ = input.vehicle.stamp_s;
+      alignment_start_ns_ = input.vehicle.stamp_ns;
     }
   } else if (alignment_control_ && !input.vehicle.mode_fault) {
     out = continue_alignment(prepared);
@@ -197,6 +432,14 @@ Prediction Planner::compute_impl(const ControllerInput & input, const PlanningBu
   out.goal_distance_m = goal.distance_m;
   out.goal_yaw_error_rad = goal.yaw_error_rad;
   out.safety_reductions = safety_reductions_;
+  out.motion_status = motion_assessment_.status;
+  out.prediction_history = prediction_history_status_;
+  out.observation_age_s = stop.observation_age_s;
+  if (
+    out.failure_reason == FailureReason::TransitionFault ||
+    out.failure_reason == FailureReason::FeedbackFault) {
+    latch(out.failure_reason);
+  }
   return out;
 }
 Prediction Planner::compute_tracking(const ControllerInput & input, const PlanningBudget & budget)
@@ -255,6 +498,7 @@ Prediction Planner::compute_tracking(const ControllerInput & input, const Planni
   out.feasible_rollouts = best.feasible_rollouts;
   if (out.action == Action::Drive && safety_reductions_ == 0) {
     optimizer_.accept(best, input.vehicle.actual_mode);
+    warm_start_stamp_ns_ = input.vehicle.stamp_ns;
   }
   return out;
 }
@@ -273,7 +517,7 @@ Prediction Planner::request_mode(
   optimizer_.clear_warm_start();
   alignment_control_ = intent;
   alignment_mode_ = mode;
-  alignment_start_s_ = input.vehicle.stamp_s;
+  alignment_start_ns_ = input.vehicle.stamp_ns;
   return mode_manager_.update(input.vehicle);
 }
 Prediction Planner::compute_goal(const ControllerInput & input, const GoalState & goal)
@@ -341,7 +585,7 @@ Prediction Planner::continue_alignment(const ControllerInput & input)
   if (
     input.vehicle.actual_mode != alignment_mode_ ||
     detail::deadline_exceeded(
-      input.vehicle.stamp_s, alignment_start_s_, config_.confirmation_timeout_s)) {
+      input.vehicle.stamp_ns, alignment_start_ns_, config_.confirmation_timeout_s)) {
     out.phase = TransitionPhase::Fault;
     out.failure_reason = FailureReason::TransitionFault;
     return out;
@@ -374,7 +618,10 @@ Prediction Planner::apply_control(const ControllerInput & input, Control control
   if (alignment_control_) {
     alignment_control_ = control;
   }
-  const auto preview = model_.step(input.vehicle, control, config_.dt_s);
+  const auto preview =
+    synchronized_prediction_
+      ? model_.step(input.vehicle, control, config_.model_period_s, *synchronized_prediction_)
+      : model_.step(input.vehicle, control, config_.model_period_s);
   if (!preview.valid) {
     out.failure_reason = FailureReason::ModelFailure;
     return out;
@@ -386,7 +633,7 @@ Prediction Planner::apply_control(const ControllerInput & input, Control control
       alignment_control_ = control;
       alignment_targets_ = preview.prediction.alignment;
       alignment_mode_ = input.vehicle.actual_mode;
-      alignment_start_s_ = input.vehicle.stamp_s;
+      alignment_start_ns_ = input.vehicle.stamp_ns;
       optimizer_.clear_warm_start();
       return continue_alignment(input);
     }
@@ -435,9 +682,12 @@ bool Planner::safe_control(
 {
   if (alignment_control_ && !mode_manager_.active() && !input.vehicle.mode_confirmed) {
     safety_rollout_.generate_alignment_continuation(
-      input.vehicle, control, alignment_targets_, safety_trace_);
+      input.vehicle, control, alignment_targets_, safety_trace_,
+      synchronized_prediction_ ? &*synchronized_prediction_ : nullptr);
   } else {
-    safety_rollout_.generate_continuation(input.vehicle, branch, control, safety_trace_);
+    safety_rollout_.generate_continuation(
+      input.vehicle, branch, control, safety_trace_,
+      synchronized_prediction_ ? &*synchronized_prediction_ : nullptr);
   }
   return validator_->check(input, safety_trace_) == TrajectoryStatus::Valid &&
          is_stopped(safety_trace_.final_state, config_);
@@ -461,7 +711,9 @@ Prediction Planner::check_stopping(const ControllerInput & input, Prediction out
       ? alignment_targets_
     : out.action == Action::Brake ? input.vehicle.steering_angles
                                   : out.steering_targets;
-  safety_rollout_.generate_stopping_interval(input.vehicle, target, safety_trace_);
+  safety_rollout_.generate_stopping_interval(
+    input.vehicle, target, safety_trace_,
+    synchronized_prediction_ ? &*synchronized_prediction_ : nullptr);
   if (
     validator_->check(input, safety_trace_) == TrajectoryStatus::Valid &&
     is_stopped(safety_trace_.final_state, config_)) {
@@ -482,10 +734,19 @@ void Planner::reset()
 {
   optimizer_.reset();
   mode_manager_.reset();
-  last_stamp_s_ = -1.0;
+  last_stamp_ns_ = kInvalidTimestamp;
+  last_planning_stamp_ns_ = kInvalidTimestamp;
+  warm_start_stamp_ns_ = kInvalidTimestamp;
   last_drive_control_.reset();
   alignment_control_.reset();
   path_manager_.reset();
   goal_manager_.reset();
+  issued_command_.reset();
+  synchronized_prediction_.reset();
+  active_control_.reset();
+  prediction_history_status_ = PredictionHistoryStatus::ColdStart;
+  motion_assessment_ = {};
+  fault_latched_ = false;
+  latched_reason_ = FailureReason::None;
 }
 }  // namespace swerve_mppi::detail

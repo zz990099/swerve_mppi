@@ -40,8 +40,18 @@ continuation check; only actual measured confirmation releases the live Drive ga
 The actual accepted steering receipt remains immutable for explicit mode requests.
 
 Prediction uses ideal sampled targets and encoder-derived motion, not Gazebo servo,
-contact or slip dynamics. Stage 3 handles observation uncertainty, asynchronous time
-and command-history reconciliation before this can be treated as a live integration.
+contact or slip dynamics. Integer source stamps, bounded asynchronous pairing and
+optional independent body-motion bounds are admitted before planning. Reconciled
+command history supplies hidden limited-velocity/joint context to optimization,
+preview and stopping checks; unknown or uncertain history remains an explicit cold
+assumption rather than fabricated feedback.
+
+The planner separates `planning_period_s`, `model_period_s` and `chassis_period_s`.
+Warm starts advance by elapsed model intervals. Source observation, decision,
+publication, application and expiry timestamps have separate fields and are never
+rewritten to appear current. Clock, feedback, motion, compute and transition faults
+latch; live callers recover only through `Controller::recover` with fresh coherent
+feedback. `reset` is reserved for a deliberate offline restart.
 
 The test-only `NominalChassis` in `tests/fixtures/chassis_fixture.hpp` supplies
 measured acknowledgements to offline loops. It shares nominal target calculation

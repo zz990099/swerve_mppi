@@ -71,7 +71,7 @@ void test_complete_profile_and_locale()
     std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
   same(Config{}, parse_config_profile(defaults));
   const auto & schema = config_schema();
-  check(schema.size() == 70, "update the complete parameter schema when Config changes");
+  check(schema.size() == 79, "update the complete parameter schema when Config changes");
   const auto values = config_parameters(original);
   for (std::size_t i = 0; i < schema.size(); ++i) {
     check(
@@ -99,7 +99,7 @@ void test_transactional_loading_and_model()
   check(
     base.max_linear_accel_mps2 == .9 && base.random_seed == 9,
     "loading modified the base configuration");
-  const auto step = DriveModel(configured).step({}, {.5, 0, 0}, configured.dt_s);
+  const auto step = DriveModel(configured).step({}, {.5, 0, 0}, configured.model_period_s);
   check(
     step.valid && step.state.velocity.vx > 0 && step.state.velocity.vx <= .02 + 1e-9,
     "loaded acceleration does not reach the actual model");
@@ -122,12 +122,14 @@ void test_rejected_profiles()
     rejects([&] { parse_config_profile(text); }, "configuration line 1");
   }
   for (const auto text :
-       {"dt_s = nan", "dt_s = inf", "dt_s = 1e309", "dt_s = 1e-400", "dt_s = +-1", "dt_s = .1junk",
-        "dt_s = 0x1p0", "dt_s =", "dt_s: .1", "dt_s = .1 = .2"}) {
+       {"model_period_s = nan", "model_period_s = inf", "model_period_s = 1e309",
+        "model_period_s = 1e-400", "model_period_s = +-1", "model_period_s = .1junk",
+        "model_period_s = 0x1p0", "model_period_s =", "model_period_s: .1",
+        "model_period_s = .1 = .2"}) {
     rejects([&] { parse_config_profile(text); }, "configuration line 1");
   }
   rejects([] { parse_config_profile("# first\nunknown_limit = 1"); }, "configuration line 2");
-  rejects([] { parse_config_profile("dt_s=.1\ndt_s=.2"); }, "duplicate");
+  rejects([] { parse_config_profile("model_period_s=.1\nmodel_period_s=.2"); }, "duplicate");
   for (const auto old_key :
        {"max_linear_decel_mps2=1", "max_angular_decel_radps2=1",
         "drive_kinematic_tolerance_mps=.02"}) {
@@ -135,15 +137,17 @@ void test_rejected_profiles()
   }
   rejects([] { parse_config_profile("goal_position_tolerance_m = .5"); }, "invalid");
   rejects([] { parse_config_profile(std::string(65537, '#')); }, "64 KiB");
-  const char nul[] = "dt_s=.1\0junk";
+  const char nul[] = "model_period_s=.1\0junk";
   rejects([&] { parse_config_profile(std::string_view(nul, sizeof(nul) - 1)); }, "line 1");
   rejects([] { with_config_parameters({}, {{"random_seed", 42.0}}); }, "random_seed");
-  rejects([] { with_config_parameters({}, {{"dt_s", std::uint64_t{1}}}); }, "dt_s");
+  rejects(
+    [] { with_config_parameters({}, {{"model_period_s", std::uint64_t{1}}}); }, "model_period_s");
   rejects(
     [] { with_config_parameters({}, {{"max_vx_mps", std::numeric_limits<double>::infinity()}}); },
     "max_vx_mps");
   rejects(
-    [] { with_config_parameters({}, std::vector<ConfigParameter>(71, {"dt_s", .1})); }, "too many");
+    [] { with_config_parameters({}, std::vector<ConfigParameter>(80, {"model_period_s", .1})); },
+    "too many");
 }
 
 void test_live_budget_admission()
@@ -159,9 +163,9 @@ void test_live_budget_admission()
   for (double maximum : {0.0, -1.0, 1.1, std::numeric_limits<double>::quiet_NaN()}) {
     rejects([&] { validate_live_config(c, maximum); }, "live configuration");
   }
-  c.dt_s = std::numeric_limits<double>::denorm_min();
+  c.planning_period_s = std::numeric_limits<double>::denorm_min();
   c.compute_budget_ratio = .1;
-  rejects([&] { validate_live_config(c); }, "representable");
+  rejects([&] { validate_live_config(c); }, "timing");
 }
 }  // namespace
 int main()

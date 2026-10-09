@@ -20,7 +20,7 @@ private:
   AcceptedModeRequest request_;
   std::optional<AcceptedModeRequest> accepted_request_;
   std::uint64_t last_request_id_ = 0;
-  double start_s_ = 0.0;
-  double last_stamp_s_ = -1.0;
+  TimestampNs start_ns_ = 0;
+  TimestampNs last_stamp_ns_ = kInvalidTimestamp;
 };
 }  // namespace swerve_mppi::detail

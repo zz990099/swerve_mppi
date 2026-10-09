@@ -19,7 +19,7 @@ int main(int argc, char ** argv)
     VehicleState state;
     int mode, request;
     Control u, entry;
-    std::cin >> state.stamp_s >> mode >> u.vx >> u.vy >> u.wz >> request >> entry.vx >> entry.vy >>
+    std::cin >> state.stamp_ns >> mode >> u.vx >> u.vy >> u.wz >> request >> entry.vx >> entry.vy >>
       entry.wz;
     state.actual_mode = static_cast<DriveMode>(mode);
     for (double & angle : state.steering_angles) std::cin >> angle;
@@ -32,8 +32,8 @@ int main(int argc, char ** argv)
     if (request) {
       memory.phase = TransitionPhase::Braking;
       memory.alignment = model.steering_for_entry(state.actual_mode, entry, state.steering_angles);
-      memory.transition_start_s = state.stamp_s;
-      memory.aligned_since_s = -1;
+      memory.transition_start_ns = state.stamp_ns;
+      memory.aligned_since_ns = -1;
     }
     const auto next = model.step(state, u, dt, memory);
     if (!next.valid) return 1;

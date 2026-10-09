@@ -5,16 +5,17 @@ spin and crab modes. The controller samples velocity sequences within mode branc
 predicts transition costs, checks trajectories and returns body velocity with an
 optional explicit mode request. It waits for measured mode confirmation before driving.
 
-Version 0.23 completes the current-chassis prediction stage. The core predicts the
-Python chassis's body saturation, independent wheel ramps, ordinary zero and frozen
-brake/align/dwell behavior. The old joint interpolation and proportional brake laws
-are removed. Public output remains velocity and explicit mode intent, with no joint
-execution or transport compatibility interfaces.
+Version 0.24 completes observation, timing and fault preparation. Public source time
+uses integer nanoseconds. Observation, computation, publication, application and
+expiry remain distinct; bounded pairing, freshness and command-history evidence
+replace exact timestamp equality. Runtime clock, feedback, motion, compute and
+transition faults latch until a fresh observation passes `Controller::recover`.
 
-Prediction assumes ideal target tracking at the chassis period. Cold observations
-do not reveal the chassis's hidden command history; asynchronous observation and
-history reconciliation are stage 3. This is not a completed physical Gazebo integration.
-See the [complete staged plan](docs/PREPARATION_PLAN.md).
+The current Python chassis mechanics remain covered by 7,960 direct command-cycle
+comparisons. Prediction can carry reconciled hidden command state when the caller
+reports a precise prior application; missing or bounded-uncertain application stays
+explicit and cold-seeded. This is not a completed ROS/Gazebo integration. See the
+[complete staged plan](docs/PREPARATION_PLAN.md).
 
 ## Build and test
 
@@ -37,21 +38,24 @@ commit; ordinary library builds do not require it.
 Consumers use the installed CMake package:
 
 ```cmake
-find_package(swerve_mppi 0.23 CONFIG REQUIRED)
+find_package(swerve_mppi 0.24 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
 ## Use
 
-Provide measured state, an ordered path and obstacles to `Controller::compute`.
+Provide measured state, its source timestamp, a decision timestamp, an ordered path
+and obstacles to `Controller::compute`.
 A present command contains the requested mode, body-frame target velocity and an
 optional mode request. A present zero velocity is an ordinary hold/brake intent.
 An absent command provides no motion authorization; the caller must stop sending
-motion commands and handle the chassis stop/fault policy. Never reuse an old drive.
+motion commands and handle the chassis stop/fault policy. Record publication with
+`set_publication_stamp`, enforce `command_valid_at`, and report the prior publication
+and application window on the next input. Never reuse an old drive.
 
 The core does not publish ROS messages, operate wheel joints, run a watchdog or
-confirm the physical completion of a mode change. The future adapter will translate
-this output to the current chassis interface and enforce message freshness.
+confirm the physical completion of a mode change. Stage 4 will translate this output
+to the current chassis interface and exercise message sequences offline.
 
 - [Architecture](ARCHITECTURE.md)
 - [Command and observation contract](docs/CHASSIS_COMMAND.md)
