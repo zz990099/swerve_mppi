@@ -1,4 +1,5 @@
 add_subdirectory(common)
+add_subdirectory(adapter)
 add_subdirectory(model)
 add_subdirectory(navigation)
 add_subdirectory(planning)

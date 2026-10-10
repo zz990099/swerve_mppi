@@ -48,6 +48,12 @@ age and future bounds; application time is not part of snapshot construction. Th
 adapter derives nominal velocity from encoders, so that identity still does not prove
 absence of physical slip.
 
+The higher current-chassis adapter consumes the existing chassis state and encoder
+odometry DTOs. It recomputes velocity from raw wheel `rad/s` plus measured steering,
+requires both published twists to agree, carries the immutable accepted request and
+derives mode age only from a continuous confirmed sequence. It does not replace the
+generic named-joint adapter or add a second controller ingress.
+
 With benchmarks enabled:
 
 ```bash

@@ -41,5 +41,7 @@ limit. Steering travel is exactly +/- pi/2; unsupported older travel ranges are 
 chassis caps. `capture_linear_decel_mps2` and `capture_angular_decel_radps2` shape
 terminal capture only. They do not simulate chassis zero/braking. Previous body
 brake and affine-residual configuration keys have no aliases and are rejected.
-Stage 4 will compare shared settings with the message adapter. Matching these defaults
-does not establish physical Gazebo tracking or braking accuracy.
+`current_chassis::check_compatibility` and the adapter constructor compare these
+shared settings against a typed current-chassis parameter snapshot and fail startup
+on mismatch. Planner-only parameters are not exchanged. Matching defaults does not
+establish physical Gazebo tracking or braking accuracy.

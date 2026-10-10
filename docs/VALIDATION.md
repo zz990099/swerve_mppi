@@ -9,6 +9,10 @@ nominal stopping/constraints, planning budgets, configuration, public commands a
 feedback diagnostics. Dedicated timing/lifecycle regressions cover bounded source
 pairing, stale/future samples, publication/expiry, exact and uncertain application,
 history divergence, fault latching/recovery and required independent motion.
+Current-interface regressions cover state/odometry pairing, raw wheel conversion,
+mode age, frozen receipts, all three target modes, request retry, same-mode
+realignment, duplicate/out-of-order state, output expiry, bounded application
+evidence and deliberate chassis recovery without ROS or Gazebo.
 Fifteen closed-loop scenarios each run five seeds, including
 straight, lateral, curved, reverse, spin, final yaw, corners, loops, duplicate paths,
 near obstacles and translation starting in Spin.
@@ -41,7 +45,9 @@ command cycles against the C++ predictor, including all six directed mode change
 two wheel limit/ramp sets, signed reversals, saturation, nearest-angle ties, normal
 zero and automatic realignment. It checks every joint target, limited body velocity,
 frozen geometry and transition phase. Both implementations consume the same measured
-sample and actual elapsed interval. Separate core tests hold measured feedback back
+sample and actual elapsed interval. Before those cycles it also checks the pinned
+current command/state field schema and every shared default against the companion
+configuration. Separate core tests hold measured feedback back
 to verify stop-before-align and dwell reset. These tests deliberately exclude ROS,
 watchdogs and physical Gazebo servo/contact dynamics.
 

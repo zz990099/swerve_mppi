@@ -8,6 +8,78 @@ import subprocess
 import sys
 
 
+def simple_yaml(path):
+    sections, section = {}, None
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line:
+            continue
+        if not line.startswith(" "):
+            section = line.removesuffix(":")
+            sections[section] = {}
+            continue
+        key, value = line.strip().split(":", 1)
+        sections[section][key] = value.strip().strip('"')
+    return sections
+
+
+def message_fields(path):
+    fields = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line and "=" not in line:
+            fields.append(" ".join(line.split()))
+    return fields
+
+
+def validate_contract(tool, root):
+    command = message_fields(root / "msg/ChassisCommand.msg")
+    state = message_fields(root / "msg/ChassisState.msg")
+    assert command == [
+        "std_msgs/Header header", "uint8 mode", "geometry_msgs/Twist velocity",
+        "uint64 request_id", "geometry_msgs/Twist entry_velocity",
+    ], command
+    assert state == [
+        "std_msgs/Header header", "uint64 request_id", "uint8 actual_mode",
+        "uint8 requested_mode", "uint8 phase", "bool confirmed", "uint8 fault",
+        "geometry_msgs/Twist velocity", "float64[4] steering_angles",
+        "float64[4] wheel_speeds", "geometry_msgs/Twist accepted_entry_velocity",
+        "float64[4] accepted_steering",
+    ], state
+
+    resolved = subprocess.run(
+        [tool, "--print-interface"], text=True, capture_output=True, check=True
+    ).stdout
+    core = dict(line.split("=", 1) for line in resolved.splitlines())
+    core = {key: float(value) for key, value in core.items()}
+    cfg = simple_yaml(root / "config/swerve.yaml")
+    geometry, control = cfg["geometry"], cfg["control"]
+    radius = float(geometry["wheel_radius"])
+    expected = {
+        "wheelbase_m": float(geometry["wheelbase"]),
+        "track_m": float(geometry["track_width"]),
+        "wheel_radius_m": radius,
+        "chassis_period_s": 1.0 / float(control["update_rate"]),
+        "max_wheel_speed_mps": float(control["max_wheel_speed"]) * radius,
+        "max_wheel_accel_mps2": float(control["max_wheel_acceleration"]) * radius,
+        "max_steer_rate_radps": float(control["max_steering_rate"]),
+        "steering_limit_rad": float(control["steering_limit"]),
+        "chassis_max_linear_speed_mps": float(control["max_linear_speed"]),
+        "chassis_max_angular_speed_radps": float(control["max_angular_speed"]),
+        "max_linear_accel_mps2": float(control["max_linear_acceleration"]),
+        "max_angular_accel_radps2": float(control["max_angular_acceleration"]),
+        "drive_steering_limit_rad": float(control["drive_steering_limit"]),
+        "steering_tolerance_rad": float(control["steering_alignment_tolerance"]),
+        "alignment_min_s": float(control["steering_alignment_duration"]),
+        "confirmation_timeout_s": float(control["mode_switch_timeout"]),
+        "stopped_wheel_speed_mps": float(control["stopped_wheel_speed"]) * radius,
+    }
+    assert set(core) == set(expected) | {"command_lifetime_s"}, core
+    for key, value in expected.items():
+        assert abs(core[key] - value) <= 1e-12 * max(1.0, abs(value)), (key, core[key], value)
+    assert core["command_lifetime_s"] <= float(control["cmd_timeout"])
+
+
 def run(tool, root, wheel_cap, wheel_accel):
     sys.path.insert(0, str(root))
     from swerve_gazebo_sim.chassis import Chassis, Command, Mode, Phase
@@ -87,6 +159,7 @@ def main():
     args = parser.parse_args()
     root = Path(args.chassis_root)
     assert (root / 'swerve_gazebo_sim/chassis.py').is_file(), 'current companion source is required'
+    validate_contract(args.tool, root)
     count = sum(run(args.tool, root, cap, accel) for cap, accel in ((2., 4.), (.2, .4)))
     print(f'{count} Python/core command-cycle comparisons passed (six directed mode changes, two limit sets)')
 

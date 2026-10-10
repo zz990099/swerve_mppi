@@ -1,11 +1,33 @@
 #include <iomanip>
 #include <iostream>
+#include <string>
 
 #include "swerve_mppi/model/model.hpp"
 using namespace swerve_mppi;
 int main(int argc, char ** argv)
 {
   Config c;
+  if (argc == 2 && std::string(argv[1]) == "--print-interface") {
+    std::cout << std::setprecision(17) << "wheelbase_m=" << c.wheelbase_m << '\n'
+              << "track_m=" << c.track_m << '\n'
+              << "wheel_radius_m=" << c.wheel_radius_m << '\n'
+              << "chassis_period_s=" << c.chassis_period_s << '\n'
+              << "max_wheel_speed_mps=" << c.max_wheel_speed_mps << '\n'
+              << "max_wheel_accel_mps2=" << c.max_wheel_accel_mps2 << '\n'
+              << "max_steer_rate_radps=" << c.max_steer_rate_radps << '\n'
+              << "steering_limit_rad=" << c.steering_limit_rad << '\n'
+              << "chassis_max_linear_speed_mps=" << c.chassis_max_linear_speed_mps << '\n'
+              << "chassis_max_angular_speed_radps=" << c.chassis_max_angular_speed_radps << '\n'
+              << "max_linear_accel_mps2=" << c.max_linear_accel_mps2 << '\n'
+              << "max_angular_accel_radps2=" << c.max_angular_accel_radps2 << '\n'
+              << "drive_steering_limit_rad=" << c.drive_steering_limit_rad << '\n'
+              << "steering_tolerance_rad=" << c.steering_tolerance_rad << '\n'
+              << "alignment_min_s=" << c.alignment_min_s << '\n'
+              << "confirmation_timeout_s=" << c.confirmation_timeout_s << '\n'
+              << "stopped_wheel_speed_mps=" << c.stopped_wheel_speed_mps << '\n'
+              << "command_lifetime_s=" << c.command_lifetime_s << '\n';
+    return 0;
+  }
   if (argc == 3) {
     c.max_wheel_speed_mps = std::stod(argv[1]);
     c.max_wheel_accel_mps2 = std::stod(argv[2]);

@@ -57,8 +57,10 @@ requires a newer coherent observation; `reset` is an unconditional offline resta
 `planning_period_s` controls the compute budget, `model_period_s` the rollout grid and
 `chassis_period_s` the command-mechanics substeps.
 
-The stage-4 current-interface adapter must retain the chassis's accepted request ID
-and entry velocity on ordinary drive/hold packets, pair state with odometry, and
-reject stale results. These wire responsibilities are not implemented by Controller.
-The algorithm may propose a mode change; actual braking, steering and confirmation
-belong to the chassis. No joint execution API is installed by this package.
+`current_chassis::Adapter` retains the chassis's accepted request ID and entry
+velocity on ordinary drive/hold packets, pairs state with odometry and rejects stale
+results. It accepts explicit publication/application evidence; it never derives an
+exact application time from a state message that lacks MPPI command identity. These
+wire responsibilities remain outside `Controller`. The algorithm may propose a mode
+change; actual braking, steering and confirmation belong to the chassis. No joint
+execution API is installed by this package.

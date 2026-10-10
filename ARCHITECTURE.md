@@ -7,6 +7,7 @@ ROS, chassis execution and transport protocols are external responsibilities.
 | Module | Responsibility |
 | --- | --- |
 | `common` | Value types, validated configuration and planning budgets |
+| `adapter` | Current chassis wire DTO validation, state mapping and command serialization |
 | `navigation` | Ordered path progress, local target and measured goal completion |
 | `planning` | MPPI optimization, noise, critics, mode selection and request tracking |
 | `model` | Kinematics, velocity rollout, transition and stopping predictions |
@@ -61,7 +62,9 @@ is not an independent validation of chassis command generation.
 The separate Python parity test invokes the actual companion `Chassis` class. A separate perturbed plant
 in `motion_fixture.hpp` measures the nominal model's lag/slip/noise limitations.
 
-Production does not build, import or execute the Gazebo repository. CI checks out
-a pinned companion revision solely for the optional offline Python parity test. A future
-ROS adapter belongs on the algorithm side and will communicate only through the
-current body-command and chassis-state messages. See the [roadmap](docs/PREPARATION_PLAN.md).
+Production does not build, import or execute the Gazebo repository. The installed
+current-chassis adapter is ROS-independent and owns no transport. CI checks out a
+pinned companion revision solely for the optional offline Python parity test. A
+future ROS package belongs on the algorithm side and will mechanically copy the
+current adapter DTOs to body-command, chassis-state and odometry messages. See the
+[roadmap](docs/PREPARATION_PLAN.md).

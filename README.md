@@ -5,11 +5,11 @@ spin and crab modes. The controller samples velocity sequences within mode branc
 predicts transition costs, checks trajectories and returns body velocity with an
 optional explicit mode request. It waits for measured mode confirmation before driving.
 
-Version 0.24 completes observation, timing and fault preparation. Public source time
-uses integer nanoseconds. Observation, computation, publication, application and
-expiry remain distinct; bounded pairing, freshness and command-history evidence
-replace exact timestamp equality. Runtime clock, feedback, motion, compute and
-transition faults latch until a fresh observation passes `Controller::recover`.
+Version 0.25 adds the ROS-independent adapter for the current Python chassis
+command/state schema. It maps state plus odometry into the core, converts wheel
+`rad/s` to rolling `m/s`, preserves frozen mode receipts, rejects stale output and
+validates only parameters shared with the chassis. Publication/application evidence
+stays explicit because the current state message does not echo an MPPI command ID.
 
 The current Python chassis mechanics remain covered by 7,960 direct command-cycle
 comparisons. Prediction can carry reconciled hidden command state when the caller
@@ -38,7 +38,7 @@ commit; ordinary library builds do not require it.
 Consumers use the installed CMake package:
 
 ```cmake
-find_package(swerve_mppi 0.24 CONFIG REQUIRED)
+find_package(swerve_mppi 0.25 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
 
@@ -49,16 +49,19 @@ and obstacles to `Controller::compute`.
 A present command contains the requested mode, body-frame target velocity and an
 optional mode request. A present zero velocity is an ordinary hold/brake intent.
 An absent command provides no motion authorization; the caller must stop sending
-motion commands and handle the chassis stop/fault policy. Record publication with
-`set_publication_stamp`, enforce `command_valid_at`, and report the prior publication
-and application window on the next input. Never reuse an old drive.
+motion commands and handle the chassis stop/fault policy. Generic integrations record
+publication with `set_publication_stamp`, enforce `command_valid_at`, and report the
+prior publication and application window on the next input. Current-chassis integrations
+instead use the adapter's two-step `make_command` and `record_application` contract.
+Never reuse an old drive.
 
-The core does not publish ROS messages, operate wheel joints, run a watchdog or
-confirm the physical completion of a mode change. Stage 4 will translate this output
-to the current chassis interface and exercise message sequences offline.
+The core does not publish ROS messages, operate wheel joints or run a watchdog.
+`current_chassis::Adapter` supplies transport-free current-message DTOs, validation
+and mapping; a later algorithm-side ROS package will perform the mechanical ROS copy.
 
 - [Architecture](ARCHITECTURE.md)
 - [Command and observation contract](docs/CHASSIS_COMMAND.md)
+- [Current chassis offline adapter](docs/CURRENT_CHASSIS_ADAPTER.md)
 - [Configuration](docs/CONFIGURATION.md)
 - [Navigation](docs/NAVIGATION.md)
 - [Model and feedback limits](docs/MODEL_FEEDBACK.md)

@@ -1,3 +1,4 @@
+#include "swerve_mppi/adapter/current_chassis.hpp"
 #include "swerve_mppi/common/config_profile.hpp"
 #include "swerve_mppi/feedback/feedback_adapter.hpp"
 #include "swerve_mppi/feedback/motion_observer.hpp"
@@ -37,11 +38,12 @@ int main()
   const auto motion =
     MotionObserver(config).assess({}, 0, MotionObservation{{}, 0, MotionSource::IndependentBody});
   const auto missing = FeedbackAdapter(config).make({}, {}, {}, 0);
+  const auto compatible = current_chassis::check_compatibility(Config{}, {});
   return hold.command && hold.command->target_velocity.vx == 0 && !hold.command->mode_request &&
              !rejected.command && stop.valid && restored.random_seed == 7 &&
              restored.max_linear_accel_mps2 == .5 &&
              motion.status == MotionStatus::NominalAgreement &&
-             missing.error == SnapshotError::InvalidTime
+             missing.error == SnapshotError::InvalidTime && compatible.compatible()
            ? 0
            : 1;
 }
