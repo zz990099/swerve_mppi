@@ -1,0 +1,9 @@
+# Supplied by an executor/evidence producer, in the simulation clock domain.
+# Do not derive exact application time from ROS message arrival.
+uint64 command_id
+builtin_interfaces/Time published_stamp
+builtin_interfaces/Time earliest_application
+builtin_interfaces/Time latest_application
+---
+bool accepted
+string message

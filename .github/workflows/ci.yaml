@@ -1,4 +1,4 @@
-name: CMake core
+name: Core and ROS integration
 
 on:
   push:
@@ -92,18 +92,18 @@ jobs:
         run: python -m pip install colcon-common-extensions==0.3.0
       - name: Discover the plain CMake core package
         run: |
-          colcon list --base-paths .
-          test "$(colcon list --base-paths . --names-only)" = swerve_mppi_core
+          colcon list --base-paths swerve_mppi_core
+          test "$(colcon list --base-paths swerve_mppi_core --names-only)" = swerve_mppi_core
       - name: Build and install the core with colcon
         run: >-
-          colcon build --base-paths . --packages-select swerve_mppi_core
+          colcon build --base-paths swerve_mppi_core --packages-select swerve_mppi_core
           --event-handlers console_direct+
           --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror
       - name: Test colcon's CTest integration
         run: |
           colcon test --packages-select swerve_mppi_core --return-code-on-test-failure --event-handlers console_direct+ --ctest-args -R 'configuration_regressions|current_chassis_regressions|installed_consumer'
           colcon test-result --all --verbose
-          test "$(colcon list --base-paths . --names-only)" = swerve_mppi_core
+          test "$(colcon list --base-paths swerve_mppi_core --names-only)" = swerve_mppi_core
       - name: Consume only the colcon install prefix
         shell: bash
         run: |
@@ -111,3 +111,37 @@ jobs:
           cmake -S swerve_mppi_core/tests/consumer -B build-consumer -DCMAKE_BUILD_TYPE=Release
           cmake --build build-consumer --parallel 2
           ctest --test-dir build-consumer --output-on-failure
+
+  ros:
+    runs-on: ubuntu-24.04
+    container: ros:jazzy-ros-base
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: zz990099/swerve_gazebo_sim
+          ref: 9358c96884d7fa4866cea7c053daa7a7cec82d8f
+          path: companion-chassis
+      - name: Install build and test dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends cmake python3-colcon-common-extensions ros-jazzy-rclcpp-lifecycle ros-jazzy-ament-cmake-gtest ros-jazzy-ament-cmake-python ros-jazzy-rosidl-default-generators
+      - name: Build companion current-message contract
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --base-paths companion-chassis --packages-select swerve_gazebo_sim --cmake-args -DBUILD_TESTING=OFF
+      - name: Discover and build both algorithm packages
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/local_setup.bash
+          test "$(colcon list --base-paths swerve_mppi_core swerve_mppi_ros --names-only | sort | tr '\n' ' ')" = 'swerve_mppi_core swerve_mppi_ros '
+          colcon build --base-paths swerve_mppi_core swerve_mppi_ros --packages-up-to swerve_mppi_ros --event-handlers console_direct+ --cmake-args -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror
+      - name: Test native ROS lifecycle and transport
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/local_setup.bash
+          colcon test --packages-select swerve_mppi_ros --return-code-on-test-failure --event-handlers console_direct+
+          colcon test-result --all --verbose

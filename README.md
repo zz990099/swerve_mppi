@@ -5,10 +5,10 @@ spin and crab modes. The controller samples velocity sequences within mode branc
 predicts transition costs, checks trajectories and returns body velocity with an
 optional explicit mode request. It waits for measured mode confirmation before driving.
 
-Version 0.26 moves the standalone core into `swerve_mppi_core/` and unifies its
-CMake and colcon package identity as `swerve_mppi_core`. The core remains plain
+Version 0.27 adds `swerve_mppi_ros/`: a Jazzy lifecycle node consuming the installed
+public interface of `swerve_mppi_core/`. The unchanged 0.26 core remains plain
 CMake with no ROS dependencies. Repository-wide documentation and developer tools
-stay at the root; `swerve_mppi_ros/` will be added with the ROS integration stage.
+stay at the root. Task handling and transport belong to the ROS package.
 
 The current-chassis adapter maps state plus odometry, converts wheel `rad/s` to
 rolling `m/s`, preserves frozen mode receipts, rejects stale output and validates
@@ -18,7 +18,8 @@ the state message does not echo an MPPI command ID.
 The current Python chassis mechanics remain covered by 7,960 direct command-cycle
 comparisons. Prediction can carry reconciled hidden command state when the caller
 reports a precise prior application; missing or bounded-uncertain application stays
-explicit and cold-seeded. This is not a completed ROS/Gazebo integration. See the
+explicit and cold-seeded. ROS transport is implemented; physical execution evidence,
+calibration and closed-loop Gazebo acceptance remain stage 5C. See the
 [complete staged plan](docs/PREPARATION_PLAN.md).
 
 ## Build and test
@@ -75,11 +76,14 @@ Never reuse an old drive.
 
 The core does not publish ROS messages, operate wheel joints or run a watchdog.
 `current_chassis::Adapter` supplies transport-free current-message DTOs, validation
-and mapping; a later algorithm-side ROS package will perform the mechanical ROS copy.
+and mapping; `swerve_mppi_ros` performs the mechanical ROS copy and publication gating.
+See [ROS integration and lifecycle operation](docs/ROS_INTEGRATION.md) for Jazzy
+build commands, task inputs, application evidence and recovery.
 
 - [Architecture](ARCHITECTURE.md)
 - [Command and observation contract](docs/CHASSIS_COMMAND.md)
 - [Current chassis offline adapter](docs/CURRENT_CHASSIS_ADAPTER.md)
+- [ROS integration](docs/ROS_INTEGRATION.md)
 - [Configuration](docs/CONFIGURATION.md)
 - [Navigation](docs/NAVIGATION.md)
 - [Model and feedback limits](docs/MODEL_FEEDBACK.md)

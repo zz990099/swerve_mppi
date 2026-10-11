@@ -12,7 +12,7 @@ iteration, test it, and push directly to main before starting the next stage.
 | 3. Observation, timing and faults | Complete in 0.24 | Use integer-nanosecond source time; separate observation/decision/publication/application/expiry; bound pairing, age, motion evidence and history; latch runtime faults; recover deliberately; separate planning/model/chassis periods and elapsed warm-start shifts |
 | 4. Current interface offline adapter | Complete in 0.25 | Map rad/s to m/s, modes, request IDs, frozen receipts and conservative mode age; retain accepted ID/entry on ordinary drive/hold; reject stale outputs; compare only shared chassis parameters; test message sequences without running ROS/Gazebo |
 | 5A. Package/build boundaries | Complete in 0.26 | Move the standalone core into `swerve_mppi_core/`, unify installed/package names, preserve behavior, verify standalone CMake and colcon without ROS |
-| 5B. ROS integration | Next | Add `swerve_mppi_ros/` consuming the installed core; implement message conversion, pairing, parameters, lifecycle, clock and valid command publication; add ROS CI |
+| 5B. ROS integration | Complete in 0.27 | Add `swerve_mppi_ros/` consuming the installed core; implement message conversion, pairing, actual chassis parameter queries, lifecycle, clock and valid command publication; add native Jazzy transport tests and ROS CI |
 | 5C. Physical validation | Pending | Measure delay/response/stopping; validate straight/crab/spin, transitions, paths, obstacles and injected faults with quantitative traces |
 | 6. Nav2 integration | Pending | Add a separately packaged Nav2 controller wrapper after standalone physical acceptance |
 
@@ -84,7 +84,7 @@ relocated install prefix, and CI verifies discovery/build/test/consumption throu
 colcon without a ROS distribution. Algorithm behavior and chassis protocols stay
 unchanged.
 
-## Next: stage 5B
+## Completed: stage 5B
 
 1. Add a separate algorithm-side ROS 2 package. Keep the core and current-chassis
    adapter ROS-independent; ROS message copying, QoS, topic names and lifecycle live
@@ -98,6 +98,16 @@ unchanged.
 4. Add ROS message/lifecycle/clock/publication regressions and a colcon CI job for
    both packages. Verify that the ROS package only consumes the installed public
    core interface and declares its dependency explicitly.
+
+The wrapper never synthesizes application acknowledgement. A publication metadata
+topic and an explicit evidence service gate subsequent planning; current Gazebo
+messages alone cannot close this gate. An explicit obstacle snapshot is required,
+including an empty one in a verified obstacle-free scene. Runtime faults stop normal
+publication and require deactivate/cleanup/configure with a fresh stopped observation.
+The chassis-only recovery service retries an immutable zero request before that
+reconfiguration. Clock rollback cannot be cleared by ordinary reactivation. The
+unconfigured launch does not create fake task, obstacle or execution evidence.
+See `ROS_INTEGRATION.md` for the wire contract and acceptance scope.
 
 ## Following: stage 5C
 
@@ -113,7 +123,7 @@ unchanged.
 
 ## Remaining sequence
 
-Stage 5B adds ROS integration; stage 5C validates physical closed loops. The Gazebo
+Stage 5C validates physical closed loops; stage 6 adds Nav2 integration. The Gazebo
 repository continues to contain only the
 chassis plant and its execution logic. ROS task/path/obstacle handling and later Nav2
 integration belong to the algorithm-side adapter. Measure physical tracking and

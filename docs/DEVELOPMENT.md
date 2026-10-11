@@ -31,12 +31,18 @@ source install/local_setup.bash
 Do not share a build directory between these workflows. Out-of-source CMake builds
 write `COLCON_IGNORE` into their build directory so installed-consumer fixtures are
 not rediscovered as duplicate source packages. Colcon recognizes the core
-as a plain `cmake` package and needs no ROS distribution. Add the actual ROS package
-in stage 5B; it will use `ament_cmake` and declare a dependency on the core. Nav2
+as a plain `cmake` package and needs no ROS distribution. The separate
+`swerve_mppi_ros` package uses `ament_cmake`, declares its core dependency and links
+the installed `swerve_mppi::core` target. See `ROS_INTEGRATION.md` for the Jazzy
+workspace workflow and ROS regression tests. Nav2
 integration follows physical acceptance and will have its own dependency boundary.
 
 Code and documentation use English. C++ formatting uses the unchanged official
 ROS Rolling ament configuration and pinned tooling:
+
+Run the formatter in a separate developer virtual environment without ROS
+`PYTHONPATH` overrides, so the distribution's ament modules do not shadow the pinned
+Rolling tool package.
 
 ```bash
 python3 -m pip install -r tools/requirements-format.txt

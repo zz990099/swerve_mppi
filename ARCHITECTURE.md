@@ -10,10 +10,17 @@ offline benchmarks. Its `package.xml` declares build type `cmake` for colcon dis
 and dependency ordering, without adding ROS or ament dependencies. Standalone callers
 use `find_package(swerve_mppi_core CONFIG REQUIRED)` and `swerve_mppi::core`.
 
-The next stage adds `swerve_mppi_ros/` for ROS transport, lifecycle and parameters.
-It will consume the installed core target, with no source inclusion or private-header
+`swerve_mppi_ros/` supplies ROS transport, lifecycle and parameters.
+It consumes the installed core target, with no source inclusion or private-header
 access. Dependencies flow from the ROS package to the core. The repository root owns
 documentation, format tooling and CI; it has no umbrella CMake project.
+
+The ROS node queries the live chassis parameter snapshot, pairs bounded source-stamped
+state/odometry, validates planar path/obstacle inputs and publishes only active,
+fresh adapter commands. Application evidence is external and gates the next compute.
+Runtime faults require lifecycle reconfiguration; explicit chassis recovery only
+retries a zero request and never clears planner state automatically. The node does
+not own joint control, simulator clock generation or physics synchronization.
 
 | Module | Responsibility |
 | --- | --- |
