@@ -4,6 +4,17 @@
 and obstacles enter; optional chassis velocity/mode intent and diagnostics leave.
 ROS, chassis execution and transport protocols are external responsibilities.
 
+The repository is organized by independently installed packages. `swerve_mppi_core/`
+contains the plain CMake project, public headers, sources, configuration, tests and
+offline benchmarks. Its `package.xml` declares build type `cmake` for colcon discovery
+and dependency ordering, without adding ROS or ament dependencies. Standalone callers
+use `find_package(swerve_mppi_core CONFIG REQUIRED)` and `swerve_mppi::core`.
+
+The next stage adds `swerve_mppi_ros/` for ROS transport, lifecycle and parameters.
+It will consume the installed core target, with no source inclusion or private-header
+access. Dependencies flow from the ROS package to the core. The repository root owns
+documentation, format tooling and CI; it has no umbrella CMake project.
+
 | Module | Responsibility |
 | --- | --- |
 | `common` | Value types, validated configuration and planning budgets |
@@ -19,7 +30,8 @@ Swerve mode selection adds dwell, switching cost and hysteresis. Private request
 tracking freezes mode entry and waits for the chassis's measured receipt. It does
 not operate steering joints or decide that the real chassis has completed a switch.
 
-Private `Prediction`, action and mode-manager types live under `src/planning/detail`.
+Private `Prediction`, action and mode-manager types live under
+`swerve_mppi_core/src/planning/detail`.
 They are not installed. Measured `AcceptedModeRequest` remains public because the
 planner needs the geometry actually accepted by the chassis. Model APIs can report
 predicted wheel states; application `Output` contains no actuator target arrays.
@@ -54,7 +66,7 @@ rewritten to appear current. Clock, feedback, motion, compute and transition fau
 latch; live callers recover only through `Controller::recover` with fresh coherent
 feedback. `reset` is reserved for a deliberate offline restart.
 
-The test-only `NominalChassis` in `tests/fixtures/chassis_fixture.hpp` supplies
+The test-only `NominalChassis` in `swerve_mppi_core/tests/fixtures/chassis_fixture.hpp` supplies
 measured acknowledgements to offline loops. It shares nominal target calculation
 with DriveModel, while encoder/body integration is independently implemented in
 `behavior_fixture.hpp`. The fixture is not installed or linked into the core and

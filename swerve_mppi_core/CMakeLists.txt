@@ -1,8 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
-project(swerve_mppi_core VERSION 0.25.0 LANGUAGES CXX)
+project(swerve_mppi_core VERSION 0.26.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+
+if(NOT CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_CURRENT_BINARY_DIR)
+  # Installed-consumer fixtures contain package.xml. Keep generated build
+  # artifacts out of subsequent colcon source discovery.
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/COLCON_IGNORE" "")
+endif()
 
 set(SWERVE_MPPI_CHASSIS_SOURCE_DIR "" CACHE PATH "Companion Python chassis checkout for offline parity")
 
@@ -10,25 +16,34 @@ option(SWERVE_MPPI_BUILD_TESTS "Build standalone tests" ON)
 option(SWERVE_MPPI_BUILD_BENCHMARKS "Build standalone measurement tools" OFF)
 option(SWERVE_MPPI_BUILD_FORMAT_TESTS "Check the pinned ROS Rolling C++ format" OFF)
 
+if(SWERVE_MPPI_BUILD_TESTS OR SWERVE_MPPI_BUILD_FORMAT_TESTS)
+  # These package options own test activation. CTest supplies the dashboard
+  # metadata used by colcon's ExperimentalTest invocation.
+  set(BUILD_TESTING ON)
+  include(CTest)
+endif()
+
 if(SWERVE_MPPI_BUILD_FORMAT_TESTS)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
 else()
   find_package(Python3 QUIET COMPONENTS Interpreter)
 endif()
-if(Python3_Interpreter_FOUND)
+set(swerve_mppi_format_tool "${CMAKE_CURRENT_SOURCE_DIR}/../tools/format.py")
+if(SWERVE_MPPI_BUILD_FORMAT_TESTS AND NOT EXISTS "${swerve_mppi_format_tool}")
+  message(FATAL_ERROR "Format tests require the repository-level tools/format.py")
+endif()
+if(Python3_Interpreter_FOUND AND EXISTS "${swerve_mppi_format_tool}")
   add_custom_target(format
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/format.py --fix
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMAND ${Python3_EXECUTABLE} "${swerve_mppi_format_tool}" --fix
     COMMENT "Apply the official ROS Rolling format")
   add_custom_target(format_check
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/format.py --check
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMAND ${Python3_EXECUTABLE} "${swerve_mppi_format_tool}" --check
     COMMENT "Check the official ROS Rolling format")
 endif()
 if(SWERVE_MPPI_BUILD_FORMAT_TESTS)
   enable_testing()
   add_test(NAME ros_format
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/format.py --check)
+    COMMAND ${Python3_EXECUTABLE} "${swerve_mppi_format_tool}" --check)
   set_tests_properties(ros_format PROPERTIES TIMEOUT 60)
 endif()
 
@@ -120,32 +135,32 @@ if(SWERVE_MPPI_BUILD_BENCHMARKS)
   endif()
 endif()
 
-install(TARGETS swerve_mppi_core EXPORT swerve_mppiTargets
+install(TARGETS swerve_mppi_core EXPORT swerve_mppi_coreTargets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(FILES config/default.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/swerve_mppi)
+install(FILES config/default.conf package.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/swerve_mppi_core)
 
-set(swerve_mppi_package_dir "${CMAKE_INSTALL_LIBDIR}/cmake/swerve_mppi")
+set(swerve_mppi_package_dir "${CMAKE_INSTALL_LIBDIR}/cmake/swerve_mppi_core")
 configure_package_config_file(
-  cmake/swerve_mppiConfig.cmake.in
-  "${CMAKE_CURRENT_BINARY_DIR}/swerve_mppiConfig.cmake"
+  cmake/swerve_mppi_coreConfig.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/swerve_mppi_coreConfig.cmake"
   INSTALL_DESTINATION "${swerve_mppi_package_dir}"
 )
 write_basic_package_version_file(
-  "${CMAKE_CURRENT_BINARY_DIR}/swerve_mppiConfigVersion.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/swerve_mppi_coreConfigVersion.cmake"
   VERSION ${PROJECT_VERSION}
   COMPATIBILITY SameMinorVersion
 )
-install(EXPORT swerve_mppiTargets
+install(EXPORT swerve_mppi_coreTargets
   NAMESPACE swerve_mppi::
   DESTINATION "${swerve_mppi_package_dir}"
 )
 install(FILES
-  "${CMAKE_CURRENT_BINARY_DIR}/swerve_mppiConfig.cmake"
-  "${CMAKE_CURRENT_BINARY_DIR}/swerve_mppiConfigVersion.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/swerve_mppi_coreConfig.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/swerve_mppi_coreConfigVersion.cmake"
   DESTINATION "${swerve_mppi_package_dir}"
 )

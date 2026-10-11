@@ -1,15 +1,19 @@
-# Swerve MPPI Core
+# Swerve MPPI
 
 ROS-independent C++17 MPPI planning for a four-module chassis with dual Ackermann,
 spin and crab modes. The controller samples velocity sequences within mode branches,
 predicts transition costs, checks trajectories and returns body velocity with an
 optional explicit mode request. It waits for measured mode confirmation before driving.
 
-Version 0.25 adds the ROS-independent adapter for the current Python chassis
-command/state schema. It maps state plus odometry into the core, converts wheel
-`rad/s` to rolling `m/s`, preserves frozen mode receipts, rejects stale output and
-validates only parameters shared with the chassis. Publication/application evidence
-stays explicit because the current state message does not echo an MPPI command ID.
+Version 0.26 moves the standalone core into `swerve_mppi_core/` and unifies its
+CMake and colcon package identity as `swerve_mppi_core`. The core remains plain
+CMake with no ROS dependencies. Repository-wide documentation and developer tools
+stay at the root; `swerve_mppi_ros/` will be added with the ROS integration stage.
+
+The current-chassis adapter maps state plus odometry, converts wheel `rad/s` to
+rolling `m/s`, preserves frozen mode receipts, rejects stale output and validates
+shared chassis parameters. Publication/application evidence stays explicit because
+the state message does not echo an MPPI command ID.
 
 The current Python chassis mechanics remain covered by 7,960 direct command-cycle
 comparisons. Prediction can carry reconciled hidden command state when the caller
@@ -22,7 +26,7 @@ explicit and cold-seeded. This is not a completed ROS/Gazebo integration. See th
 Requirements: CMake 3.20+, a C++17 compiler and a CMake-supported build tool.
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S swerve_mppi_core -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
 cmake --install build --prefix "$PWD/install-local"
@@ -38,9 +42,23 @@ commit; ordinary library builds do not require it.
 Consumers use the installed CMake package:
 
 ```cmake
-find_package(swerve_mppi 0.25 CONFIG REQUIRED)
+find_package(swerve_mppi_core 0.26 CONFIG REQUIRED)
 target_link_libraries(my_controller PRIVATE swerve_mppi::core)
 ```
+
+With colcon installed, the same core can be built from the repository root without
+sourcing ROS:
+
+```bash
+colcon build --packages-select swerve_mppi_core --cmake-args -DCMAKE_BUILD_TYPE=Release
+colcon test --packages-select swerve_mppi_core --return-code-on-test-failure
+colcon test-result --all --verbose
+source install/local_setup.bash
+```
+
+Use separate build/install directories when switching between CMake and colcon.
+The repository root has no CMake project. The former `find_package(swerve_mppi)`
+interface is removed; update consumers to the current package name.
 
 ## Use
 

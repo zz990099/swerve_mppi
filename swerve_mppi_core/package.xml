@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>swerve_mppi_core</name>
+  <version>0.26.0</version>
+  <description>ROS-independent C++17 MPPI planning and current chassis contracts.</description>
+  <maintainer email="86543200+zz990099@users.noreply.github.com">zz990099</maintainer>
+  <!-- The repository has not declared a license; this manifest grants none. -->
+  <license>LicenseRef-Unspecified</license>
+  <buildtool_depend>cmake</buildtool_depend>
+  <export>
+    <build_type>cmake</build_type>
+  </export>
+</package>

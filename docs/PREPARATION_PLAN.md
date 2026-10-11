@@ -11,7 +11,10 @@ iteration, test it, and push directly to main before starting the next stage.
 | 2. Current chassis prediction | Complete in 0.23 | Match Python speed/steering limits, normal zero, brake-align-confirm transitions and same-mode realignment; preserve mode dwell/hysteresis and measured acknowledgement; add offline parity tests against current chassis semantics |
 | 3. Observation, timing and faults | Complete in 0.24 | Use integer-nanosecond source time; separate observation/decision/publication/application/expiry; bound pairing, age, motion evidence and history; latch runtime faults; recover deliberately; separate planning/model/chassis periods and elapsed warm-start shifts |
 | 4. Current interface offline adapter | Complete in 0.25 | Map rad/s to m/s, modes, request IDs, frozen receipts and conservative mode age; retain accepted ID/entry on ordinary drive/hold; reject stale outputs; compare only shared chassis parameters; test message sequences without running ROS/Gazebo |
-| 5. ROS and physical integration | Next | Separate algorithm-side ROS package; validate straight/crab/spin and transitions, then paths, obstacles, stopping and delay; add Nav2 wrapper after basic closed-loop acceptance |
+| 5A. Package/build boundaries | Complete in 0.26 | Move the standalone core into `swerve_mppi_core/`, unify installed/package names, preserve behavior, verify standalone CMake and colcon without ROS |
+| 5B. ROS integration | Next | Add `swerve_mppi_ros/` consuming the installed core; implement message conversion, pairing, parameters, lifecycle, clock and valid command publication; add ROS CI |
+| 5C. Physical validation | Pending | Measure delay/response/stopping; validate straight/crab/spin, transitions, paths, obstacles and injected faults with quantitative traces |
+| 6. Nav2 integration | Pending | Add a separately packaged Nav2 controller wrapper after standalone physical acceptance |
 
 ## Completed: stage 2
 
@@ -65,7 +68,23 @@ until measured confirmation. Startup compares shared mechanics and command lifet
 only; planner policies remain algorithm-owned. Transport-free tests cover the current
 message sequence without launching ROS or Gazebo.
 
-## Next: stage 5
+## Completed: stage 5A
+
+Version 0.26 moves the existing CMake project, configuration, public/private code,
+tests and offline benchmarks into `swerve_mppi_core/`. The report utility moves with
+the package so a standalone copy can run all non-format tests. Root documentation,
+format configuration/tooling and CI remain repository-wide. There is no root CMake
+wrapper and no empty ROS package.
+
+The manifest declares plain `cmake` build type. Project, manifest and installed
+CMake config share the name `swerve_mppi_core`; callers link `swerve_mppi::core`.
+Old `find_package(swerve_mppi)` aliases are removed. Installation includes the
+manifest and default configuration under `share/swerve_mppi_core`. Tests consume a
+relocated install prefix, and CI verifies discovery/build/test/consumption through
+colcon without a ROS distribution. Algorithm behavior and chassis protocols stay
+unchanged.
+
+## Next: stage 5B
 
 1. Add a separate algorithm-side ROS 2 package. Keep the core and current-chassis
    adapter ROS-independent; ROS message copying, QoS, topic names and lifecycle live
@@ -76,19 +95,26 @@ message sequence without launching ROS or Gazebo.
 3. Buffer `ChassisState` with encoder odometry by source stamp, build fresh controller
    input, publish only valid adapter commands and withhold planning until application
    evidence is usable. Do not estimate acknowledgement from message arrival.
-4. Calibrate physical command-to-motion delay, steering response, wheel acceleration,
+4. Add ROS message/lifecycle/clock/publication regressions and a colcon CI job for
+   both packages. Verify that the ROS package only consumes the installed public
+   core interface and declares its dependency explicitly.
+
+## Following: stage 5C
+
+1. Calibrate physical command-to-motion delay, steering response, wheel acceleration,
    slip and stopping error in Gazebo. Use measurements to choose application bounds,
    history tolerances and safety margin; do not weaken nominal gates to make tests pass.
-5. Validate closed-loop primitives in order: zero/timeout/recovery, straight,
+2. Validate closed-loop primitives in order: zero/timeout/recovery, straight,
    crab, spin, every mode transition and automatic realignment. Then validate paths,
    goal capture, obstacles, emergency stopping and injected delay/loss/clock faults.
-6. Define quantitative acceptance thresholds and store repeatable traces. Only after
+3. Define quantitative acceptance thresholds and store repeatable traces. Only after
    the standalone closed loop passes should a Nav2 controller plugin translate Nav2
    path/costmap/lifecycle inputs into the same ROS-side controller service.
 
 ## Remaining sequence
 
-Stage 5 starts live integration. The Gazebo repository continues to contain only the
+Stage 5B adds ROS integration; stage 5C validates physical closed loops. The Gazebo
+repository continues to contain only the
 chassis plant and its execution logic. ROS task/path/obstacle handling and later Nav2
 integration belong to the algorithm-side adapter. Measure physical tracking and
 stopping error before treating nominal trajectory checks as plant-level evidence.

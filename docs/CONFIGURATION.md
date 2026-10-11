@@ -1,7 +1,7 @@
 # Configuration
 
 `Config` is a startup-only value object. Construct the controller and its models
-from one validated configuration. `config/default.conf` contains the current full
+from one validated configuration. `swerve_mppi_core/config/default.conf` contains the current full
 set of defaults; unknown or duplicate keys, wrong numeric types and invalid values
 are errors. There are no old configuration aliases.
 

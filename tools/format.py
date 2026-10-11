@@ -40,9 +40,13 @@ def main():
         return 1
 
     files = sorted(
-        str(path) for directory in ('include', 'src', 'tests', 'benchmarks')
-        for path in (root / directory).rglob('*')
+        str(path) for package in ('swerve_mppi_core', 'swerve_mppi_ros')
+        for directory in ('include', 'src', 'tests', 'benchmarks')
+        for path in (root / package / directory).rglob('*')
         if path.is_file() and path.suffix in ('.cpp', '.hpp'))
+    if not files:
+        print('No package C++ files found; check the repository layout.', file=sys.stderr)
+        return 1
     command = ['--config', str(config), *files]
     if args.fix:
         # ament reports divergence on the first pass even after applying it.

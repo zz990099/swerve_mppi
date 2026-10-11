@@ -59,7 +59,7 @@ With benchmarks enabled:
 ```bash
 ./build/swerve_mppi_model_probe --print-config > resolved.conf
 ./build/swerve_mppi_model_probe --config resolved.conf > calls.csv
-python3 tools/summarize_motion_probe.py calls.csv
+python3 swerve_mppi_core/tools/summarize_motion_probe.py calls.csv
 ```
 
 The 720 samples span three modes, six nominal/lag/slip/noise/delay conditions and

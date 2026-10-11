@@ -29,7 +29,7 @@ of removed execution APIs or private prediction headers. It has no source includ
 path. Optional benchmark tests check allocation bounds and serialized motion data.
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSWERVE_MPPI_BUILD_BENCHMARKS=ON
+cmake -S swerve_mppi_core -B build -DCMAKE_BUILD_TYPE=Release -DSWERVE_MPPI_BUILD_BENCHMARKS=ON
 cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure --parallel 2
 ```
@@ -37,7 +37,7 @@ ctest --test-dir build --output-on-failure --parallel 2
 Enable the direct Python/core comparison with:
 
 ```bash
-cmake -S . -B build -DSWERVE_MPPI_CHASSIS_SOURCE_DIR=/absolute/path/to/swerve_gazebo_sim
+cmake -S swerve_mppi_core -B build -DSWERVE_MPPI_CHASSIS_SOURCE_DIR=/absolute/path/to/swerve_gazebo_sim
 ```
 
 `chassis_python_parity` runs the actual companion Python class and compares 7,960
@@ -53,7 +53,11 @@ watchdogs and physical Gazebo servo/contact dynamics.
 
 CI runs Debug and Release with `-Werror`, pinned ROS formatting, installed-consumer
 checks and selected UBSan regressions. It records planner performance and independent
-motion-probe artifacts. It pins companion commit
+motion-probe artifacts. An independent job builds the plain CMake package with
+colcon without a ROS distribution, runs selected regressions through colcon test,
+then builds a consumer using only the colcon install environment. The standalone
+installed-consumer test relocates its prefix before building, checks package-owned
+metadata/configuration and rejects old package aliases. It pins companion commit
 `9358c96884d7fa4866cea7c053daa7a7cec82d8f` for offline Python parity. It does not run
 Gazebo or test removed transport/profile paths. Historical execution results remain
 in Git history and do not establish current readiness. Consult the workflow for the

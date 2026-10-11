@@ -33,7 +33,7 @@ jobs:
         run: python tools/format.py --check
       - name: Configure
         run: >-
-          cmake -S . -B build
+          cmake -S swerve_mppi_core -B build
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DCMAKE_CXX_FLAGS=-Werror
           -DSWERVE_MPPI_BUILD_BENCHMARKS=ON
@@ -47,7 +47,7 @@ jobs:
       - name: Check planning, model and configuration under UBSan (Debug)
         if: matrix.build_type == 'Debug'
         run: |
-          cmake -S . -B build-ubsan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-Werror -fsanitize=undefined -fno-sanitize-recover=all"
+          cmake -S swerve_mppi_core -B build-ubsan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-Werror -fsanitize=undefined -fno-sanitize-recover=all"
           cmake --build build-ubsan --target swerve_mppi_command_tests swerve_mppi_configuration_tests swerve_mppi_timing_tests swerve_mppi_current_chassis_tests swerve_mppi_safety_tests swerve_mppi_model_tests --parallel 2
           ctest --test-dir build-ubsan -R 'command_regressions|configuration_regressions|timing_regressions|current_chassis_regressions|safety_regressions|model_regressions' --output-on-failure
 
@@ -59,7 +59,7 @@ jobs:
           cp build/CMakeCache.txt build/motion-probe/CMakeCache.txt
           build/swerve_mppi_model_probe --print-config > build/motion-probe/resolved.conf
           build/swerve_mppi_model_probe --config build/motion-probe/resolved.conf > build/motion-probe/calls.csv
-          python tools/summarize_motion_probe.py build/motion-probe/calls.csv > build/motion-probe/report.md
+          python swerve_mppi_core/tools/summarize_motion_probe.py build/motion-probe/calls.csv > build/motion-probe/report.md
           tee -a "$GITHUB_STEP_SUMMARY" < build/motion-probe/report.md
           sha256sum build/swerve_mppi_model_probe build/motion-probe/resolved.conf build/motion-probe/calls.csv > build/motion-probe/SHA256SUMS
       - uses: actions/upload-artifact@v4
@@ -80,3 +80,34 @@ jobs:
         with:
           name: planner-performance
           path: build/planner-performance/
+
+  colcon:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install colcon without a ROS distribution
+        run: python -m pip install colcon-common-extensions==0.3.0
+      - name: Discover the plain CMake core package
+        run: |
+          colcon list --base-paths .
+          test "$(colcon list --base-paths . --names-only)" = swerve_mppi_core
+      - name: Build and install the core with colcon
+        run: >-
+          colcon build --base-paths . --packages-select swerve_mppi_core
+          --event-handlers console_direct+
+          --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror
+      - name: Test colcon's CTest integration
+        run: |
+          colcon test --packages-select swerve_mppi_core --return-code-on-test-failure --event-handlers console_direct+ --ctest-args -R 'configuration_regressions|current_chassis_regressions|installed_consumer'
+          colcon test-result --all --verbose
+          test "$(colcon list --base-paths . --names-only)" = swerve_mppi_core
+      - name: Consume only the colcon install prefix
+        shell: bash
+        run: |
+          source install/local_setup.bash
+          cmake -S swerve_mppi_core/tests/consumer -B build-consumer -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-consumer --parallel 2
+          ctest --test-dir build-consumer --output-on-failure
