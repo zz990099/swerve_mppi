@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -25,6 +26,11 @@ TEST(RosCaller, ReplansWithoutReceiptsAndGoalCheckerLivesOutsideCore)
   std::size_t commands = 0;
   swerve_gazebo_sim::msg::ChassisCommand accepted;
   bool moving = false, reached = false;
+  std::string last_status;
+  auto diagnostics = source->create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
+    "/mppi_controller/diagnostics", 10, [&](const diagnostic_msgs::msg::DiagnosticArray & m) {
+      if (!m.status.empty()) last_status = m.status.front().message;
+    });
   auto command_sub = source->create_subscription<swerve_gazebo_sim::msg::ChassisCommand>(
     "chassis_controller/command", 100, [&](const swerve_gazebo_sim::msg::ChassisCommand & m) {
       ++commands;
@@ -73,10 +79,10 @@ TEST(RosCaller, ReplansWithoutReceiptsAndGoalCheckerLivesOutsideCore)
   path_pub->publish(path);
   spin(50, false);
   EXPECT_GT(commands - before_task, 5u);
-  EXPECT_TRUE(moving);
+  EXPECT_TRUE(moving) << last_status;
   EXPECT_FALSE(reached);
   spin(30, true);
-  EXPECT_TRUE(reached);
+  EXPECT_TRUE(reached) << last_status;
   // A new task clears external completion and core warm-start state.
   path_pub->publish(path);
   spin(15, false);
