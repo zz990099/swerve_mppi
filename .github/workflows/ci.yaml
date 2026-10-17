@@ -1,25 +1,20 @@
-name: Core and ROS integration
-
+name: Core and path following
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
-  build:
+  core:
     runs-on: ubuntu-24.04
     strategy:
-      fail-fast: false
       matrix:
         build_type: [Debug, Release]
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout current chassis mechanics for offline parity
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: zz990099/swerve_gazebo_sim
           ref: 9358c96884d7fa4866cea7c053daa7a7cec82d8f
@@ -27,97 +22,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install pinned ROS Rolling format tools
-        run: python -m pip install -r tools/requirements-format.txt
-      - name: Check ROS format
+      - name: Install test and format dependencies
+        run: python -m pip install pyyaml -r tools/requirements-format.txt
+      - name: Check format
         run: python tools/format.py --check
-      - name: Configure
-        run: >-
-          cmake -S swerve_mppi_core -B build
-          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-          -DCMAKE_CXX_FLAGS=-Werror
-          -DSWERVE_MPPI_BUILD_BENCHMARKS=ON
-          -DSWERVE_MPPI_BUILD_FORMAT_TESTS=ON
-          -DSWERVE_MPPI_CHASSIS_SOURCE_DIR=${{ github.workspace }}/companion-chassis
-      - name: Build
-        run: cmake --build build --parallel 2
-      - name: Test core and installed consumer
-        run: ctest --test-dir build --output-on-failure --parallel 2
-
-      - name: Check planning, model and configuration under UBSan (Debug)
-        if: matrix.build_type == 'Debug'
+      - name: Standalone core and installed consumer
         run: |
-          cmake -S swerve_mppi_core -B build-ubsan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-Werror -fsanitize=undefined -fno-sanitize-recover=all"
-          cmake --build build-ubsan --target swerve_mppi_command_tests swerve_mppi_configuration_tests swerve_mppi_timing_tests swerve_mppi_current_chassis_tests swerve_mppi_safety_tests swerve_mppi_model_tests --parallel 2
-          ctest --test-dir build-ubsan -R 'command_regressions|configuration_regressions|timing_regressions|current_chassis_regressions|safety_regressions|model_regressions' --output-on-failure
-
-      - name: Record independent motion probes (Release)
-        if: matrix.build_type == 'Release'
+          cmake -S swerve_mppi_core -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_CXX_FLAGS=-Werror
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+          cmake --install build --prefix "$PWD/install-core"
+      - name: Caller contracts and actual Python chassis closed loops
         run: |
-          mkdir -p build/motion-probe
-          git rev-parse HEAD > build/motion-probe/source-commit.txt
-          cp build/CMakeCache.txt build/motion-probe/CMakeCache.txt
-          build/swerve_mppi_model_probe --print-config > build/motion-probe/resolved.conf
-          build/swerve_mppi_model_probe --config build/motion-probe/resolved.conf > build/motion-probe/calls.csv
-          python swerve_mppi_core/tools/summarize_motion_probe.py build/motion-probe/calls.csv > build/motion-probe/report.md
-          tee -a "$GITHUB_STEP_SUMMARY" < build/motion-probe/report.md
-          sha256sum build/swerve_mppi_model_probe build/motion-probe/resolved.conf build/motion-probe/calls.csv > build/motion-probe/SHA256SUMS
-      - uses: actions/upload-artifact@v4
-        if: always() && matrix.build_type == 'Release'
-        with:
-          name: motion-probe
-          path: build/motion-probe/
-
-      - name: Record planner performance (Release)
-        if: matrix.build_type == 'Release'
-        run: |
-          mkdir -p build/planner-performance
-          git rev-parse HEAD > build/planner-performance/source-commit.txt
-          cp build/CMakeCache.txt build/planner-performance/CMakeCache.txt
-          build/swerve_mppi_benchmark curve 42 > build/planner-performance/curve.csv
-      - uses: actions/upload-artifact@v4
-        if: always() && matrix.build_type == 'Release'
-        with:
-          name: planner-performance
-          path: build/planner-performance/
-
-  colcon:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install colcon without a ROS distribution
-        run: python -m pip install colcon-common-extensions==0.3.0
-      - name: Discover the plain CMake core package
-        run: |
-          colcon list --base-paths swerve_mppi_core
-          test "$(colcon list --base-paths swerve_mppi_core --names-only)" = swerve_mppi_core
-      - name: Build and install the core with colcon
-        run: >-
-          colcon build --base-paths swerve_mppi_core --packages-select swerve_mppi_core
-          --event-handlers console_direct+
-          --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror
-      - name: Test colcon's CTest integration
-        run: |
-          colcon test --packages-select swerve_mppi_core --return-code-on-test-failure --event-handlers console_direct+ --ctest-args -R 'configuration_regressions|current_chassis_regressions|installed_consumer'
-          colcon test-result --all --verbose
-          test "$(colcon list --base-paths swerve_mppi_core --names-only)" = swerve_mppi_core
-      - name: Consume only the colcon install prefix
-        shell: bash
-        run: |
-          source install/local_setup.bash
-          cmake -S swerve_mppi_core/tests/consumer -B build-consumer -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-consumer --parallel 2
-          ctest --test-dir build-consumer --output-on-failure
-
+          cmake -S swerve_mppi_ros/tests/portable -B build-support -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DCMAKE_PREFIX_PATH="$PWD/install-core" -DCHASSIS_SOURCE_DIR="$PWD/companion-chassis"
+          cmake --build build-support --parallel 2
+          ctest --test-dir build-support --output-on-failure
   ros:
     runs-on: ubuntu-24.04
-    container: ros:jazzy-ros-base
+    timeout-minutes: 30
+    container: ros:jazzy-ros-base-noble
     defaults:
       run:
         shell: bash
+    env:
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+      ROS_DOMAIN_ID: '83'
+      GZ_PARTITION: swerve-mppi-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -125,23 +55,30 @@ jobs:
           repository: zz990099/swerve_gazebo_sim
           ref: 9358c96884d7fa4866cea7c053daa7a7cec82d8f
           path: companion-chassis
-      - name: Install build and test dependencies
+      - name: Install Jazzy and Harmonic dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends cmake python3-colcon-common-extensions ros-jazzy-rclcpp-lifecycle ros-jazzy-ament-cmake-gtest ros-jazzy-ament-cmake-python ros-jazzy-rosidl-default-generators
-      - name: Build companion current-message contract
+          apt-get install -y --no-install-recommends build-essential cmake python3-colcon-common-extensions python3-psutil ros-jazzy-ament-cmake-gtest ros-jazzy-ament-cmake-pytest ros-jazzy-ament-cmake-python ros-jazzy-rosidl-default-generators python3-pytest ros-jazzy-tf2-geometry-msgs ros-jazzy-ros-gz ros-jazzy-gz-ros2-control ros-jazzy-joint-state-broadcaster ros-jazzy-forward-command-controller ros-jazzy-robot-state-publisher ros-jazzy-xacro
+      - name: Build all three packages
         run: |
           source /opt/ros/jazzy/setup.bash
-          colcon build --base-paths companion-chassis --packages-select swerve_gazebo_sim --cmake-args -DBUILD_TESTING=OFF
-      - name: Discover and build both algorithm packages
-        run: |
-          source /opt/ros/jazzy/setup.bash
-          source install/local_setup.bash
-          test "$(colcon list --base-paths swerve_mppi_core swerve_mppi_ros --names-only | sort | tr '\n' ' ')" = 'swerve_mppi_core swerve_mppi_ros '
-          colcon build --base-paths swerve_mppi_core swerve_mppi_ros --packages-up-to swerve_mppi_ros --event-handlers console_direct+ --cmake-args -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror
-      - name: Test native ROS lifecycle and transport
+          colcon build --base-paths swerve_mppi_core swerve_mppi_ros companion-chassis --packages-up-to swerve_mppi_ros --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=ON
+      - name: Test ROS transport and caller
         run: |
           source /opt/ros/jazzy/setup.bash
           source install/local_setup.bash
           colcon test --packages-select swerve_mppi_ros --return-code-on-test-failure --event-handlers console_direct+
           colcon test-result --all --verbose
+      - name: Physical MPPI path following
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/local_setup.bash
+          python3 swerve_mppi_ros/tests/run_gazebo.py --chassis-root companion-chassis --logs artifacts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jazzy-validation
+          path: |
+            artifacts/
+            log/
+            build/swerve_mppi_ros/test_results/

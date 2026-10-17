@@ -1,90 +1,77 @@
 # Swerve MPPI
 
-ROS-independent C++17 MPPI planning for a four-module chassis with dual Ackermann,
-spin and crab modes. The controller samples velocity sequences within mode branches,
-predicts transition costs, checks trajectories and returns body velocity with an
-optional explicit mode request. It waits for measured mode confirmation before driving.
+A C++17 local velocity controller for a four-module chassis with dual Ackermann,
+spin and crab modes. It samples control sequences, predicts nominal chassis
+response, scores trajectories through injectable critics and returns a body
+velocity plus an explicit target mode.
 
-Version 0.27 adds `swerve_mppi_ros/`: a Jazzy lifecycle node consuming the installed
-public interface of `swerve_mppi_core/`. The unchanged 0.26 core remains plain
-CMake with no ROS dependencies. Repository-wide documentation and developer tools
-stay at the root. Task handling and transport belong to the ROS package.
+Version **0.28.0** is a breaking simplification. The core owns optimization and
+mode selection. The ROS caller owns paths, transforms, costmap snapshots, chassis
+message adaptation and goal completion. Ordinary velocity commands are computed
+periodically without per-command acknowledgements. There are no execution-evidence
+services, independent trajectory validators or task/recovery state machines in core.
 
-The current-chassis adapter maps state plus odometry, converts wheel `rad/s` to
-rolling `m/s`, preserves frozen mode receipts, rejects stale output and validates
-shared chassis parameters. Publication/application evidence stays explicit because
-the state message does not echo an MPPI command ID.
+## Packages
 
-The current Python chassis mechanics remain covered by 7,960 direct command-cycle
-comparisons. Prediction can carry reconciled hidden command state when the caller
-reports a precise prior application; missing or bounded-uncertain application stays
-explicit and cold-seeded. ROS transport is implemented; physical execution evidence,
-calibration and closed-loop Gazebo acceptance remain stage 5C. See the
-[complete staged plan](docs/PREPARATION_PLAN.md).
+| Package | Responsibility |
+| --- | --- |
+| `swerve_mppi_core` | Plain CMake library; model, sampling, MPPI update and critic interface |
+| `swerve_mppi_ros` | Jazzy node, external GoalChecker, ROS costmap critic and current chassis adapter |
 
-## Build and test
-
-Requirements: CMake 3.20+, a C++17 compiler and a CMake-supported build tool.
+## Standalone build
 
 ```bash
 cmake -S swerve_mppi_core -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
-cmake --install build --prefix "$PWD/install-local"
+cmake --install build --prefix "$PWD/install-core"
 ```
 
-Use `SWERVE_MPPI_BUILD_TESTS=OFF` for a library-only build or
-`SWERVE_MPPI_BUILD_BENCHMARKS=ON` for offline measurement tools.
-`SWERVE_MPPI_CHASSIS_SOURCE_DIR=/absolute/path/to/swerve_gazebo_sim` enables offline
-parity against that checkout's actual Python mechanics. CI pins the reviewed companion
-commit; ordinary library builds do not require it.
-`BUILD_SHARED_LIBS=ON` selects a shared library. No ROS environment is required.
+```cpp
+#include <swerve_mppi/controller.hpp>
 
-Consumers use the installed CMake package:
-
-```cmake
-find_package(swerve_mppi_core 0.26 CONFIG REQUIRED)
-target_link_libraries(my_controller PRIVATE swerve_mppi::core)
+swerve_mppi::Controller controller;
+swerve_mppi::Input input;
+input.path = {{0, 0, 0}, {1, 0, 0}};
+input.goal = input.path.back();
+// Fill measured pose, velocity, steering, wheel speeds and mode each cycle.
+auto result = controller.compute(input);
+// result.command.velocity: body-frame m/s, m/s, rad/s.
+// result.command.mode: explicit desired mode, not a completion acknowledgement.
 ```
 
-With colcon installed, the same core can be built from the repository root without
-sourcing ROS:
+Consumers use `find_package(swerve_mppi_core 0.28 CONFIG REQUIRED)` and
+`target_link_libraries(my_controller PRIVATE swerve_mppi::core)`.
+
+## Gazebo path following
+
+Use ROS 2 Jazzy / Gazebo Harmonic. Put this repository and
+[`swerve_gazebo_sim`](https://github.com/zz990099/swerve_gazebo_sim) in a colcon
+workspace. The reviewed companion revision is `9358c96884d7fa4866cea7c053daa7a7cec82d8f`.
 
 ```bash
-colcon build --packages-select swerve_mppi_core --cmake-args -DCMAKE_BUILD_TYPE=Release
-colcon test --packages-select swerve_mppi_core --return-code-on-test-failure
-colcon test-result --all --verbose
+source /opt/ros/jazzy/setup.bash
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --packages-up-to swerve_mppi_ros --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/local_setup.bash
+ros2 launch swerve_mppi_ros demo.launch.py
 ```
 
-Use separate build/install directories when switching between CMake and colcon.
-The repository root has no CMake project. The former `find_package(swerve_mppi)`
-interface is removed; update consumers to the current package name.
+From another sourced terminal, wait for `/odom` and the controller subscription,
+then publish one ordered path in the `odom` frame:
 
-## Use
+```bash
+ros2 topic pub --once /path nav_msgs/msg/Path '{header: {frame_id: odom}, poses: [{header: {frame_id: odom}, pose: {orientation: {w: 1.0}}}, {header: {frame_id: odom}, pose: {position: {x: 1.0}, orientation: {w: 1.0}}}]}'
+ros2 topic echo /mppi_controller/goal_reached
+```
 
-Provide measured state, its source timestamp, a decision timestamp, an ordered path
-and obstacles to `Controller::compute`.
-A present command contains the requested mode, body-frame target velocity and an
-optional mode request. A present zero velocity is an ordinary hold/brake intent.
-An absent command provides no motion authorization; the caller must stop sending
-motion commands and handle the chassis stop/fault policy. Generic integrations record
-publication with `set_publication_stamp`, enforce `command_valid_at`, and report the
-prior publication and application window on the next input. Current-chassis integrations
-instead use the adapter's two-step `make_command` and `record_application` contract.
-Never reuse an old drive.
+The default launch tracks in an obstacle-free scene with the costmap critic disabled.
+The first-stage acceptance target is path tracking plus position/yaw convergence.
+The nominal model includes actuator slew and stop/align switching; servo/contact/slip
+calibration and obstacle navigation are separate validation work.
 
-The core does not publish ROS messages, operate wheel joints or run a watchdog.
-`current_chassis::Adapter` supplies transport-free current-message DTOs, validation
-and mapping; `swerve_mppi_ros` performs the mechanical ROS copy and publication gating.
-See [ROS integration and lifecycle operation](docs/ROS_INTEGRATION.md) for Jazzy
-build commands, task inputs, application evidence and recovery.
+- [Architecture and API](ARCHITECTURE.md)
+- [Configuration and ROS operation](docs/ROS.md)
+- [Validation and remaining work](docs/VALIDATION.md)
 
-- [Architecture](ARCHITECTURE.md)
-- [Command and observation contract](docs/CHASSIS_COMMAND.md)
-- [Current chassis offline adapter](docs/CURRENT_CHASSIS_ADAPTER.md)
-- [ROS integration](docs/ROS_INTEGRATION.md)
-- [Configuration](docs/CONFIGURATION.md)
-- [Navigation](docs/NAVIGATION.md)
-- [Model and feedback limits](docs/MODEL_FEEDBACK.md)
-- [Validation](docs/VALIDATION.md), [performance](docs/PERFORMANCE.md), [development](docs/DEVELOPMENT.md)
+Powered by Codex.
