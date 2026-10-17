@@ -70,7 +70,7 @@ TEST(RosCaller, ReplansWithoutReceiptsAndGoalCheckerLivesOutsideCore)
   EXPECT_FALSE(reached);
   spin(30, true);
   EXPECT_TRUE(reached);
-  // Identical encoder stamps with different mode receipts must not latch the caller.
+  // A new task clears external completion and core warm-start state.
   path_pub->publish(path);
   spin(15, false);
   EXPECT_FALSE(reached);
