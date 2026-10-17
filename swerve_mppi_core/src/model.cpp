@@ -81,7 +81,12 @@ Trajectory Model::rollout(
   bool aligning = target != s.mode;
   std::array<double, 4> alignment{};
   double dwell = 0;
-  if (aligning && !controls.empty()) alignment = inverse(controls.front(), s.steering).angles;
+  if (aligning && !controls.empty()) {
+    auto entry = controls.front();
+    if (entry.vx == 0 && entry.vy == 0 && entry.wz == 0)
+      entry = target == Mode::Spin ? Velocity{0, 0, 1} : Velocity{1, 0, 0};
+    alignment = inverse(entry, s.steering).angles;
+  }
   const int ticks = static_cast<int>(std::ceil(config_.model_dt / config_.integration_dt));
   const double h = config_.model_dt / ticks;
   auto approach = [](double a, double b, double d) { return a + std::clamp(b - a, -d, d); };

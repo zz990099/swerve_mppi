@@ -101,6 +101,8 @@ public:
   void observe(ChassisFeedback feedback)
   {
     feedback_ = feedback;
+    // An accepted request that later faults needs a newer zero request.
+    if (pending_ && feedback.fault && feedback.request_id >= pending_->request_id) pending_.reset();
     if (
       pending_ && feedback.request_id == pending_->request_id && !feedback.fault &&
       !feedback.state.switching && feedback.state.mode == pending_->command.mode)

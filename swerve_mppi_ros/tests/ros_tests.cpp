@@ -23,10 +23,12 @@ TEST(RosCaller, ReplansWithoutReceiptsAndGoalCheckerLivesOutsideCore)
   auto odom_pub = source->create_publisher<nav_msgs::msg::Odometry>("odom", 10);
   auto path_pub = source->create_publisher<nav_msgs::msg::Path>("path", 1);
   std::size_t commands = 0;
+  swerve_gazebo_sim::msg::ChassisCommand accepted;
   bool moving = false, reached = false;
   auto command_sub = source->create_subscription<swerve_gazebo_sim::msg::ChassisCommand>(
     "chassis_controller/command", 100, [&](const swerve_gazebo_sim::msg::ChassisCommand & m) {
       ++commands;
+      accepted = m;
       moving = moving || m.velocity.linear.x > 0;
     });
   auto goal_sub = source->create_subscription<std_msgs::msg::Bool>(
@@ -40,6 +42,9 @@ TEST(RosCaller, ReplansWithoutReceiptsAndGoalCheckerLivesOutsideCore)
       swerve_gazebo_sim::msg::ChassisState state;
       state.header.stamp = source->now();
       state.header.frame_id = "base_footprint";
+      state.request_id = accepted.request_id;
+      state.actual_mode = state.requested_mode = accepted.mode;
+      state.accepted_entry_velocity = accepted.entry_velocity;
       state.confirmed = true;
       state.phase = state.READY;
       state_pub->publish(state);
@@ -63,9 +68,11 @@ TEST(RosCaller, ReplansWithoutReceiptsAndGoalCheckerLivesOutsideCore)
   path.poses.push_back(p);
   p.pose.position.x = 1;
   path.poses.push_back(p);
+  ASSERT_GT(path_pub->get_subscription_count(), 0u);
+  const auto before_task = commands;
   path_pub->publish(path);
-  spin(35, false);
-  EXPECT_GT(commands, 5u);
+  spin(50, false);
+  EXPECT_GT(commands - before_task, 5u);
   EXPECT_TRUE(moving);
   EXPECT_FALSE(reached);
   spin(30, true);
