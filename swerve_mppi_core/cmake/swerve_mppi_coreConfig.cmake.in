@@ -1,4 +1,3 @@
 @PACKAGE_INIT@
-
 include("${CMAKE_CURRENT_LIST_DIR}/swerve_mppi_coreTargets.cmake")
 check_required_components(swerve_mppi_core)

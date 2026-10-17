@@ -1,64 +1,63 @@
 # Validation
 
-Obstacle clearance uses the nearest clearance per trajectory segment, independent
-of repeated obstacle sampling. A regression verifies duplicate samples do not change
-soft cost, while collision rejection remains a hard check.
+## Local checks
 
-CMake/CTest checks kinematics, transition prediction, optimization, path progress,
-nominal stopping/constraints, planning budgets, configuration, public commands and
-feedback diagnostics. Dedicated timing/lifecycle regressions cover bounded source
-pairing, stale/future samples, publication/expiry, exact and uncertain application,
-history divergence, fault latching/recovery and required independent motion.
-Current-interface regressions cover state/odometry pairing, raw wheel conversion,
-mode age, frozen receipts, all three target modes, request retry, same-mode
-realignment, duplicate/out-of-order state, output expiry, bounded application
-evidence and deliberate chassis recovery without ROS or Gazebo.
-Fifteen closed-loop scenarios each run five seeds, including
-straight, lateral, curved, reverse, spin, final yaw, corners, loops, duplicate paths,
-near obstacles and translation starting in Spin.
+Standalone core tests cover inverse/forward kinematics, mode constraints, actuator
+slew, nominal switching, invalid inputs, injected critic rejection, grid geometry,
+and computing again after an invalid call. An installed-consumer test relocates the
+install prefix before finding/linking the public CMake package.
 
-The test-only nominal chassis compiles body intents and supplies measured mode
-acknowledgements. Encoder integration is independent of predicted pose/twist. Its
-shared nominal target model means these regressions preserve core behavior; they
-do not independently validate command generation or Gazebo physics. The independent
-720-sample motion probe exposes lag, slip, noise and delayed observations separately.
-
-The installed-consumer test builds against a fresh install prefix, compiles every
-public header independently, verifies the body-command API and rejects installation
-of removed execution APIs or private prediction headers. It has no source include
-path. Optional benchmark tests check allocation bounds and serialized motion data.
+Caller helpers also build without ROS. They check frozen mode requests, ordinary
+drive receipt preservation, faulted-start zero initialization, ordered paths,
+external goal settling and injected map costs.
 
 ```bash
-cmake -S swerve_mppi_core -B build -DCMAKE_BUILD_TYPE=Release -DSWERVE_MPPI_BUILD_BENCHMARKS=ON
+cmake -S swerve_mppi_core -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel 2
-ctest --test-dir build --output-on-failure --parallel 2
+ctest --test-dir build --output-on-failure
+cmake --install build --prefix "$PWD/install-core"
+cmake -S swerve_mppi_ros/tests/portable -B build-support \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PWD/install-core" \
+  -DCHASSIS_SOURCE_DIR=/absolute/path/to/swerve_gazebo_sim
+cmake --build build-support --parallel 2
+ctest --test-dir build-support --output-on-failure
 ```
 
-Enable the direct Python/core comparison with:
+The optional Python integration test runs the compiled controller, actual ROS-side
+adapter and external GoalChecker against the companion production Python `Chassis`.
+It integrates encoder motion outside core and tests straight, crab, reverse, spin,
+terminal yaw and curved paths, both ideal actuator following and 30 ms actuator lag.
+This is twelve command-loop scenarios, not independent physical validation. Each
+must reach 0.06 m / 0.05 rad with measured speed below 0.035 m/s / rad/s for 0.3 s,
+within 50 simulated seconds. No per-speed-command receipt is produced.
+
+## ROS and physical acceptance
+
+The native Jazzy test publishes synthetic chassis/odometry and checks continuous
+commands without evidence services, external goal completion and task restart.
+CI then launches the actual Harmonic chassis with MPPI and supplies six paths.
+Independent Gazebo truth is read only by the test. GoalChecker uses the normal
+encoder estimate; the physical test additionally requires truth error below 0.15 m
+and 0.10 rad at completion. These are first-stage acceptance thresholds, not claims
+about a calibrated real robot. Logs and native ROS test results are CI artifacts.
 
 ```bash
-cmake -S swerve_mppi_core -B build -DSWERVE_MPPI_CHASSIS_SOURCE_DIR=/absolute/path/to/swerve_gazebo_sim
+ros2 launch swerve_mppi_ros demo.launch.py headless:=true publish_ground_truth:=true
+# Another sourced terminal:
+python3 swerve_mppi_ros/tests/gazebo_tracking.py \
+  --chassis-root /absolute/path/to/swerve_gazebo_sim
 ```
 
-`chassis_python_parity` runs the actual companion Python class and compares 7,960
-command cycles against the C++ predictor, including all six directed mode changes,
-two wheel limit/ramp sets, signed reversals, saturation, nearest-angle ties, normal
-zero and automatic realignment. It checks every joint target, limited body velocity,
-frozen geometry and transition phase. Both implementations consume the same measured
-sample and actual elapsed interval. Before those cycles it also checks the pinned
-current command/state field schema and every shared default against the companion
-configuration. Separate core tests hold measured feedback back
-to verify stop-before-align and dwell reset. These tests deliberately exclude ROS,
-watchdogs and physical Gazebo servo/contact dynamics.
+## Remaining work
 
-CI runs Debug and Release with `-Werror`, pinned ROS formatting, installed-consumer
-checks and selected UBSan regressions. It records planner performance and independent
-motion-probe artifacts. An independent job builds the plain CMake package with
-colcon without a ROS distribution, runs selected regressions through colcon test,
-then builds a consumer using only the colcon install environment. The standalone
-installed-consumer test relocates its prefix before building, checks package-owned
-metadata/configuration and rejects old package aliases. It pins companion commit
-`9358c96884d7fa4866cea7c053daa7a7cec82d8f` for offline Python parity. It does not run
-Gazebo or test removed transport/profile paths. Historical execution results remain
-in Git history and do not establish current readiness. Consult the workflow for the
-exact reviewed commit.
+1. Establish reproducible physical tracking/settling results and tune the nominal
+   response from measured traces, including same-mode alignment pauses.
+2. Validate map critic behavior in static-obstacle scenes; add footprint-aware
+   scoring when center costs in an inflated map are insufficient.
+3. Identify real hardware response and state-estimation behavior before real-robot
+   acceptance. Measure compute timing on the intended onboard computer.
+4. Add a separate Nav2 wrapper using the same core and Nav2-owned GoalChecker/task
+   lifecycle once standalone tracking is accepted.
+
+Pre-0.28 tests and execution-evidence contracts were removed with their production
+implementations. Their old results do not establish acceptance of this controller.

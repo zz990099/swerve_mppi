@@ -1,14 +1,28 @@
 /**:
   ros__parameters:
     use_sim_time: true
-    planner_profile: ""
-    chassis_node: swerve_controller
-    body_frame: base_footprint
+    control_frequency: 20.0
+    state_timeout: 0.25
     odom_frame: odom
-    odometry_topic: odom
-    chassis_state_topic: chassis_controller/state
-    command_topic: chassis_controller/command
+    body_frame: base_footprint
     path_topic: path
-    obstacles_topic: obstacles
-    wall_timeout_s: 0.25
-    obstacle_timeout_s: 0.3
+    odometry_topic: odom
+    state_topic: chassis_controller/state
+    command_topic: chassis_controller/command
+    use_costmap: false
+    costmap_topic: costmap
+    horizon: 30
+    model_dt: 0.1
+    integration_dt: 0.01
+    samples: 64
+    iterations: 1
+    max_speed: 0.8
+    max_yaw_rate: 0.8
+    minimum_mode_dwell: 1.0
+    switch_penalty: 0.3
+    switch_hysteresis: 0.15
+    goal_position_tolerance: 0.06
+    goal_yaw_tolerance: 0.05
+    goal_linear_speed: 0.035
+    goal_angular_speed: 0.035
+    goal_settle_time: 0.3
