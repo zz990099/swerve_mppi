@@ -140,6 +140,11 @@ struct ControllerNode::Runtime
       status("tracking new path");
     } catch (const std::exception & e) {
       path = PathHandler{};
+      goal.reset();
+      complete = false;
+      std_msgs::msg::Bool value;
+      value.data = false;
+      reached->publish(value);
       controller->reset();
       status(e.what());
     }

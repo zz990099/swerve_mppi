@@ -38,6 +38,12 @@ int main()
     adapter.observe(feedback);
     auto zero = adapter.translate({{}, Mode::Crab});
     check(zero.request_id == 9 && zero.command.velocity.vy == 0, "startup fault zero");
+    feedback.request_id = zero.request_id;
+    adapter.observe(feedback);
+    auto retry_zero = adapter.translate({{}, Mode::Crab});
+    check(
+      retry_zero.request_id == zero.request_id + 1,
+      "accepted transition fault uses a newer zero request");
     GoalChecker checker;
     State state;
     Pose goal;
