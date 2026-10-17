@@ -21,22 +21,21 @@ def stop(process):
     try:
         process.wait(timeout=8)
     except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         process.wait(timeout=5)
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--chassis-root', required=True)
-    parser.add_argument('--logs', type=Path, required=True)
-    args = parser.parse_args()
-    args.logs.mkdir(parents=True, exist_ok=True)
+def run_case(chassis_root, logs, scenario):
+    logs.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ, GZ_PARTITION='mppi_'+uuid.uuid4().hex)
     simulation = probe = None
     descendants = {}
     try:
-        with (args.logs/'gazebo.log').open('w') as sim_log, \
-             (args.logs/'tracking.log').open('w') as tracking_log:
+        with (logs/'gazebo.log').open('w') as sim_log, \
+             (logs/'tracking.log').open('w') as tracking_log:
             simulation = subprocess.Popen([
                 'ros2', 'launch', 'swerve_mppi_ros', 'demo.launch.py',
                 'headless:=true', 'publish_ground_truth:=true'],
@@ -44,10 +43,10 @@ def main():
                 env=environment, start_new_session=True)
             probe = subprocess.Popen([
                 sys.executable, '-u', str(Path(__file__).with_name('gazebo_tracking.py')),
-                '--chassis-root', args.chassis_root],
+                '--chassis-root', chassis_root, '--scenario', scenario],
                 stdout=tracking_log, stderr=subprocess.STDOUT,
                 env=environment, start_new_session=True)
-            deadline = time.monotonic()+600
+            deadline = time.monotonic()+200
             while probe.poll() is None:
                 try:
                     for child in psutil.Process(simulation.pid).children(recursive=True):
@@ -57,7 +56,7 @@ def main():
                 if simulation.poll() is not None:
                     raise RuntimeError('Gazebo launch exited before acceptance')
                 if time.monotonic() > deadline:
-                    raise TimeoutError('Physical acceptance exceeded 600 seconds')
+                    raise TimeoutError('Physical acceptance exceeded 200 seconds')
                 time.sleep(.2)
             if probe.returncode:
                 raise RuntimeError(f'Physical acceptance failed: {probe.returncode}')
@@ -78,9 +77,19 @@ def main():
             except psutil.NoSuchProcess:
                 pass
         for name in ('tracking.log', 'gazebo.log'):
-            file = args.logs/name
+            file = logs/name
             if file.exists():
                 print(f'{name}:\n{file.read_text()[-12000:]}', flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--chassis-root', required=True)
+    parser.add_argument('--logs', type=Path, required=True)
+    args = parser.parse_args()
+    for scenario in ('straight', 'crab', 'reverse', 'spin', 'final_yaw', 'curve'):
+        print(f'Independent physical scenario: {scenario}', flush=True)
+        run_case(args.chassis_root, args.logs/scenario, scenario)
 
 
 if __name__ == '__main__':

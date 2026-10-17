@@ -24,6 +24,7 @@ def wrap(a):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--chassis-root', type=Path, required=True)
+    parser.add_argument('--scenario', choices=('straight', 'crab', 'reverse', 'spin', 'final_yaw', 'curve'))
     args = parser.parse_args()
     sys.path.insert(0, str(args.chassis_root.resolve() / 'test'))
     from gazebo_truth import GazeboTruth
@@ -64,6 +65,8 @@ def main():
             'curve': [(0, 0, 0), (.4, .1, .2), (.9, .25, .2), (1.3, .25, 0)],
         }
         for name, points in scenarios.items():
+            if args.scenario and name != args.scenario:
+                continue
             print(f"START {name}", flush=True)
             base = odom[0].pose.pose
             a, bx, by = yaw(base.orientation), base.position.x, base.position.y

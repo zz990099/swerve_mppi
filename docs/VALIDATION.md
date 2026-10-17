@@ -35,10 +35,12 @@ within 50 simulated seconds. No per-speed-command receipt is produced.
 
 The native Jazzy test publishes synthetic chassis/odometry and checks continuous
 commands without evidence services, external goal completion and task restart.
-CI then launches the actual Harmonic chassis with MPPI and supplies six paths.
+CI then launches a fresh Harmonic chassis with MPPI for each of six paths.
 Independent Gazebo truth is read only by the test. GoalChecker uses the normal
 encoder estimate; the physical test additionally requires truth error below 0.15 m
-and 0.10 rad at completion. These are first-stage acceptance thresholds, not claims
+and 0.10 rad at completion. Each case starts a fresh world and encoder origin;
+this isolates single-task tracking from accumulated localization drift. These are
+first-stage acceptance thresholds, not claims
 about a calibrated real robot. Logs and native ROS test results are CI artifacts.
 
 ```bash
@@ -47,6 +49,12 @@ ros2 launch swerve_mppi_ros demo.launch.py headless:=true publish_ground_truth:=
 python3 swerve_mppi_ros/tests/gazebo_tracking.py \
   --chassis-root /absolute/path/to/swerve_gazebo_sim
 ```
+
+A sequential six-task experiment on 2026-10-17 reached every encoder-defined goal,
+but ended with 0.106 m / 0.109 rad absolute truth error, exceeding the 0.10 rad
+heading threshold. Independent-task acceptance does not establish long-duration
+localization accuracy. Keep the no-`--scenario` form of `gazebo_tracking.py` for
+repeating that separate cumulative-drift experiment.
 
 ## Remaining work
 
