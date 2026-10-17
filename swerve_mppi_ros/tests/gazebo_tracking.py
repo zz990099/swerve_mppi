@@ -64,6 +64,7 @@ def main():
             'curve': [(0, 0, 0), (.4, .1, .2), (.9, .25, .2), (1.3, .25, 0)],
         }
         for name, points in scenarios.items():
+            print(f"START {name}", flush=True)
             base = odom[0].pose.pose
             a, bx, by = yaw(base.orientation), base.position.x, base.position.y
             message = PathMessage()

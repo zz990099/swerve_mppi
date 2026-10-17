@@ -73,11 +73,7 @@ jobs:
         run: |
           source /opt/ros/jazzy/setup.bash
           source install/local_setup.bash
-          mkdir -p artifacts
-          ros2 launch swerve_mppi_ros demo.launch.py headless:=true publish_ground_truth:=true > artifacts/gazebo.log 2>&1 &
-          simulation_pid=$!
-          trap 'kill -INT "$simulation_pid" 2>/dev/null || true; wait "$simulation_pid" || true' EXIT
-          python3 swerve_mppi_ros/tests/gazebo_tracking.py --chassis-root companion-chassis | tee artifacts/tracking.log
+          python3 swerve_mppi_ros/tests/run_gazebo.py --chassis-root companion-chassis --logs artifacts
       - uses: actions/upload-artifact@v4
         if: always()
         with:
