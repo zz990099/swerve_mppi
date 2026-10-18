@@ -211,8 +211,9 @@ struct ControllerNode::Runtime
     input.dt = dt;
     input.path = path.local(input.state.pose);
     input.goal = path.goal();
+    input.goal_active = path.goal_active();
     input.map = map;
-    if (goal.reached(input.state, input.goal, odom_stamp)) {
+    if (input.goal_active && goal.reached(input.state, input.goal, odom_stamp)) {
       complete = true;
       publish({{}, input.state.mode});
       std_msgs::msg::Bool value;

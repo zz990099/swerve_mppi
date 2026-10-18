@@ -45,7 +45,8 @@ public:
     const CriticContext & c, const std::vector<Trajectory> & batch,
     std::vector<double> & costs) const override
   {
-    const bool terminal = distance(c.input.path.back(), c.input.goal) < 0.001;
+    const bool terminal =
+      c.input.goal_active && distance(c.input.path.back(), c.input.goal) < 0.001;
     const double start_progress = match(c.input.state.pose, c.input.path).progress;
     for (std::size_t k = 0; k < batch.size(); ++k) {
       const auto & t = batch[k];

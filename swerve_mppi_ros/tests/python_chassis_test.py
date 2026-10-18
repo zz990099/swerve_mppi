@@ -17,6 +17,8 @@ def run(tool, root, scenario, lag):
     from swerve_gazebo_sim.kinematics import integrate_pose
 
     cfg = load_config(root / 'config/swerve.yaml')
+    if scenario == 'slow_spin':
+        cfg['control']['max_wheel_speed'] = 1.0  # rad/s = 0.1 m/s in core.
     chassis = Chassis(cfg['control'], {k: cfg['geometry'][k] for k in
                       ('wheelbase', 'track_width', 'wheel_radius')})
     angles, wheels, pose = [0.0]*4, [0.0]*4, (0.0, 0.0, 0.0)
@@ -26,6 +28,11 @@ def run(tool, root, scenario, lag):
     process = subprocess.Popen([tool, scenario], stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, text=True)
     times = []
+    checkpoints = {
+        'out_and_back': [(1, 0)],
+        'closed_loop': [(1, 0), (1, 1), (0, 1)],
+    }.get(scenario, [])
+    visited = 0
     try:
         for step in range(1000):
             velocity = chassis.kinematics.forward(wheels, angles)
@@ -39,9 +46,18 @@ def run(tool, root, scenario, lag):
                 raise AssertionError('Compiled controller exited')
             vx, vy, wz, mode, request, ex, ey, ew, complete, duration = map(float, line.split())
             times.append(duration)
+            if visited < len(checkpoints):
+                x, y = checkpoints[visited]
+                if math.hypot(pose[0]-x, pose[1]-y) < 0.2:
+                    visited += 1
+            command_wheels, _ = chassis.kinematics.inverse(vx, vy, wz, angles)
+            assert max(map(abs, command_wheels)) <= cfg['control']['max_wheel_speed']+1e-8, \
+                'Controller output exceeds configured wheel speed'
             assert chassis.receive(Command(now, int(mode), (vx, vy, wz), int(request),
                                            (ex, ey, ew)), now, now), chassis.fault
             if complete:
+                assert visited == len(checkpoints), \
+                    f'{scenario} completed before traversing ordered checkpoints: {visited}/{len(checkpoints)}'
                 print(f'PASS {scenario} lag={lag} time={now-1:.2f} pose={pose} '
                       f'p95_ms={sorted(times)[int(.95*(len(times)-1))]:.2f}', flush=True)
                 return
@@ -73,5 +89,6 @@ if __name__ == '__main__':
     parser.add_argument('--chassis-root', type=Path, required=True)
     args = parser.parse_args()
     for lag in (0.0, 0.03):
-        for name in ('straight', 'crab', 'reverse', 'spin', 'final_yaw', 'curve'):
+        for name in ('straight', 'crab', 'reverse', 'spin', 'final_yaw', 'curve',
+                     'out_and_back', 'closed_loop', 'slow_spin'):
             run(args.tool, args.chassis_root.resolve(), name, lag)

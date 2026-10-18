@@ -82,3 +82,11 @@ GoalChecker is outside core and requires endpoint position, yaw and measured spe
 within caller-configured bounds for a settle interval. It then ends the task and
 publishes ordinary zero commands. Terminal critics guide convergence but do not
 declare success. New tasks reset both path progress and goal-checking state.
+
+The caller crops the local path to a forward monotonic section, excluding later
+return legs from nearest-point scoring. `Input::goal_active` permits terminal
+attraction, final-yaw seeding and noise taper only after ordered progress reaches
+the final segment; the ROS GoalChecker uses the same gate. A closed or out-and-back
+path therefore cannot finish simply because its endpoint is near the initial pose.
+Standalone callers must prepare ordered local sections and set this flag from
+their own progress state. It defaults to true for direct, single-section tasks.

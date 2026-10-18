@@ -12,10 +12,13 @@ int main(int argc, char ** argv)
     std::vector<Pose> poses{{0, 0, 0}, {1, 0, 0}};
     if (scenario == "crab") poses = {{0, 0, 0}, {0, 1, 0}};
     if (scenario == "reverse") poses = {{0, 0, 0}, {-1, 0, 0}};
-    if (scenario == "spin") poses = {{0, 0, 0}, {0, 0, 1.2}};
+    if (scenario == "spin" || scenario == "slow_spin") poses = {{0, 0, 0}, {0, 0, 1.2}};
     if (scenario == "final_yaw") poses = {{0, 0, 0}, {1, 0, 1.2}};
     if (scenario == "curve") poses = {{0, 0, 0}, {0.5, 0.15, 0.3}, {1, 0.35, 0.3}, {1.5, 0.35, 0}};
+    if (scenario == "out_and_back") poses = {{0, 0, 0}, {1, 0, 0}, {0, 0, 0}};
+    if (scenario == "closed_loop") poses = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 0}};
     Config config;
+    if (scenario == "slow_spin") config.max_wheel_speed = 0.1;
     config.samples = 32;
     Controller controller(config);
     ChassisAdapter adapter;
@@ -45,7 +48,8 @@ int main(int argc, char ** argv)
       input.dt = 0.05;
       input.path = path.local(input.state.pose);
       input.goal = path.goal();
-      complete = complete || goal.reached(input.state, input.goal, stamp);
+      input.goal_active = path.goal_active();
+      complete = complete || (input.goal_active && goal.reached(input.state, input.goal, stamp));
       Result result;
       if (!complete && !fault) result = controller.compute(input);
       auto wire = adapter.translate(complete || fault ? Command{{}, f.state.mode} : result.command);

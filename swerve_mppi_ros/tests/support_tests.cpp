@@ -58,6 +58,23 @@ int main()
     path.set({{0, 0, 0}, {1, 0, 0}, {1, 1, 1.57}, {0, 1, 3.14}, {0, 0, 0}});
     auto local = path.local({0, 0, 0}, 0.5);
     check(local.size() == 2 && local.back().x == 1, "crossing keeps initial segment");
+    check(!path.goal_active(), "closed path cannot finish at its initial pose");
+    path.local({1, 0, 0});
+    check(!path.goal_active(), "intermediate segment cannot activate terminal goal");
+    path.local({1, 1, 0});
+    check(!path.goal_active(), "penultimate corner still precedes final segment");
+    path.local({0, 1, 0});
+    check(path.goal_active(), "final ordered segment activates goal convergence");
+    path.set({{0, 0, 0}, {1, 0, 0}, {0, 0, 0}});
+    local = path.local({0, 0, 0});
+    check(
+      local.size() == 2 && local.back().x == 1,
+      "local scoring excludes the overlapping return leg");
+    check(!path.goal_active(), "out-and-back requires the turnaround first");
+    path.local({1, 0, 0});
+    check(path.goal_active(), "turnaround unlocks return goal");
+    path.set({{0, 0, 1.2}});
+    check(path.goal_active(), "single-pose rotation remains a terminal task");
     CostmapCritic critic;
     std::uint8_t bytes[] = {0, 254, 255, 0};
     Input input;

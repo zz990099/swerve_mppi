@@ -55,6 +55,7 @@ public:
     progress_ = 0;
   }
   bool empty() const { return path_.empty(); }
+  bool goal_active() const { return !empty() && progress_ + 2 >= path_.size(); }
   Pose goal() const { return path_.back(); }
   std::vector<Pose> local(const Pose & pose, double length = 3.0)
   {
@@ -70,7 +71,19 @@ public:
     }
     std::vector<Pose> out{path_[progress_]};
     double travelled = 0;
+    double forward_x = 0, forward_y = 0;
     for (std::size_t i = progress_ + 1; i < path_.size(); ++i) {
+      const double dx = path_[i].x - path_[i - 1].x, dy = path_[i].y - path_[i - 1].y;
+      if (dx * dx + dy * dy > 1e-12) {
+        if (forward_x == 0 && forward_y == 0) {
+          forward_x = dx;
+          forward_y = dy;
+        } else if (forward_x * dx + forward_y * dy <= 0) {
+          // A monotonic local section prevents nearest-point scoring from
+          // rewarding a later return leg before the intervening path is visited.
+          break;
+        }
+      }
       travelled += distance(path_[i - 1], path_[i]);
       out.push_back(path_[i]);
       if (travelled >= length) break;

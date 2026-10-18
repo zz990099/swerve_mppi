@@ -24,7 +24,8 @@ def wrap(a):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--chassis-root', type=Path, required=True)
-    parser.add_argument('--scenario', choices=('straight', 'crab', 'reverse', 'spin', 'final_yaw', 'curve'))
+    parser.add_argument('--scenario', choices=('straight', 'crab', 'reverse', 'spin', 'final_yaw',
+                                             'curve', 'out_and_back', 'closed_loop'))
     args = parser.parse_args()
     sys.path.insert(0, str(args.chassis_root.resolve() / 'test'))
     from gazebo_truth import GazeboTruth
@@ -63,6 +64,8 @@ def main():
             'spin': [(0, 0, 0), (0, 0, .9)],
             'final_yaw': [(0, 0, 0), (.8, 0, -.9)],
             'curve': [(0, 0, 0), (.4, .1, .2), (.9, .25, .2), (1.3, .25, 0)],
+            'out_and_back': [(0, 0, 0), (.8, 0, 0), (0, 0, 0)],
+            'closed_loop': [(0, 0, 0), (.8, 0, 0), (.8, .8, 0), (0, .8, 0), (0, 0, 0)],
         }
         for name, points in scenarios.items():
             if args.scenario and name != args.scenario:
@@ -85,7 +88,21 @@ def main():
             publisher.publish(message)
             wait(lambda: completed[0] is False, 5)
             start = time.monotonic()
-            wait(lambda: completed[0] is True, 75)
+            checkpoints = message.poses[1:-1] if name in ('out_and_back', 'closed_loop') else []
+            visited = 0
+
+            def finished():
+                nonlocal visited
+                if visited < len(checkpoints):
+                    p = odom[0].pose.pose.position
+                    q = checkpoints[visited].pose.position
+                    if math.hypot(p.x-q.x, p.y-q.y) < .2:
+                        visited += 1
+                return completed[0] is True
+
+            wait(finished, 75)
+            assert visited == len(checkpoints), \
+                f'{name} completed before ordered checkpoints: {visited}/{len(checkpoints)}'
             target = message.poses[-1].pose
             measured = truth.latest.pose.pose
             x, y = target.position.x-origin[0], target.position.y-origin[1]
