@@ -20,7 +20,13 @@ using Steady = std::chrono::steady_clock;
 struct Nav2Controller::Runtime
 {
   std::mutex mutex;
-  rclcpp_lifecycle::LifecycleNode::SharedPtr node;
+  rclcpp_lifecycle::LifecycleNode::WeakPtr parent;
+  rclcpp_lifecycle::LifecycleNode::SharedPtr node() const
+  {
+    auto owner = parent.lock();
+    if (!owner) throw nav2_core::ControllerException("Nav2 parent node expired");
+    return owner;
+  }
   std::string name, global_frame, body_frame, plan_frame;
   std::shared_ptr<tf2_ros::Buffer> tf;
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap;
@@ -43,12 +49,12 @@ struct Nav2Controller::Runtime
   T parameter(const std::string & key, T value)
   {
     const auto full = name + "." + key;
-    if (!node->has_parameter(full)) {
+    if (!node()->has_parameter(full)) {
       rcl_interfaces::msg::ParameterDescriptor descriptor;
       descriptor.read_only = true;
-      node->declare_parameter<T>(full, value, descriptor);
+      node()->declare_parameter<T>(full, value, descriptor);
     }
-    return node->get_parameter(full).get_value<T>();
+    return node()->get_parameter(full).get_value<T>();
   }
   void parameters()
   {
@@ -90,8 +96,8 @@ struct Nav2Controller::Runtime
     size("samples", config.samples);
     size("iterations", config.iterations);
     config.seed = static_cast<std::uint32_t>(parameter<int>("seed", 42));
-    if (node->has_parameter("controller_frequency"))
-      node->get_parameter("controller_frequency", frequency);
+    if (node()->has_parameter("controller_frequency"))
+      node()->get_parameter("controller_frequency", frequency);
     number("state_timeout", timeout);
     number("transform_tolerance", transform_tolerance);
     if (
@@ -135,7 +141,7 @@ struct Nav2Controller::Runtime
   {
     auto wire = adapter.translate(command);
     swerve_gazebo_sim::msg::ChassisCommand msg;
-    msg.header.stamp = node->now();
+    msg.header.stamp = node()->now();
     msg.header.frame_id = body_frame;
     msg.mode = static_cast<std::uint8_t>(wire.command.mode);
     msg.request_id = wire.request_id;
@@ -155,7 +161,7 @@ struct Nav2Controller::Runtime
   {
     if (prediction->get_subscription_count()) {
       nav_msgs::msg::Path msg;
-      msg.header.stamp = node->now();
+      msg.header.stamp = node()->now();
       msg.header.frame_id = global_frame;
       for (auto p : result.prediction) {
         geometry_msgs::msg::PoseStamped item;
@@ -166,9 +172,9 @@ struct Nav2Controller::Runtime
       prediction->publish(msg);
     }
     diagnostic_msgs::msg::DiagnosticArray msg;
-    msg.header.stamp = node->now();
+    msg.header.stamp = node()->now();
     diagnostic_msgs::msg::DiagnosticStatus item;
-    item.name = node->get_fully_qualified_name() + std::string("/") + name;
+    item.name = node()->get_fully_qualified_name() + std::string("/") + name;
     item.hardware_id = "swerve";
     item.level = result.status == Status::NoSolution ? item.WARN : item.OK;
     item.message = result.status == Status::Switching ? "mode transition" : "tracking";
@@ -193,20 +199,20 @@ void Nav2Controller::configure(
 {
   auto & r = *runtime_;
   std::lock_guard<std::mutex> lock(r.mutex);
-  r.node = parent.lock();
-  if (!r.node || !tf || !costmap) throw std::invalid_argument("missing Nav2 resources");
+  r.parent = parent;
+  if (parent.expired() || !tf || !costmap) throw std::invalid_argument("missing Nav2 resources");
   r.name = std::move(name);
   r.tf = std::move(tf);
   r.costmap = std::move(costmap);
   r.global_frame = r.costmap->getGlobalFrameID();
   r.body_frame = r.costmap->getBaseFrameID();
   r.parameters();
-  r.context = r.node->create_publisher<swerve_gazebo_sim::msg::ChassisCommand>(
+  r.context = r.node()->create_publisher<swerve_gazebo_sim::msg::ChassisCommand>(
     r.parameter<std::string>("context_topic", "mppi/command_context"), 1);
-  r.prediction = r.node->create_publisher<nav_msgs::msg::Path>(r.name + "/prediction", 1);
+  r.prediction = r.node()->create_publisher<nav_msgs::msg::Path>(r.name + "/prediction", 1);
   r.diagnostics =
-    r.node->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(r.name + "/diagnostics", 1);
-  r.states = r.node->create_subscription<swerve_gazebo_sim::msg::ChassisState>(
+    r.node()->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(r.name + "/diagnostics", 1);
+  r.states = r.node()->create_subscription<swerve_gazebo_sim::msg::ChassisState>(
     r.parameter<std::string>("state_topic", "chassis_controller/state"), rclcpp::SensorDataQoS(),
     [&r](const swerve_gazebo_sim::msg::ChassisState & msg) {
       std::lock_guard<std::mutex> guard(r.mutex);
@@ -258,7 +264,7 @@ void Nav2Controller::cleanup()
   r.adapter = ChassisAdapter{};
   r.tf.reset();
   r.costmap.reset();
-  r.node.reset();
+  r.parent.reset();
 }
 void Nav2Controller::setPlan(const nav_msgs::msg::Path & message)
 {
@@ -290,7 +296,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
   try {
     if (!r.active || !r.controller) throw nav2_core::ControllerException("MPPI is inactive");
     if (r.path.empty()) throw nav2_core::InvalidPath("no path");
-    const double now = r.node->now().seconds();
+    const double now = r.node()->now().seconds();
     const double dt = r.last_time > 0 ? now - r.last_time : 1 / r.frequency;
     r.last_time = now;
     if (dt <= 0 || dt > 1) throw nav2_core::NoValidControl("control clock discontinuity");
@@ -299,7 +305,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
       std::chrono::duration<double>(Steady::now() - r.state_wall).count() > r.timeout)
       throw nav2_core::NoValidControl("chassis state is stale or missing");
     geometry_msgs::msg::TwistStamped out;
-    out.header.stamp = r.node->now();
+    out.header.stamp = r.node()->now();
     out.header.frame_id = r.body_frame;
     if (r.measured->fault) {
       if (ordered) ordered->setReady(false);
