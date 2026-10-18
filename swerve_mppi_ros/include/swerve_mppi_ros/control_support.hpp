@@ -65,7 +65,9 @@ public:
       const auto & a = path_[progress_];
       const auto & b = path_[progress_ + 1];
       double dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
-      bool passed = l2 < 1e-12 || ((pose.x - a.x) * dx + (pose.y - a.y) * dy >= l2);
+      const double cross = (pose.x - a.x) * dy - (pose.y - a.y) * dx;
+      bool passed = l2 < 1e-12 || (((pose.x - a.x) * dx + (pose.y - a.y) * dy >= l2) &&
+                                   cross * cross <= 0.12 * 0.12 * l2);
       if (!passed && distance(pose, b) > 0.12) break;
       ++progress_;
     }

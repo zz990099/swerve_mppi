@@ -1,4 +1,4 @@
-"""Start a Gazebo Harmonic chassis and its independent MPPI path follower."""
+"""Start a Gazebo Harmonic chassis and the Nav2 FollowPath MPPI plugin."""
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource

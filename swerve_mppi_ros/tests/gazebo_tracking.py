@@ -7,10 +7,10 @@ from pathlib import Path
 
 import rclpy
 from rclpy.parameter import Parameter
-from rclpy.qos import QoSProfile, DurabilityPolicy
+from rclpy.action import ActionClient
 from nav_msgs.msg import Odometry, Path as PathMessage
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import Bool
+from nav2_msgs.action import FollowPath
 
 
 def yaw(q):
@@ -33,12 +33,9 @@ def main():
     rclpy.init()
     node = rclpy.create_node('tracking_acceptance', parameter_overrides=[
         Parameter('use_sim_time', value=True)])
-    odom, completed = [None], [None]
+    odom = [None]
     node.create_subscription(Odometry, '/odom', lambda m: odom.__setitem__(0, m), 10)
-    qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-    node.create_subscription(Bool, '/mppi_controller/goal_reached',
-                             lambda m: completed.__setitem__(0, m.data), qos)
-    publisher = node.create_publisher(PathMessage, '/path', 1)
+    client = ActionClient(node, FollowPath, '/follow_path')
     truth = GazeboTruth('/ground_truth/odom', 'gz')
 
     def wait(predicate, timeout):
@@ -51,7 +48,7 @@ def main():
 
     try:
         wait(lambda: odom[0] is not None and truth.latest is not None and
-             publisher.get_subscription_count() > 0, 90)
+             client.server_is_ready(), 90)
         initial = odom[0].pose.pose
         initial_truth = truth.latest.pose.pose
         rotation = wrap(yaw(initial_truth.orientation)-yaw(initial.orientation))
@@ -84,9 +81,15 @@ def main():
                 p.pose.orientation.z = math.sin((a+heading)/2)
                 p.pose.orientation.w = math.cos((a+heading)/2)
                 message.poses.append(p)
-            completed[0] = None
-            publisher.publish(message)
-            wait(lambda: completed[0] is False, 5)
+            goal = FollowPath.Goal()
+            goal.path = message
+            goal.controller_id = 'FollowPath'
+            goal.goal_checker_id = 'goal_checker'
+            future = client.send_goal_async(goal)
+            wait(future.done, 5)
+            handle = future.result()
+            assert handle.accepted, 'Nav2 rejected FollowPath'
+            result = handle.get_result_async()
             start = time.monotonic()
             checkpoints = message.poses[1:-1] if name in ('out_and_back', 'closed_loop') else []
             visited = 0
@@ -98,9 +101,11 @@ def main():
                     q = checkpoints[visited].pose.position
                     if math.hypot(p.x-q.x, p.y-q.y) < .2:
                         visited += 1
-                return completed[0] is True
+                return result.done()
 
             wait(finished, 75)
+            outcome = result.result()
+            assert outcome.status == 4 and outcome.result.error_code == 0, outcome
             assert visited == len(checkpoints), \
                 f'{name} completed before ordered checkpoints: {visited}/{len(checkpoints)}'
             target = message.poses[-1].pose
@@ -113,9 +118,10 @@ def main():
             print(f'{name}: wall_s={time.monotonic()-start:.2f} '
                   f'truth_position_error_m={error:.4f} truth_yaw_error_rad={angle:.4f}', flush=True)
             assert error < .15 and angle < .10, (name, error, angle)
-        print('PASS physical path following and external goal completion', flush=True)
+        print('PASS Nav2 FollowPath physical tracking and ordered goal completion', flush=True)
     finally:
         truth.close()
+        client.destroy()
         node.destroy_node()
         rclpy.shutdown()
 

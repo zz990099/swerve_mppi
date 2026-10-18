@@ -1,13 +1,14 @@
 #pragma once
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
+
 namespace swerve_mppi_ros
 {
-class ControllerNode : public rclcpp::Node
+class ChassisBridge : public rclcpp::Node
 {
 public:
-  explicit ControllerNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
-  ~ControllerNode() override;
+  explicit ChassisBridge(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+  ~ChassisBridge() override;
 
 private:
   struct Runtime;

@@ -1,60 +1,115 @@
-# ROS operation and configuration
+# Nav2 controller integration
 
-Baseline: Jazzy / Ubuntu 24.04 with Harmonic. `controller.launch.py` starts a regular
-node; no lifecycle calls or execution evidence producer is required. `demo.launch.py`
-also starts the companion chassis. The optional `namespace` argument belongs to
-`controller.launch.py`; configure frames/topics explicitly for prefixed robots.
+ROS package version **0.29.0** targets **ROS 2 Jazzy / Nav2 Jazzy** on Ubuntu 24.04.
+The numerical core remains independently installable at 0.28.0. Humble and Rolling
+have different controller APIs and are not claimed as tested targets.
 
-| Interface | Type | Purpose |
+## Plugins and ownership
+
+`swerve_mppi_ros::Nav2Controller` implements `nav2_core::Controller` and is exported
+through pluginlib. It implements configure/activate/deactivate/cleanup, setPlan,
+computeVelocityCommands, setSpeedLimit, cancel and reset. Nav2 owns execution rate,
+robot pose/velocity, the local costmap, FollowPath actions and task completion.
+There is no independent path subscription or controller timer.
+
+`swerve_mppi_ros::OrderedGoalChecker` implements `nav2_core::GoalChecker`. Use it
+with this controller: it requires final ordered-segment progress, settled position,
+yaw and measured speed, and no pending mode transition. It starts closed on every
+new action because Nav2 checks completion before its first controller call. This
+prevents a closed path from succeeding at its initial pose. Standard Nav2 goal
+checkers do not carry this ordered-progress contract.
+
+`setPlan` validates and stores the source-frame path. On every compute, robot pose
+is transformed into that frame to preserve ordered progress; the local section and
+endpoint are transformed into the costmap global frame using current TF. Mixed
+path frames and invalid planar quaternions are rejected. A local section excludes
+later return legs. Passing an endpoint also requires proximity to its segment,
+so an off-path projection cannot advance progress by itself.
+
+## Velocity and mode routing
+
+Nav2 returns only `TwistStamped`; the chassis also needs an explicit mode and
+frozen transition entry. The plugin therefore publishes a companion
+`ChassisCommand` envelope on `mppi/command_context`. This is context for the bridge,
+never a second drive output. The plugin preserves request IDs/entry geometry and
+returns zero throughout an unconfirmed transition.
+
+The `chassis_bridge` executable combines this context with Nav2's **final**
+`cmd_vel`, then publishes `chassis_controller/command`. Context alone cannot drive.
+New request IDs always carry zero drive velocity. Nonzero drive requires fresh
+context/velocity/state and confirmed matching mode, request ID and entry geometry.
+Nav2 zeros, stale inputs and zero contexts hold zero. With stale chassis feedback,
+the bridge stops renewing commands and the chassis watchdog applies its stop.
+
+Use exactly one bridge/command-topic owner. If adding a velocity smoother or
+collision monitor, remap the bridge input to that pipeline's final output. All
+processors must preserve the selected mode's velocity constraints; for example,
+Spin must not contain residual linear velocity. The supplied initial test launch
+uses a direct controller-server-to-bridge connection.
+
+| Interface | Type | Owner |
 | --- | --- | --- |
-| `path` | `nav_msgs/Path` | New ordered planar path; each delivery starts a task |
-| `odom` | `nav_msgs/Odometry` | Pose and measured body velocity |
-| `chassis_controller/state` | companion `ChassisState` | Actual/target modes and measured joints |
-| `costmap` | `nav_msgs/OccupancyGrid` | Optional grid for the ROS-side critic |
-| `chassis_controller/command` | companion `ChassisCommand` | Adapter-translated body velocity/mode intent |
-| `~/goal_reached` | `std_msgs/Bool` | Transient-local task completion; false on a new path |
-| `~/prediction` | `nav_msgs/Path` | Selected nominal prediction when subscribed |
-| `~/diagnostics` | `diagnostic_msgs/DiagnosticArray` | Compute duration, evaluated candidates, cost and mode |
+| `follow_path` | `nav2_msgs/action/FollowPath` | Nav2 controller server |
+| `odom` and TF | Normal Nav2 inputs | Controller server / local costmap |
+| `chassis_controller/state` | Companion `ChassisState` | Plugin and bridge observations |
+| `cmd_vel` | `geometry_msgs/TwistStamped` | Nav2 final speed output |
+| `mppi/command_context` | Companion `ChassisCommand` | Plugin mode/request context |
+| `chassis_controller/command` | Companion `ChassisCommand` | Bridge final output |
+| `FollowPath/prediction` | `nav_msgs/Path` | Plugin nominal prediction |
+| `FollowPath/diagnostics` | `diagnostic_msgs/DiagnosticArray` | Plugin timing/cost |
 
-Path subscription is reliable/volatile depth one, compatible with standard Path
-publishers. Send after discovery. State uses sensor QoS and odometry uses reliable
-depth ten. Costmap uses reliable/transient-local depth one. Publish a full static
-grid from a transient-local publisher. Map coordinates must already be in `odom_frame`
-with an axis-aligned origin. Path TF is resolved when the task is received; resend
-the path to reflect later global localization corrections. Mixed path frames are
-rejected. Poses require planar normalized quaternions.
+The old `/path`, `~/goal_reached` and standalone `controller` executable are
+removed. FollowPath results replace the old completion topic.
 
-Path progress also controls terminal convergence and completion. Local scoring
-excludes return legs until their preceding section has been traversed; the final
-goal activates on the last ordered segment. Returning to the starting pose is
-supported, including closed paths, without reporting success at task startup.
+## Configuration
 
-All settings are startup configuration. Defaults live in core `Config` and ROS
-`controller.yaml`. Geometry/actuator parameters must describe the chassis; they
-are explicit configuration, not remotely queried startup gates. Units are meters,
-seconds and radians. Core wheel speeds are rolling m/s; the adapter converts the
-companion's encoder rad/s using `wheel_radius`.
+`config/controller.yaml` is a minimal **FollowPath-only**, obstacle-free test setup.
+It starts neither a global planner, localization nor BT navigator. The local
+costmap is rolling in `odom` with an inflation layer and free initial cells. Add
+static/observation layers and robot-appropriate inflation before obstacle testing.
+The center-point cost critic consumes a locked, immutable Nav2 costmap snapshot;
+it is not a swept-footprint collision validator or completed obstacle-navigation
+acceptance.
 
-| Parameter group | Names |
-| --- | --- |
-| Timing | `control_frequency`, `state_timeout`, `model_dt`, `integration_dt` |
-| MPPI | `horizon`, `samples`, `iterations`, `seed`, `temperature`, `noise_linear`, `noise_angular`, `noise_correlation` |
-| Geometry | `wheelbase`, `track`, `wheel_radius`, `min_turn_radius`, `steer_limit` |
-| Response | `max_speed`, `max_yaw_rate`, `linear_accel`, `angular_accel`, `max_wheel_speed`, `wheel_accel`, `steer_rate` |
-| Alignment | `realign_angle`, `alignment_tolerance`, `alignment_dwell`, `stopped_wheel_speed` |
-| Mode selection | `minimum_mode_dwell`, `switch_penalty`, `switch_hysteresis` |
-| Tracking | `lookahead`, `approach_distance`, `approach_gain` |
-| Critics | `path_distance_weight`, `path_heading_weight`, `progress_weight`, `goal_position_weight`, `goal_heading_weight`, `effort_weight`, `smoothness_weight`, `steering_change_weight` |
-| GoalChecker | `goal_position_tolerance`, `goal_yaw_tolerance`, `goal_linear_speed`, `goal_angular_speed`, `goal_settle_time` |
-| Map critic | `use_costmap`, `costmap_weight`, `unknown_is_obstacle` |
+In an existing Nav2 configuration add:
 
-`state_timeout` checks source age and wall silence. Missing observations suspend
-normal publication and clear warm-start; the chassis owns command timeout behavior.
-A failed compute produces a current-mode zero. No runtime fault latch prevents the
-next valid observation from being used. This is a nominal path follower; no independent
-emergency-stop or physical braking guarantee is provided by the MPPI package.
+```yaml
+controller_server:
+  ros__parameters:
+    controller_plugins: [FollowPath]
+    goal_checker_plugins: [goal_checker]
+    enable_stamped_cmd_vel: true
+    FollowPath:
+      plugin: swerve_mppi_ros::Nav2Controller
+      state_topic: chassis_controller/state
+      context_topic: mppi/command_context
+      use_costmap: true
+    goal_checker:
+      plugin: swerve_mppi_ros::OrderedGoalChecker
+      xy_goal_tolerance: 0.06
+      yaw_goal_tolerance: 0.05
+      trans_stopped_velocity: 0.035
+      rot_stopped_velocity: 0.035
+      settle_time: 0.3
+```
 
-Stage one uses `use_costmap=false`. With `use_costmap=true`, missing maps produce
-NoSolution, unknown/off-map/lethal cells can reject candidates, and nonlethal costs
-are accumulated. Inflate the supplied map for the robot radius before enabling this
-center-point critic. There is no separate circle-obstacle message pipeline.
+Launch only the bridge alongside an existing controller server; do not launch a
+second controller server. Set bridge frames, topics and `enable_stamped_cmd_vel`
+to match the host Nav2 configuration. The bridge also supports unstamped Twist
+when explicitly configured, using reception time for freshness.
+
+Core parameters are under `FollowPath.*`: geometry, response, horizon/samples,
+noise, tracking weights, mode dwell/switch cost and approach settings retain the
+names in core Config and TrackingWeights. Extra plugin settings are
+`state_timeout`, `transform_tolerance`, `state_topic`, `context_topic`,
+`use_costmap`, `costmap_weight` and `unknown_is_obstacle`. Parameters are startup
+configuration. `setSpeedLimit` supports absolute m/s and percentages of the
+configured maximum; Nav2's zero `NO_SPEED_LIMIT` sentinel restores the baseline.
+Angular and wheel limits remain enforced independently.
+
+The bridge parameters are `body_frame`, `state_topic`, `context_topic`,
+`cmd_vel_topic`, `command_topic`, `enable_stamped_cmd_vel`, `command_timeout` and
+`publish_frequency`. Core wheel speed is rolling m/s; companion feedback is rad/s
+and is converted with `FollowPath.wheel_radius`. Geometry and response settings
+must match the chassis. For namespaces, provide a correspondingly scoped Nav2
+parameter file and explicit frame names.

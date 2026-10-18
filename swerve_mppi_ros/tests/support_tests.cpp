@@ -71,6 +71,9 @@ int main()
       local.size() == 2 && local.back().x == 1,
       "local scoring excludes the overlapping return leg");
     check(!path.goal_active(), "out-and-back requires the turnaround first");
+    local = path.local({1, 0.5, 0});
+    check(
+      !path.goal_active() && local.front().x == 0, "off-path projection cannot skip a turnaround");
     path.local({1, 0, 0});
     check(path.goal_active(), "turnaround unlocks return goal");
     path.set({{0, 0, 1.2}});

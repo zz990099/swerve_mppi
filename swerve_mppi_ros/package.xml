@@ -1,15 +1,15 @@
 <?xml version="1.0"?>
 <package format="3">
- <name>swerve_mppi_ros</name><version>0.28.0</version>
- <description>ROS path-following caller and chassis adapter for swerve MPPI.</description>
+ <name>swerve_mppi_ros</name><version>0.29.0</version>
+ <description>Nav2 controller and ordered goal checker plugins with a swerve chassis bridge.</description>
  <maintainer email="86543200+zz990099@users.noreply.github.com">zz990099</maintainer>
  <license>LicenseRef-Unspecified</license>
  <buildtool_depend>ament_cmake</buildtool_depend>
  <depend>swerve_mppi_core</depend><depend>swerve_gazebo_sim</depend>
- <depend>rclcpp</depend><depend>std_msgs</depend><depend>geometry_msgs</depend>
+ <depend>rclcpp</depend><depend>rclcpp_lifecycle</depend><depend>nav2_core</depend><depend>nav2_costmap_2d</depend><depend>pluginlib</depend><depend>std_msgs</depend><depend>geometry_msgs</depend>
  <depend>nav_msgs</depend><depend>diagnostic_msgs</depend>
  <depend>tf2_ros</depend><depend>tf2_geometry_msgs</depend>
- <exec_depend>launch_ros</exec_depend><exec_depend>rclpy</exec_depend>
+ <exec_depend>nav2_controller</exec_depend><exec_depend>nav2_lifecycle_manager</exec_depend><exec_depend>nav2_msgs</exec_depend><exec_depend>rclpy</exec_depend><exec_depend>launch_ros</exec_depend>
  <test_depend>ament_cmake_gtest</test_depend>
  <export><build_type>ament_cmake</build_type></export>
 </package>

@@ -1,0 +1,8 @@
+<library path="swerve_mppi_nav2">
+  <class name="swerve_mppi_ros::Nav2Controller" type="swerve_mppi_ros::Nav2Controller" base_class_type="nav2_core::Controller">
+    <description>Mode-aware swerve MPPI controller for Nav2 Jazzy.</description>
+  </class>
+  <class name="swerve_mppi_ros::OrderedGoalChecker" type="swerve_mppi_ros::OrderedGoalChecker" base_class_type="nav2_core::GoalChecker">
+    <description>Stopped, settled goal check gated by ordered path and chassis mode readiness.</description>
+  </class>
+</library>
