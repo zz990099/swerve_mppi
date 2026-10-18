@@ -26,7 +26,7 @@ private:
   std::mutex mutex_;
   rclcpp::Clock::SharedPtr clock_;
   GoalTolerance tolerance_;
-  GoalChecker checker_;
+  swerve_mppi_ros::GoalChecker checker_;
   bool ready_ = false;
 };
 }  // namespace swerve_mppi_ros

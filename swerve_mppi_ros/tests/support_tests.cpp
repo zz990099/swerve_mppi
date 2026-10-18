@@ -79,19 +79,21 @@ int main()
     path.set({{0, 0, 1.2}});
     check(path.goal_active(), "single-pose rotation remains a terminal task");
     CostmapCritic critic;
-    std::uint8_t bytes[] = {0, 254, 255, 0};
+    std::uint8_t bytes[] = {0, 254, 255, 253};
     Input input;
     input.map = {bytes, 2, 2, 1, 0, 0};
     Config config;
-    std::vector<Trajectory> batch(3);
+    std::vector<Trajectory> batch(4);
     for (auto & t : batch) t.states.resize(1);
     batch[0].states[0].pose = {0.5, 0.5, 0};
     batch[1].states[0].pose = {1.5, 0.5, 0};
     batch[2].states[0].pose = {0.5, 1.5, 0};
-    std::vector<double> costs(3);
+    batch[3].states[0].pose = {1.5, 1.5, 0};
+    std::vector<double> costs(4);
     critic.score({input, config}, batch, costs);
     check(
-      costs[0] == 0 && !std::isfinite(costs[1]) && !std::isfinite(costs[2]),
+      costs[0] == 0 && !std::isfinite(costs[1]) && !std::isfinite(costs[2]) &&
+        !std::isfinite(costs[3]),
       "ROS-injected grid cost");
     std::cout << "ROS support tests passed\n";
   } catch (const std::exception & e) {
