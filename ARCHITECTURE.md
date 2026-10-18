@@ -63,30 +63,36 @@ demonstrates injection without ROS dependencies in core. It scores centers in an
 already inflated map; it is not a swept-footprint collision validator. Physical
 obstacle navigation is outside first-stage acceptance.
 
-## Caller responsibilities
+## Nav2 caller responsibilities
 
-The ROS node receives the latest state/odometry, transforms a new path into the
-odometry frame, preserves ordered progress, prepares a local path and calls core
-at a configured frequency. Original encoder stamps are used for freshness checks;
-same-stamp mode/fault updates are accepted. There is no atomic snapshot pairing gate.
-Normal speed commands are published continuously without a receipt service.
+The ROS integration is a plugin loaded by Nav2's controller server, not an
+independent node with a control loop. Nav2 supplies robot pose/body velocity and
+owns FollowPath actions, frequency, cancellation and goal evaluation. The plugin
+receives chassis joint/mode feedback and uses source timestamps plus wall silence
+for freshness. The local costmap is copied under its mutex for each compute call.
 
-The small chassis adapter preserves the accepted request ID and entry geometry.
-A mode change becomes a zero-speed request with frozen entry velocity. Retries keep
-the same request until actual mode/ready feedback confirms completion. This feedback
-is mode state, not an acknowledgement of every speed command. A faulted startup
-chassis receives a new zero request through the same adapter; there is no separate
-recovery API. Other processes must not concurrently own the command topic.
+Paths remain in their source frame for monotonic progress; each prepared local
+section and endpoint is transformed into the current costmap global frame. Sections
+exclude later return legs. Endpoint advancement requires nearby path geometry as
+well as forward projection. `Input::goal_active` permits terminal attraction only
+on the last ordered segment.
 
-GoalChecker is outside core and requires endpoint position, yaw and measured speed
-within caller-configured bounds for a settle interval. It then ends the task and
-publishes ordinary zero commands. Terminal critics guide convergence but do not
-declare success. New tasks reset both path progress and goal-checking state.
+`Nav2Controller` returns the velocity that Nav2 publishes through its normal
+cmd_vel chain. A separate command-context publisher carries explicit mode/request
+ID/entry geometry. `chassis_bridge` combines that context with the final Nav2
+velocity; context alone cannot drive, and stopping/cancellation cannot be bypassed
+by publishing core speeds directly to the chassis.
 
-The caller crops the local path to a forward monotonic section, excluding later
-return legs from nearest-point scoring. `Input::goal_active` permits terminal
-attraction, final-yaw seeding and noise taper only after ordered progress reaches
-the final segment; the ROS GoalChecker uses the same gate. A closed or out-and-back
-path therefore cannot finish simply because its endpoint is near the initial pose.
-Standalone callers must prepare ordered local sections and set this flag from
-their own progress state. It defaults to true for direct, single-section tasks.
+The plugin retains pending mode requests until measured confirmation, including
+before the chassis echoes the request. Retried entries remain frozen. Faulted
+startup uses the same zero-request path. No ordinary speed receipt is required.
+
+`OrderedGoalChecker` is separately loaded through Nav2's GoalChecker interface.
+Its normal position/yaw/speed settling also requires final ordered progress and
+mode readiness supplied by the controller. It starts closed after reset because
+Nav2 checks the goal before computing its first command. This prevents closed
+paths from completing at startup. The standalone numerical GoalChecker helper is
+retained for portable regression tests, not as a competing ROS task engine.
+
+Core remains 0.28.0; ROS 0.29.0 deliberately replaces the old standalone ROS API.
+See docs/ROS.md for Jazzy-specific plugin configuration and bridge routing.

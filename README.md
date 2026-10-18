@@ -2,52 +2,37 @@
 
 A C++17 local velocity controller for a four-module chassis with dual Ackermann,
 spin and crab modes. It samples control sequences, predicts nominal chassis
-response, scores trajectories through injectable critics and returns a body
-velocity plus an explicit target mode.
+response, scores trajectories through injectable critics and returns body velocity
+plus an explicit target mode.
 
-Version **0.28.0** is a breaking simplification. The core owns optimization and
-mode selection. The ROS caller owns paths, transforms, costmap snapshots, chassis
-message adaptation and goal completion. Ordinary velocity commands are computed
-periodically without per-command acknowledgements. There are no execution-evidence
-services, independent trajectory validators or task/recovery state machines in core.
-
-## Packages
+The ROS package **0.29.0** implements a **Nav2 Jazzy controller plugin**, ordered
+GoalChecker and chassis bridge. The standalone numerical core remains 0.28.0.
+Nav2 owns FollowPath actions, control timing, TF, odometry, costmaps and completion.
+The former standalone ROS `/path` controller is replaced by this integration.
 
 | Package | Responsibility |
 | --- | --- |
-| `swerve_mppi_core` | Plain CMake library; model, sampling, MPPI update and critic interface |
-| `swerve_mppi_ros` | Jazzy node, external GoalChecker, ROS costmap critic and current chassis adapter |
+| `swerve_mppi_core` | Plain CMake model, sampling, MPPI update and critic interface |
+| `swerve_mppi_ros` | Nav2 controller / goal checker plugins and final-velocity chassis bridge |
 
-## Standalone build
+## Standalone core
 
 ```bash
 cmake -S swerve_mppi_core -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
-cmake --install build --prefix "$PWD/install-core"
 ```
 
-```cpp
-#include <swerve_mppi/controller.hpp>
+Consumers use `find_package(swerve_mppi_core 0.28 CONFIG REQUIRED)` and link
+`swerve_mppi::core`. `Controller::compute(Input)` returns body-frame `vx, vy, wz`
+and a target mode. Fill measured pose, velocity, steering and rolling wheel speeds
+on each call. Standalone callers own ordered path preparation and goal progress.
 
-swerve_mppi::Controller controller;
-swerve_mppi::Input input;
-input.path = {{0, 0, 0}, {1, 0, 0}};
-input.goal = input.path.back();
-// Fill measured pose, velocity, steering, wheel speeds and mode each cycle.
-auto result = controller.compute(input);
-// result.command.velocity: body-frame m/s, m/s, rad/s.
-// result.command.mode: explicit desired mode, not a completion acknowledgement.
-```
+## Nav2 / Gazebo test setup
 
-Consumers use `find_package(swerve_mppi_core 0.28 CONFIG REQUIRED)` and
-`target_link_libraries(my_controller PRIVATE swerve_mppi::core)`.
-
-## Gazebo path following
-
-Use ROS 2 Jazzy / Gazebo Harmonic. Put this repository and
+Use ROS 2 **Jazzy** / Ubuntu 24.04 and Gazebo **Harmonic**. Put this repository and
 [`swerve_gazebo_sim`](https://github.com/zz990099/swerve_gazebo_sim) in a colcon
-workspace. The reviewed companion revision is `9358c96884d7fa4866cea7c053daa7a7cec82d8f`.
+workspace. The pinned companion is `9358c96884d7fa4866cea7c053daa7a7cec82d8f`.
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -57,21 +42,17 @@ source install/local_setup.bash
 ros2 launch swerve_mppi_ros demo.launch.py
 ```
 
-From another sourced terminal, wait for `/odom` and the controller subscription,
-then publish one ordered path in the `odom` frame:
+From another sourced terminal, send a path after the FollowPath server is active:
 
 ```bash
-ros2 topic pub --once /path nav_msgs/msg/Path '{header: {frame_id: odom}, poses: [{header: {frame_id: odom}, pose: {orientation: {w: 1.0}}}, {header: {frame_id: odom}, pose: {position: {x: 1.0}, orientation: {w: 1.0}}}]}'
-ros2 topic echo /mppi_controller/goal_reached
+ros2 action send_goal /follow_path nav2_msgs/action/FollowPath "{path: {header: {frame_id: odom}, poses: [{pose: {orientation: {w: 1.0}}}, {pose: {position: {x: 1.0}, orientation: {w: 1.0}}}]}, controller_id: FollowPath, goal_checker_id: goal_checker, progress_checker_id: progress_checker}" --feedback
 ```
 
-The default launch tracks in an obstacle-free scene with the costmap critic disabled.
-The first-stage acceptance target is path tracking plus position/yaw convergence.
-The nominal model includes actuator slew and stop/align switching; servo/contact/slip
-calibration and obstacle navigation are separate validation work.
+This launch supplies a FollowPath server with a free local costmap, plus the
+companion chassis and bridge. It is ready for controller integration tests; a
+full navigation system additionally needs localization, planning, sensors and BT
+configuration. Obstacle and real-hardware acceptance are separate work.
 
-- [Architecture and API](ARCHITECTURE.md)
-- [Configuration and ROS operation](docs/ROS.md)
+- [Architecture](ARCHITECTURE.md)
+- [Nav2 wiring, parameters and migration](docs/ROS.md)
 - [Validation and remaining work](docs/VALIDATION.md)
-
-Powered by Codex.

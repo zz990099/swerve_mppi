@@ -37,11 +37,12 @@ within 50 simulated seconds. No per-speed-command receipt is produced.
 
 ## ROS and physical acceptance
 
-The native Jazzy test publishes synthetic chassis/odometry and checks continuous
-commands without evidence services, external goal completion, task restart and
-the ordered turnaround gate. CI then launches a fresh Harmonic chassis with MPPI
-for each of eight paths, including out-and-back and closed-loop tasks with ordered
-checkpoint assertions.
+Native Jazzy tests load both plugins via pluginlib and exercise lifecycle,
+absolute/percentage speed limits and reset, missing TF/stale state, injected
+costmap rejection, frozen mode handshakes, final-velocity bridge stop authority,
+and ordered GoalChecker settling. CI launches a fresh Harmonic chassis with the
+actual Nav2 controller server for each of eight FollowPath action cases, including
+out-and-back and closed-loop tasks with ordered checkpoint assertions.
 Independent Gazebo truth is read only by the test. GoalChecker uses the normal
 encoder estimate; the physical test additionally requires truth error below 0.15 m
 and 0.10 rad at completion. Each case starts a fresh world and encoder origin;
@@ -70,8 +71,8 @@ repeating that separate cumulative-drift experiment.
    scoring when center costs in an inflated map are insufficient.
 3. Identify real hardware response and state-estimation behavior before real-robot
    acceptance. Measure compute timing on the intended onboard computer.
-4. Add a separate Nav2 wrapper using the same core and Nav2-owned GoalChecker/task
-   lifecycle once standalone tracking is accepted.
+4. Expand Nav2 integration to sensor-populated obstacle maps and a complete
+   navigation bringup; the supplied launch intentionally tests FollowPath only.
 
 Pre-0.28 tests and execution-evidence contracts were removed with their production
 implementations. Their old results do not establish acceptance of this controller.
