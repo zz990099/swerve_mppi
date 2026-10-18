@@ -11,6 +11,9 @@ from rclpy.action import ActionClient
 from nav_msgs.msg import Odometry, Path as PathMessage
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import FollowPath
+from lifecycle_msgs.srv import GetState
+from lifecycle_msgs.msg import State
+from action_msgs.msg import GoalStatus
 
 
 def yaw(q):
@@ -36,6 +39,8 @@ def main():
     odom = [None]
     node.create_subscription(Odometry, '/odom', lambda m: odom.__setitem__(0, m), 10)
     client = ActionClient(node, FollowPath, '/follow_path')
+    lifecycle = node.create_client(GetState, '/controller_server/get_state')
+    pending_state = [None]
     truth = GazeboTruth('/ground_truth/odom', 'gz')
 
     def wait(predicate, timeout):
@@ -46,9 +51,21 @@ def main():
                 return
         raise AssertionError(f'tracking condition timed out, odom={odom[0]}')
 
+    def active():
+        if not client.server_is_ready() or not lifecycle.service_is_ready():
+            return False
+        if pending_state[0] is None:
+            pending_state[0] = lifecycle.call_async(GetState.Request())
+            return False
+        if not pending_state[0].done():
+            return False
+        ready = pending_state[0].result().current_state.id == State.PRIMARY_STATE_ACTIVE
+        pending_state[0] = None
+        return ready
+
     try:
         wait(lambda: odom[0] is not None and truth.latest is not None and
-             client.server_is_ready(), 90)
+             active(), 90)
         initial = odom[0].pose.pose
         initial_truth = truth.latest.pose.pose
         rotation = wrap(yaw(initial_truth.orientation)-yaw(initial.orientation))
@@ -105,7 +122,7 @@ def main():
 
             wait(finished, 75)
             outcome = result.result()
-            assert outcome.status == 4 and outcome.result.error_code == 0, outcome
+            assert outcome.status == GoalStatus.STATUS_SUCCEEDED and outcome.result.error_code == 0, outcome
             assert visited == len(checkpoints), \
                 f'{name} completed before ordered checkpoints: {visited}/{len(checkpoints)}'
             target = message.poses[-1].pose

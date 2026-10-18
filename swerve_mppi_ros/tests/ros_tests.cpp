@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <nav2_core/controller.hpp>
 #include <nav2_core/controller_exceptions.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <pluginlib/class_loader.hpp>
 #include <swerve_gazebo_sim/msg/chassis_command.hpp>
 #include <thread>
@@ -113,7 +115,7 @@ protected:
     current.header.stamp = source->now();
     current.header.frame_id = "odom";
     current.pose = pose_message(p);
-    return controller->computeVelocityCommands(current, {}, goal.get());
+    return controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get());
   }
   rclcpp_lifecycle::LifecycleNode::SharedPtr node;
   std::shared_ptr<rclcpp::Node> source;
@@ -144,7 +146,7 @@ TEST_F(Nav2PluginTest, LifecycleSpeedLimitsAndServerVelocityAuthority)
   EXPECT_GT(command.velocity.linear.x, 0);
   auto zero = speed;
   zero.header.stamp = source->now();
-  zero.twist = {};
+  zero.twist = geometry_msgs::msg::Twist{};
   velocities->publish(zero);
   spin(20);
   EXPECT_EQ(command.velocity.linear.x, 0) << "Nav2 zero must override a nonzero controller context";
@@ -194,15 +196,16 @@ TEST_F(Nav2PluginTest, ModeHandshakeAndOrderedGoalChecker)
   controller->setPlan(path({{0, 0, 0}, {1, 0, 0}, {0, 0, 0}}));
   goal->reset();
   const auto origin = pose_message({});
-  EXPECT_FALSE(goal->isGoalReached(origin, origin, {}));  // Nav2 checks before first compute.
+  EXPECT_FALSE(goal->isGoalReached(
+    origin, origin, geometry_msgs::msg::Twist{}));  // Nav2 checks before first compute.
   compute();
   std::this_thread::sleep_for(60ms);
-  EXPECT_FALSE(goal->isGoalReached(origin, origin, {}));
+  EXPECT_FALSE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
   compute({1, 0, 0});
   compute({0, 0, 0});
-  EXPECT_FALSE(goal->isGoalReached(origin, origin, {}));
+  EXPECT_FALSE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
   std::this_thread::sleep_for(60ms);
-  EXPECT_TRUE(goal->isGoalReached(origin, origin, {}));
+  EXPECT_TRUE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
 }
 TEST_F(Nav2PluginTest, CostmapTfAndInvalidInputs)
 {
@@ -228,7 +231,8 @@ TEST_F(Nav2PluginTest, CostmapTfAndInvalidInputs)
   current.header.frame_id = "odom";
   current.pose = pose_message({});
   EXPECT_THROW(
-    controller->computeVelocityCommands(current, {}, goal.get()), nav2_core::NoValidControl);
+    controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get()),
+    nav2_core::NoValidControl);
 }
 TEST_F(Nav2PluginTest, BridgeRejectsStaleAndModeIncompatibleSpeed)
 {
@@ -236,7 +240,7 @@ TEST_F(Nav2PluginTest, BridgeRejectsStaleAndModeIncompatibleSpeed)
   auto speed = compute();
   spin(20);
   auto stale = speed;
-  stale.header.stamp = (source->now() - rclcpp::Duration::from_seconds(1)).to_msg();
+  stale.header.stamp = source->now() - rclcpp::Duration::from_seconds(1);
   velocities->publish(stale);
   spin(20);
   EXPECT_EQ(command.velocity.linear.x, 0);
