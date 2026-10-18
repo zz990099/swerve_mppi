@@ -22,6 +22,7 @@ protected:
   void SetUp() override
   {
     rclcpp::init(0, nullptr);
+    executor = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
     node = std::make_shared<rclcpp_lifecycle::LifecycleNode>("test_controller_server");
     node->declare_parameter("FollowPath.samples", 16);
     node->declare_parameter("FollowPath.state_timeout", 0.5);
@@ -53,9 +54,9 @@ protected:
       "mppi/command_context", 10, [&](const Context & c) { context = c; });
     commands = source->create_subscription<Context>(
       "chassis_controller/command", 10, [&](const Context & c) { command = c; });
-    executor.add_node(node->get_node_base_interface());
-    executor.add_node(source);
-    executor.add_node(bridge);
+    executor->add_node(node->get_node_base_interface());
+    executor->add_node(source);
+    executor->add_node(bridge);
     for (int i = 0; i < 100 && (states->get_subscription_count() < 2 ||
                                 velocities->get_subscription_count() < 1);
          ++i)
@@ -69,9 +70,10 @@ protected:
   {
     controller->deactivate();
     controller->cleanup();
-    executor.remove_node(node->get_node_base_interface());
-    executor.remove_node(source);
-    executor.remove_node(bridge);
+    executor->remove_node(node->get_node_base_interface());
+    executor->remove_node(source);
+    executor->remove_node(bridge);
+    executor.reset();
     controller.reset();
     goal.reset();
     loader.reset();
@@ -86,7 +88,7 @@ protected:
   void spin(int ms)
   {
     for (int i = 0; i < ms; ++i) {
-      executor.spin_some();
+      executor->spin_some();
       std::this_thread::sleep_for(1ms);
     }
   }
@@ -126,7 +128,7 @@ protected:
   std::unique_ptr<pluginlib::ClassLoader<nav2_core::GoalChecker>> goal_loader;
   nav2_core::Controller::Ptr controller;
   nav2_core::GoalChecker::Ptr goal;
-  rclcpp::executors::SingleThreadedExecutor executor;
+  std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> executor;
   rclcpp::Publisher<Observation>::SharedPtr states;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr velocities;
   rclcpp::Subscription<Context>::SharedPtr contexts, commands;
@@ -262,4 +264,15 @@ TEST_F(Nav2PluginTest, BridgeRejectsStaleAndModeIncompatibleSpeed)
   velocities->publish(speed);
   spin(20);
   EXPECT_EQ(command.velocity.linear.x, 0);
+}
+TEST_F(Nav2PluginTest, PluginDoesNotRetainItsLifecycleParent)
+{
+  auto separate = loader->createSharedInstance("swerve_mppi_ros::Nav2Controller");
+  auto owner = std::make_shared<rclcpp_lifecycle::LifecycleNode>("temporary_controller_parent");
+  auto buffer = std::make_shared<tf2_ros::Buffer>(owner->get_clock());
+  separate->configure(owner, "FollowPath", buffer, costmap);
+  rclcpp_lifecycle::LifecycleNode::WeakPtr weak = owner;
+  owner.reset();
+  EXPECT_TRUE(weak.expired()) << "A controller plugin must not create a server ownership cycle";
+  separate->cleanup();
 }
