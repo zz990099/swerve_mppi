@@ -87,6 +87,18 @@ TEST(RosCaller, ReplansWithoutReceiptsAndGoalCheckerLivesOutsideCore)
   path_pub->publish(path);
   spin(15, false);
   EXPECT_FALSE(reached);
+  // The endpoint of an out-and-back path coincides with the initial pose.
+  // Completion must wait until ordered progress has visited the turnaround.
+  path.poses.push_back(path.poses.front());
+  moving = false;
+  path_pub->publish(path);
+  spin(25, false);
+  EXPECT_FALSE(reached) << last_status;
+  EXPECT_TRUE(moving) << last_status;
+  spin(15, true);
+  EXPECT_FALSE(reached);
+  spin(30, false);
+  EXPECT_TRUE(reached) << last_status;
   executor.remove_node(controller);
   executor.remove_node(source);
   controller.reset();

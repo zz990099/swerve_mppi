@@ -9,9 +9,9 @@ namespace swerve_mppi
 Model::Model(Config config) : config_(config) { validate(config_); }
 Velocity Model::project(Velocity v, Mode mode) const
 {
-  if (mode == Mode::Spin)
-    return {0, 0, std::clamp(v.wz, -config_.max_yaw_rate, config_.max_yaw_rate)};
-  if (mode == Mode::Ackermann) {
+  if (mode == Mode::Spin) {
+    v = {0, 0, std::clamp(v.wz, -config_.max_yaw_rate, config_.max_yaw_rate)};
+  } else if (mode == Mode::Ackermann) {
     v.vy = 0;
     v.vx = std::clamp(v.vx, -config_.max_speed, config_.max_speed);
     double w = std::min(config_.max_yaw_rate, std::abs(v.vx) / config_.min_turn_radius);

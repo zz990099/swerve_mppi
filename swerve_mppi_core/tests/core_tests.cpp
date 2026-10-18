@@ -33,6 +33,22 @@ int main()
       check(std::hypot(v.vx, v.vy) <= c.max_speed + 1e-9, "speed cap");
       if (mode == Mode::Spin) check(v.vx == 0 && v.vy == 0, "spin geometry");
     }
+    Config slow = c;
+    slow.max_wheel_speed = 0.1;
+    Model slow_model(slow);
+    for (auto mode : {Mode::Ackermann, Mode::Spin, Mode::Crab}) {
+      for (double sign : {-1.0, 1.0}) {
+        auto command = slow_model.project({sign * 0.8, sign * 0.5, sign * 0.8}, mode);
+        for (double speed : slow_model.inverse(command, {}).speeds)
+          check(std::abs(speed) <= slow.max_wheel_speed + 1e-9, "projected wheel cap in all modes");
+        auto trace = slow_model.rollout({}, mode, std::vector<Velocity>(slow.horizon, command));
+        check(trace.valid, "low wheel limit rollout");
+        for (const auto & sample : trace.states)
+          for (double speed : sample.wheel_speeds)
+            check(
+              std::abs(speed) <= slow.max_wheel_speed + 1e-9, "predicted wheel cap in all modes");
+      }
+    }
     State state;
     std::vector<Velocity> controls(c.horizon, {0, 0.4, 0});
     auto t = model.rollout(state, Mode::Crab, controls);

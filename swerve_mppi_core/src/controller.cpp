@@ -77,12 +77,14 @@ std::vector<Velocity> Controller::seed(const Input & input, Mode mode) const
     double x = std::cos(s.pose.yaw) * dx + std::sin(s.pose.yaw) * dy;
     double y = -std::sin(s.pose.yaw) * dx + std::cos(s.pose.yaw) * dy;
     double limit = config_.max_speed;
-    if (distance(input.path.back(), input.goal) < 0.001)
+    if (input.goal_active && distance(input.path.back(), input.goal) < 0.001)
       limit = std::min(limit, config_.approach_gain * distance(s.pose, input.goal));
     Velocity v;
     if (mode == Mode::Spin) {
       const double desired =
-        distance(s.pose, input.goal) < config_.approach_distance ? input.goal.yaw : target.yaw;
+        input.goal_active && distance(s.pose, input.goal) < config_.approach_distance
+          ? input.goal.yaw
+          : target.yaw;
       v.wz = 1.5 * wrap_angle(desired - s.pose.yaw);
     } else if (mode == Mode::Crab) {
       v = {config_.approach_gain * x, config_.approach_gain * y, 0};
@@ -161,7 +163,7 @@ Result Controller::compute(const Input & input)
     result.status = Status::NoSolution;
     return finish();
   }
-  const bool terminal = distance(input.path.back(), input.goal) < 0.001;
+  const bool terminal = input.goal_active && distance(input.path.back(), input.goal) < 0.001;
   const double terminal_scale =
     terminal ? std::clamp(
                  std::max(

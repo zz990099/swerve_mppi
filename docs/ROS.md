@@ -24,6 +24,11 @@ with an axis-aligned origin. Path TF is resolved when the task is received; rese
 the path to reflect later global localization corrections. Mixed path frames are
 rejected. Poses require planar normalized quaternions.
 
+Path progress also controls terminal convergence and completion. Local scoring
+excludes return legs until their preceding section has been traversed; the final
+goal activates on the last ordered segment. Returning to the starting pose is
+supported, including closed paths, without reporting success at task startup.
+
 All settings are startup configuration. Defaults live in core `Config` and ROS
 `controller.yaml`. Geometry/actuator parameters must describe the chassis; they
 are explicit configuration, not remotely queried startup gates. Units are meters,

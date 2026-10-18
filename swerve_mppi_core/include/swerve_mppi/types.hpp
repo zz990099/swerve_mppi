@@ -44,10 +44,11 @@ struct GridView
 struct Input
 {
   State state;
-  std::vector<Pose> path;  // Caller-prepared local ordered path.
+  std::vector<Pose> path;  // Caller-prepared local ordered section; exclude later return legs.
   Pose goal;               // Full path endpoint, not the local crop endpoint.
   GridView map;
   double dt = 0.05;
+  bool goal_active = true;  // Caller enables terminal attraction on the final ordered segment.
 };
 struct Command
 {

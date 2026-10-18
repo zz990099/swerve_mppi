@@ -4,7 +4,8 @@
 
 Standalone core tests cover inverse/forward kinematics, mode constraints, actuator
 slew, nominal switching, invalid inputs, injected critic rejection, grid geometry,
-and computing again after an invalid call. An installed-consumer test relocates the
+computing again after an invalid call, and projected/predicted wheel-speed limits
+in every mode with both command signs. An installed-consumer test relocates the
 install prefix before finding/linking the public CMake package.
 
 Caller helpers also build without ROS. They check frozen mode requests, ordinary
@@ -26,16 +27,21 @@ ctest --test-dir build-support --output-on-failure
 The optional Python integration test runs the compiled controller, actual ROS-side
 adapter and external GoalChecker against the companion production Python `Chassis`.
 It integrates encoder motion outside core and tests straight, crab, reverse, spin,
-terminal yaw and curved paths, both ideal actuator following and 30 ms actuator lag.
-This is twelve command-loop scenarios, not independent physical validation. Each
+terminal yaw, curved, out-and-back, closed-loop and wheel-limited spin paths, both
+ideal actuator following and 30 ms actuator lag. This is eighteen command-loop
+scenarios, not independent physical validation. Returning paths must visit their
+intermediate checkpoints in order before completing; every command must satisfy
+the configured wheel-speed bound. Each
 must reach 0.06 m / 0.05 rad with measured speed below 0.035 m/s / rad/s for 0.3 s,
 within 50 simulated seconds. No per-speed-command receipt is produced.
 
 ## ROS and physical acceptance
 
 The native Jazzy test publishes synthetic chassis/odometry and checks continuous
-commands without evidence services, external goal completion and task restart.
-CI then launches a fresh Harmonic chassis with MPPI for each of six paths.
+commands without evidence services, external goal completion, task restart and
+the ordered turnaround gate. CI then launches a fresh Harmonic chassis with MPPI
+for each of eight paths, including out-and-back and closed-loop tasks with ordered
+checkpoint assertions.
 Independent Gazebo truth is read only by the test. GoalChecker uses the normal
 encoder estimate; the physical test additionally requires truth error below 0.15 m
 and 0.10 rad at completion. Each case starts a fresh world and encoder origin;
