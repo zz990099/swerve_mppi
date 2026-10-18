@@ -34,7 +34,10 @@ protected:
        rclcpp::Parameter("plugins", std::vector<std::string>{"inflation_layer"}),
        rclcpp::Parameter("track_unknown_space", false), rclcpp::Parameter("width", 8),
        rclcpp::Parameter("height", 8)});
-    costmap->on_configure(rclcpp_lifecycle::State());
+    costmap->declare_parameter<std::string>(
+      "inflation_layer.plugin", "nav2_costmap_2d::InflationLayer");
+    ASSERT_EQ(costmap->on_configure(rclcpp_lifecycle::State()), nav2_util::CallbackReturn::SUCCESS);
+    map_configured = true;
     tf = std::make_shared<tf2_ros::Buffer>(node->get_clock());
     loader = std::make_unique<pluginlib::ClassLoader<nav2_core::Controller>>(
       "nav2_core", "nav2_core::Controller");
@@ -45,6 +48,7 @@ protected:
     controller->configure(node, "FollowPath", tf, costmap);
     goal->initialize(node, "goal_checker", costmap);
     controller->activate();
+    active = true;
     source = std::make_shared<rclcpp::Node>("test_chassis_source");
     bridge = std::make_shared<ChassisBridge>();
     states =
@@ -68,11 +72,15 @@ protected:
   }
   void TearDown() override
   {
-    controller->deactivate();
-    controller->cleanup();
-    executor->remove_node(node->get_node_base_interface());
-    executor->remove_node(source);
-    executor->remove_node(bridge);
+    if (controller) {
+      if (active) controller->deactivate();
+      controller->cleanup();
+    }
+    if (executor && source && bridge) {
+      executor->remove_node(node->get_node_base_interface());
+      executor->remove_node(source);
+      executor->remove_node(bridge);
+    }
     executor.reset();
     controller.reset();
     goal.reset();
@@ -81,6 +89,7 @@ protected:
     bridge.reset();
     source.reset();
     node.reset();
+    if (costmap && map_configured) costmap->on_cleanup(rclcpp_lifecycle::State());
     costmap.reset();
     tf.reset();
     rclcpp::shutdown();
@@ -132,6 +141,7 @@ protected:
   rclcpp::Publisher<Observation>::SharedPtr states;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr velocities;
   rclcpp::Subscription<Context>::SharedPtr contexts, commands;
+  bool active = false, map_configured = false;
   Observation observed;
   Context context, command;
 };
