@@ -230,3 +230,32 @@ TEST_F(Nav2PluginTest, CostmapTfAndInvalidInputs)
   EXPECT_THROW(
     controller->computeVelocityCommands(current, {}, goal.get()), nav2_core::NoValidControl);
 }
+TEST_F(Nav2PluginTest, BridgeRejectsStaleAndModeIncompatibleSpeed)
+{
+  controller->setPlan(path({{0, 0, 0}, {1, 0, 0}}));
+  auto speed = compute();
+  spin(20);
+  auto stale = speed;
+  stale.header.stamp = (source->now() - rclcpp::Duration::from_seconds(1)).to_msg();
+  velocities->publish(stale);
+  spin(20);
+  EXPECT_EQ(command.velocity.linear.x, 0);
+  auto wrong = speed;
+  wrong.header.stamp = source->now();
+  wrong.twist.linear.y = 0.2;
+  velocities->publish(wrong);
+  spin(20);
+  EXPECT_EQ(command.velocity.linear.x, 0);
+  EXPECT_EQ(command.velocity.linear.y, 0);
+  speed.header.stamp = source->now();
+  velocities->publish(speed);
+  spin(20);
+  EXPECT_GT(command.velocity.linear.x, 0);
+  // Fresh chassis feedback cannot renew an expired plugin context.
+  spin(280);
+  publish_state();
+  speed.header.stamp = source->now();
+  velocities->publish(speed);
+  spin(20);
+  EXPECT_EQ(command.velocity.linear.x, 0);
+}

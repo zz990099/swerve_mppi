@@ -48,9 +48,12 @@ struct ChassisBridge::Runtime
     out.mode = state->requested_mode;
     out.request_id = state->request_id;
     out.entry_velocity = state->accepted_entry_velocity;
-    if (
-      context && fresh(seconds(context->header.stamp), context_wall) &&
-      context->request_id >= state->request_id) {
+    const bool consistent =
+      context &&
+      ((context->request_id > state->request_id && (state->confirmed || state->fault)) ||
+       (context->request_id == state->request_id && context->mode == state->requested_mode &&
+        context->entry_velocity == state->accepted_entry_velocity));
+    if (consistent && fresh(seconds(context->header.stamp), context_wall)) {
       out = *context;
       out.header.stamp = node.now();
       // New modes are always zero-speed requests. A stale/missing velocity or

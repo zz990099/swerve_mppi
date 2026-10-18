@@ -30,7 +30,8 @@ public:
           break;
         }
         auto cost = c.input.map.data[y * c.input.map.width + x];
-        if (cost == 254 || (cost == 255 && unknown_)) {
+        // Nav2: 253 is inscribed-inflated collision, 254 is lethal, 255 unknown.
+        if (cost == 253 || cost == 254 || (cost == 255 && unknown_)) {
           costs[k] = std::numeric_limits<double>::infinity();
           break;
         }

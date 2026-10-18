@@ -26,7 +26,7 @@ struct Nav2Controller::Runtime
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap;
   Config config, baseline;
   Critics critics;
-  std::unique_ptr<Controller> controller;
+  std::unique_ptr<swerve_mppi::Controller> controller;
   ChassisAdapter adapter;
   PathHandler path;
   std::optional<ChassisFeedback> measured;
@@ -113,7 +113,7 @@ struct Nav2Controller::Runtime
     bool unknown = parameter<bool>("unknown_is_obstacle", true);
     if (map_enabled) critics.push_back(std::make_shared<CostmapCritic>(weight, unknown));
     baseline = config;
-    controller = std::make_unique<Controller>(config, critics);
+    controller = std::make_unique<swerve_mppi::Controller>(config, critics);
   }
   geometry_msgs::msg::PoseStamped transform(
     geometry_msgs::msg::PoseStamped source, const std::string & frame)
@@ -361,7 +361,7 @@ void Nav2Controller::setSpeedLimit(const double & limit, const bool & percentage
   if (limit != nav2_costmap_2d::NO_SPEED_LIMIT)
     r.config.max_speed =
       std::min(r.baseline.max_speed, percentage ? r.baseline.max_speed * limit / 100 : limit);
-  if (r.controller) r.controller = std::make_unique<Controller>(r.config, r.critics);
+  if (r.controller) r.controller = std::make_unique<swerve_mppi::Controller>(r.config, r.critics);
 }
 bool Nav2Controller::cancel()
 {

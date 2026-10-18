@@ -24,7 +24,7 @@ void OrderedGoalChecker::initialize(
   parameter("trans_stopped_velocity", tolerance_.linear_speed);
   parameter("rot_stopped_velocity", tolerance_.angular_speed);
   parameter("settle_time", tolerance_.settle);
-  checker_ = GoalChecker(tolerance_);
+  checker_ = swerve_mppi_ros::GoalChecker(tolerance_);
   reset();
 }
 void OrderedGoalChecker::reset()
