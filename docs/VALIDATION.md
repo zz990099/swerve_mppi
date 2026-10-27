@@ -17,8 +17,8 @@ No old/new physical performance improvement is claimed without matched recording
 4. ROS plugin tests: plugin loading/cleanup, lifecycle, speed caps, continuous
    output, fault zero/recovery, physical configuration mismatch, TF/map errors,
    stale input and ordered goal completion.
-5. Gazebo/Nav2 FollowPath: ten independent physical scenarios including combined
-   vx/vy/wz and fixed-heading S curve, measured by independent Gazebo poses.
+5. Gazebo/Nav2 FollowPath: eleven independent physical scenarios including combined
+   vx/vy/wz, fixed-heading S curve and live action cancellation, measured by independent Gazebo poses.
    Terminal gates are 0.15 m and 0.10 rad; ordered checkpoints are required for
    return/closed paths. Each case logs path RMS/peak, stopped sample fraction,
    wall duration and compute percentile diagnostics.

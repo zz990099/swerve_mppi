@@ -31,7 +31,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--chassis-root', type=Path, required=True)
     parser.add_argument('--scenario', choices=('straight', 'crab', 'reverse', 'spin', 'final_yaw',
-                                             'curve', 'out_and_back', 'closed_loop', 'combined', 's_curve'))
+                                             'curve', 'out_and_back', 'closed_loop', 'combined', 's_curve', 'cancel'))
     args = parser.parse_args()
     sys.path.insert(0, str(args.chassis_root.resolve() / 'swerve_gazebo_sim' / 'test'))
     from gazebo_truth import GazeboTruth
@@ -83,6 +83,7 @@ def main():
         origin = (initial.position.x, initial.position.y,
                   initial_truth.position.x, initial_truth.position.y)
         scenarios = {
+            'cancel': [(0,0,0),(2,0,0)],
             'combined': [(0, 0, 0), (.8, .5, .6)],
             's_curve': [(0,0,0),(.4,.15,0),(.8,-.15,0),(1.2,0,0)],
             'straight': [(0, 0, 0), (1, 0, 0)],
@@ -121,6 +122,16 @@ def main():
             assert handle.accepted, 'Nav2 rejected FollowPath'
             result = handle.get_result_async()
             start = time.monotonic()
+            if name == 'cancel':
+                wait(lambda: math.hypot(odom[0].pose.pose.position.x-bx, odom[0].pose.pose.position.y-by)>.15, 20)
+                canceled=handle.cancel_goal_async()
+                wait(canceled.done,5)
+                assert canceled.result().goals_canceling, 'cancel not accepted'
+                wait(result.done,10)
+                assert result.result().status == GoalStatus.STATUS_CANCELED
+                wait(lambda: execution[0] is not None and max(map(abs,execution[0].wheel_speeds))<.05,5)
+                print('PASS cancellation stops measured wheels',flush=True)
+                continue
             checkpoints = message.poses[1:-1] if name in ('out_and_back', 'closed_loop') else []
             visited = 0
             tracking_errors=[]

@@ -39,7 +39,7 @@ jobs:
         run: |
           cmake -S swerve_mppi_ros/tests/portable -B build-support -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DCMAKE_PREFIX_PATH="$PWD/install-core;$PWD/install-chassis"
           cmake --build build-support --parallel 2
-          ctest --test-dir build-support --output-on-failure
+          ctest --test-dir build-support --output-on-failure --verbose
   ros:
     runs-on: ubuntu-24.04
     timeout-minutes: 30

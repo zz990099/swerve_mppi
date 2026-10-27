@@ -35,6 +35,7 @@ protected:
       "inflation_layer.plugin", "nav2_costmap_2d::InflationLayer");
     ASSERT_EQ(costmap->on_configure(rclcpp_lifecycle::State()), nav2_util::CallbackReturn::SUCCESS);
     map_configured = true;
+    costmap->getCostmap()->updateOrigin(-4.0, -4.0);
     tf = std::make_shared<tf2_ros::Buffer>(node->get_clock());
     loader = std::make_unique<pluginlib::ClassLoader<nav2_core::Controller>>(
       "nav2_core", "nav2_core::Controller");
