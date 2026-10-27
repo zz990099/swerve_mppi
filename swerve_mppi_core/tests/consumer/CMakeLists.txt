@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(consumer LANGUAGES CXX)
-find_package(swerve_mppi_core 0.28 CONFIG REQUIRED)
+find_package(swerve_mppi_core 1.0 CONFIG REQUIRED)
 add_executable(consumer main.cpp)
 target_link_libraries(consumer PRIVATE swerve_mppi::core)
 enable_testing()

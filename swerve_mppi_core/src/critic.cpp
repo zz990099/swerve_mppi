@@ -38,7 +38,7 @@ public:
   {
     for (double x :
          {w_.path_distance, w_.path_heading, w_.progress, w_.goal_position, w_.goal_heading,
-          w_.effort, w_.smoothness, w_.steering_change})
+          w_.effort, w_.smoothness, w_.steering_change, w_.consistency})
       if (!std::isfinite(x) || x < 0) throw std::invalid_argument("invalid critic weight");
   }
   void score(
@@ -52,12 +52,7 @@ public:
       const auto & t = batch[k];
       if (!t.valid || t.states.empty()) continue;
       Velocity previous = c.input.state.velocity;
-      if (t.mode == c.input.state.mode && !t.controls.empty()) {
-        const auto wheels = Model(c.config).inverse(t.controls.front(), c.input.state.steering);
-        for (std::size_t wheel = 0; wheel < 4; ++wheel)
-          costs[k] +=
-            w_.steering_change * std::pow(wheels.angles[wheel] - c.input.state.steering[wheel], 2);
-      }
+      costs[k] += w_.steering_change * t.actuator_cost + w_.consistency * t.residual_cost;
       for (std::size_t i = 1; i < t.states.size(); ++i) {
         const auto & s = t.states[i];
         auto m = match(s.pose, c.input.path);

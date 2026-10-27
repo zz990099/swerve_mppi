@@ -14,15 +14,13 @@ public:
   void reset();
 
 private:
-  std::vector<Velocity> seed(const Input & input, Mode mode) const;
+  std::vector<Velocity> seed(const Input & input) const;
   Config config_;
   Critics critics_;
   Model model_;
   std::mt19937 random_;
   std::normal_distribution<double> normal_{0, 1};
   std::vector<Velocity> warm_;
-  Mode observed_mode_ = Mode::Ackermann;
-  bool observed_ = false;
-  double mode_age_ = 0, warm_elapsed_ = 0;
+  double warm_elapsed_ = 0;
 };
 }  // namespace swerve_mppi

@@ -11,7 +11,7 @@ struct Config
   // Planner limits may be lower than physical limits (e.g. Nav2 speed limit).
   double max_speed = 0.8, max_yaw_rate = 0.8;
   double model_dt = 0.1, integration_dt = 0.01;
-  std::size_t horizon = 30, samples = 64, iterations = 1;
+  std::size_t horizon = 20, samples = 16, iterations = 1;
   double noise_linear = 0.18, noise_angular = 0.25, noise_correlation = 0.8;
   double temperature = 0.3;
   double lookahead = 0.6, approach_distance = 0.5, approach_gain = 1.2;
