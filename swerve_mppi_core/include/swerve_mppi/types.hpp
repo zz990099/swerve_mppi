@@ -8,12 +8,6 @@
 
 namespace swerve_mppi
 {
-enum class Mode : std::uint8_t
-{
-  Ackermann = 0,
-  Spin = 1,
-  Crab = 2
-};
 struct Pose
 {
   double x = 0, y = 0, yaw = 0;
@@ -27,11 +21,8 @@ struct State
   Pose pose;
   Velocity velocity;
   std::array<double, 4> steering{};
-  std::array<double, 4> wheel_speeds{};  // Rolling m/s, FL/FR/RL/RR.
+  std::array<double, 4> wheel_speeds{};  // Angular rad/s, FL/FR/RL/RR.
   swerve_chassis_core::State generator;  // Complete execution snapshot, targets in rad/rad/s.
-  Mode mode = Mode::Ackermann;
-  Mode requested_mode = Mode::Ackermann;
-  bool switching = false;
 };
 // Borrowed immutable bytes, valid for the complete compute call. Cost: 0..254,
 // unknown: 255. Axis-aligned origin and all path/state coordinates share a frame.
@@ -55,12 +46,10 @@ struct Input
 struct Command
 {
   Velocity velocity;
-  Mode mode = Mode::Ackermann;
 };
 enum class Status
 {
   Ok,
-  Switching,
   InvalidInput,
   NoSolution
 };
@@ -76,10 +65,9 @@ struct Trajectory
 {
   std::vector<State> states;  // Includes initial state.
   std::vector<Velocity> controls;
-  Mode mode = Mode::Ackermann;
+  double actuator_cost = 0, residual_cost = 0;
   bool valid = true;
 };
 double wrap_angle(double value);
 double distance(const Pose & a, const Pose & b);
-bool valid_mode(Mode mode);
 }  // namespace swerve_mppi
