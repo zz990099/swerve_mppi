@@ -1,11 +1,14 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <swerve_chassis_core/types.hpp>
 
 namespace swerve_mppi
 {
 struct Config
 {
+  swerve_chassis_core::Geometry geometry;
+  swerve_chassis_core::Limits limits;
   double wheelbase = 0.6, track = 0.5, wheel_radius = 0.1;
   double max_speed = 0.8, max_yaw_rate = 0.8, min_turn_radius = 0.6;
   double linear_accel = 0.9, angular_accel = 1.3;

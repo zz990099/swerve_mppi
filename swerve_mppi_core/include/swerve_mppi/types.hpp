@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include <swerve_chassis_core/types.hpp>
 
 namespace swerve_mppi
 {
@@ -27,6 +28,7 @@ struct State
   Velocity velocity;
   std::array<double, 4> steering{};
   std::array<double, 4> wheel_speeds{};  // Rolling m/s, FL/FR/RL/RR.
+  swerve_chassis_core::State generator;  // Complete execution snapshot, targets in rad/rad/s.
   Mode mode = Mode::Ackermann;
   Mode requested_mode = Mode::Ackermann;
   bool switching = false;

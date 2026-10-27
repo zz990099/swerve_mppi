@@ -1,9 +1,10 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>swerve_mppi_core</name><version>0.28.0</version>
+  <name>swerve_mppi_core</name><version>1.0.0</version>
   <description>ROS-independent mode-aware MPPI velocity control.</description>
   <maintainer email="86543200+zz990099@users.noreply.github.com">zz990099</maintainer>
   <license>LicenseRef-Unspecified</license>
   <buildtool_depend>cmake</buildtool_depend>
+  <depend>swerve_chassis_core</depend>
   <export><build_type>cmake</build_type></export>
 </package>
