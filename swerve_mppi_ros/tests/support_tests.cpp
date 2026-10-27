@@ -11,39 +11,6 @@ void check(bool c, const char * m)
 int main()
 {
   try {
-    ChassisAdapter adapter;
-    ChassisFeedback feedback;
-    feedback.request_id = 7;
-    adapter.observe(feedback);
-    auto request = adapter.translate({{0, 0.3, 0}, Mode::Crab});
-    check(
-      request.request_id == 8 && request.command.velocity.vy == 0 && request.entry.vy == 0.3,
-      "new mode zero request");
-    auto retry = adapter.translate({{0.4, 0, 0}, Mode::Ackermann});
-    check(
-      retry.request_id == 8 && retry.entry.vy == 0.3 && retry.command.mode == Mode::Crab,
-      "frozen switch request");
-    check(
-      adapter.state().switching && adapter.state().requested_mode == Mode::Crab,
-      "pending switch is observed by core");
-    feedback.request_id = 8;
-    feedback.state.mode = feedback.state.requested_mode = Mode::Crab;
-    feedback.entry = {0, 0.3, 0};
-    adapter.observe(feedback);
-    auto drive = adapter.translate({{0, 0.2, 0}, Mode::Crab});
-    check(
-      drive.command.velocity.vy == 0.2 && drive.request_id == 8 && drive.entry.vy == 0.3,
-      "drive retains receipt");
-    feedback.fault = true;
-    adapter.observe(feedback);
-    auto zero = adapter.translate({{}, Mode::Crab});
-    check(zero.request_id == 9 && zero.command.velocity.vy == 0, "startup fault zero");
-    feedback.request_id = zero.request_id;
-    adapter.observe(feedback);
-    auto retry_zero = adapter.translate({{}, Mode::Crab});
-    check(
-      retry_zero.request_id == zero.request_id + 1,
-      "accepted transition fault uses a newer zero request");
     GoalChecker checker;
     State state;
     Pose goal;
@@ -95,6 +62,22 @@ int main()
       costs[0] == 0 && !std::isfinite(costs[1]) && !std::isfinite(costs[2]) &&
         !std::isfinite(costs[3]),
       "ROS-injected grid cost");
+    std::vector<std::uint8_t> cells(400, 0);
+    cells[10 * 20 + 12] = 254;
+    input.map = {cells.data(), 20, 20, 0.1, -1, -1};
+    Trajectory swept;
+    swept.states.resize(2);
+    swept.states[0].pose = {0, 0, 0};
+    swept.states[1].pose = {0.6, 0, 0};
+    costs = {0};
+    critic.score({input, config}, {swept}, costs);
+    check(!std::isfinite(costs[0]), "collision between rollout endpoints");
+    swept.states.resize(1);
+    swept.states[0].pose = {0, 0, 0};
+    CostmapCritic footprint(5, true, 0.3);
+    costs = {0};
+    footprint.score({input, config}, {swept}, costs);
+    check(!std::isfinite(costs[0]), "footprint edge collision away from center");
     std::cout << "ROS support tests passed\n";
   } catch (const std::exception & e) {
     std::cerr << e.what() << '\n';

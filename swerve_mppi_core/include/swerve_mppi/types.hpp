@@ -3,8 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <vector>
 #include <swerve_chassis_core/types.hpp>
+#include <vector>
 
 namespace swerve_mppi
 {

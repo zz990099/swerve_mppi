@@ -1,4 +1,4 @@
-"""Run the Nav2 FollowPath server, plugin and final-velocity chassis bridge."""
+"""Run the Nav2 FollowPath server, continuous velocity plugin."""
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -14,8 +14,6 @@ def generate_launch_description():
         DeclareLaunchArgument('parameters', default_value=PathJoinSubstitution([
             FindPackageShare('swerve_mppi_ros'), 'config', 'controller.yaml'])),
         Node(package='nav2_controller', executable='controller_server', name='controller_server',
-             namespace=namespace, output='screen', parameters=[parameters]),
-        Node(package='swerve_mppi_ros', executable='chassis_bridge', name='mppi_chassis_bridge',
              namespace=namespace, output='screen', parameters=[parameters]),
         Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
              name='lifecycle_manager_controller', namespace=namespace, output='screen',

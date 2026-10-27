@@ -9,7 +9,7 @@ namespace swerve_mppi_ros
 {
 void OrderedGoalChecker::initialize(
   const rclcpp_lifecycle::LifecycleNode::WeakPtr & parent, const std::string & name,
-  const std::shared_ptr<nav2_costmap_2d::Costmap2DROS>)
+  const std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap)
 {
   auto node = parent.lock();
   if (!node) throw std::invalid_argument("missing GoalChecker parent");
@@ -25,6 +25,39 @@ void OrderedGoalChecker::initialize(
   parameter("rot_stopped_velocity", tolerance_.angular_speed);
   parameter("settle_time", tolerance_.settle);
   checker_ = swerve_mppi_ros::GoalChecker(tolerance_);
+  parameter("state_timeout", state_timeout_);
+  if (!std::isfinite(state_timeout_) || state_timeout_ <= 0)
+    throw std::invalid_argument("invalid state timeout");
+  body_frame_ = costmap->getBaseFrameID();
+  const auto topic = name + ".state_topic";
+  if (!node->has_parameter(topic))
+    node->declare_parameter<std::string>(topic, "chassis_controller/state");
+  state_sub_ = node->create_subscription<swerve_chassis_msgs::msg::ChassisState>(
+    node->get_parameter(topic).as_string(), rclcpp::SensorDataQoS(),
+    [this](const swerve_chassis_msgs::msg::ChassisState & msg) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (
+        msg.header.frame_id != body_frame_ || msg.fault || !msg.feedback_valid ||
+        !msg.generator_valid || msg.feedback_stamp.sec < 0 ||
+        msg.feedback_stamp.nanosec >= 1000000000) {
+        healthy_ = false;
+        checker_.reset();
+        return;
+      }
+      const double stamp = seconds(msg.feedback_stamp);
+      if (stamp <= feedback_stamp_ && clock_->now().seconds() >= feedback_stamp_) return;
+      feedback_stamp_ = stamp;
+      feedback_wall_ = std::chrono::steady_clock::now();
+      try {
+        auto v = velocity(msg.velocity);
+        healthy_ = std::hypot(v.vx, v.vy) <= tolerance_.linear_speed &&
+                   std::abs(v.wz) <= tolerance_.angular_speed;
+        for (double speed : msg.wheel_speeds)
+          healthy_ &= std::isfinite(speed) && std::abs(speed) <= 0.05;
+      } catch (const std::invalid_argument &) {
+      }
+      if (!healthy_) checker_.reset();
+    });
   reset();
 }
 void OrderedGoalChecker::reset()
@@ -45,6 +78,14 @@ bool OrderedGoalChecker::isGoalReached(
 {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!ready_ || !clock_) return false;
+  const double age = clock_->now().seconds() - feedback_stamp_;
+  if (
+    !healthy_ || age < 0 || age > state_timeout_ ||
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - feedback_wall_).count() >
+      state_timeout_) {
+    checker_.reset();
+    return false;
+  }
   try {
     State state;
     state.pose = pose(query);

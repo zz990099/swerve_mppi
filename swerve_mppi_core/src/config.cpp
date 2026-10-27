@@ -30,16 +30,20 @@ bool GridView::world_to_map(double x, double y, std::size_t & mx, std::size_t & 
 void validate(const Config & c)
 {
   swerve_chassis_core::validate(c.geometry, c.limits);
-  for (double x : {c.max_yaw_rate, c.model_dt, c.integration_dt, c.temperature,
-      c.lookahead, c.approach_distance, c.approach_gain, c.max_residual})
-    if (!std::isfinite(x) || x <= 0) throw std::invalid_argument("positive finite parameter required");
+  for (double x :
+       {c.max_yaw_rate, c.model_dt, c.integration_dt, c.temperature, c.lookahead,
+        c.approach_distance, c.approach_gain, c.max_residual})
+    if (!std::isfinite(x) || x <= 0)
+      throw std::invalid_argument("positive finite parameter required");
   for (double x : {c.max_speed, c.noise_linear, c.noise_angular})
-    if (!std::isfinite(x) || x < 0) throw std::invalid_argument("nonnegative finite parameter required");
-  if (!std::isfinite(c.noise_correlation) || c.noise_correlation < 0 || c.noise_correlation >= 1 ||
-      c.horizon < 2 || c.horizon > 200 || c.samples < 4 || c.samples > 2048 ||
-      c.iterations < 1 || c.iterations > 8 || c.integration_dt > c.model_dt ||
-      c.integration_dt > 0.1 || c.model_dt / c.integration_dt > 100 ||
-      c.max_speed > c.limits.linear_speed || c.max_yaw_rate > c.limits.angular_speed)
+    if (!std::isfinite(x) || x < 0)
+      throw std::invalid_argument("nonnegative finite parameter required");
+  if (
+    !std::isfinite(c.noise_correlation) || c.noise_correlation < 0 || c.noise_correlation >= 1 ||
+    c.horizon < 2 || c.horizon > 200 || c.samples < 4 || c.samples > 2048 || c.iterations < 1 ||
+    c.iterations > 8 || c.integration_dt > c.model_dt || c.integration_dt > 0.1 ||
+    c.model_dt / c.integration_dt > 100 || c.max_speed > c.limits.linear_speed ||
+    c.max_yaw_rate > c.limits.angular_speed)
     throw std::invalid_argument("invalid optimizer dimensions, discretization or planner limits");
 }
 }  // namespace swerve_mppi

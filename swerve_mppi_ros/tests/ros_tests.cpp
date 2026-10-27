@@ -5,17 +5,14 @@
 #include <nav2_core/controller_exceptions.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <pluginlib/class_loader.hpp>
-#include <swerve_gazebo_sim/msg/chassis_command.hpp>
 #include <thread>
 
-#include "swerve_mppi_ros/chassis_bridge.hpp"
 #include "swerve_mppi_ros/conversions.hpp"
 #include "swerve_mppi_ros/ordered_goal_checker.hpp"
 
 using namespace std::chrono_literals;
 using namespace swerve_mppi_ros;
-using Observation = swerve_gazebo_sim::msg::ChassisState;
-using Context = swerve_gazebo_sim::msg::ChassisCommand;
+using Observation = swerve_chassis_msgs::msg::ChassisState;
 class Nav2PluginTest : public ::testing::Test
 {
 protected:
@@ -50,24 +47,16 @@ protected:
     controller->activate();
     active = true;
     source = std::make_shared<rclcpp::Node>("test_chassis_source");
-    bridge = std::make_shared<ChassisBridge>();
     states =
       source->create_publisher<Observation>("chassis_controller/state", rclcpp::SensorDataQoS());
-    velocities = source->create_publisher<geometry_msgs::msg::TwistStamped>("cmd_vel", 10);
-    contexts = source->create_subscription<Context>(
-      "mppi/command_context", 10, [&](const Context & c) { context = c; });
-    commands = source->create_subscription<Context>(
-      "chassis_controller/command", 10, [&](const Context & c) { command = c; });
     executor->add_node(node->get_node_base_interface());
     executor->add_node(source);
-    executor->add_node(bridge);
-    for (int i = 0; i < 100 && (states->get_subscription_count() < 2 ||
-                                velocities->get_subscription_count() < 1);
-         ++i)
-      spin(10);
+    for (int i = 0; i < 100 && states->get_subscription_count() < 1; ++i) spin(10);
     observed.header.frame_id = "base_footprint";
-    observed.confirmed = true;
-    observed.phase = Observation::READY;
+    observed.generator_valid = true;
+    observed.feedback_valid = true;
+    observed.geometry = {0.6, 0.5, 0.1};
+    observed.limits = {swerve_chassis_core::pi / 2, 2.5, 20, 40, 0.8, 0.8, 0.9, 1.3, 0.05, 0.05};
     publish_state();
   }
   void TearDown() override
@@ -76,17 +65,15 @@ protected:
       if (active) controller->deactivate();
       controller->cleanup();
     }
-    if (executor && source && bridge) {
+    if (executor && source) {
       executor->remove_node(node->get_node_base_interface());
       executor->remove_node(source);
-      executor->remove_node(bridge);
     }
     executor.reset();
     controller.reset();
     goal.reset();
     loader.reset();
     goal_loader.reset();
-    bridge.reset();
     source.reset();
     node.reset();
     if (costmap && map_configured) costmap->on_cleanup(rclcpp_lifecycle::State());
@@ -104,6 +91,7 @@ protected:
   void publish_state()
   {
     observed.header.stamp = source->now();
+    observed.feedback_stamp = observed.header.stamp;
     states->publish(observed);
     spin(20);
   }
@@ -130,7 +118,6 @@ protected:
   }
   rclcpp_lifecycle::LifecycleNode::SharedPtr node;
   std::shared_ptr<rclcpp::Node> source;
-  std::shared_ptr<ChassisBridge> bridge;
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap;
   std::shared_ptr<tf2_ros::Buffer> tf;
   std::unique_ptr<pluginlib::ClassLoader<nav2_core::Controller>> loader;
@@ -140,10 +127,8 @@ protected:
   std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> executor;
   rclcpp::Publisher<Observation>::SharedPtr states;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr velocities;
-  rclcpp::Subscription<Context>::SharedPtr contexts, commands;
   bool active = false, map_configured = false;
   Observation observed;
-  Context context, command;
 };
 TEST_F(Nav2PluginTest, LifecycleSpeedLimitsAndServerVelocityAuthority)
 {
@@ -151,17 +136,6 @@ TEST_F(Nav2PluginTest, LifecycleSpeedLimitsAndServerVelocityAuthority)
   auto speed = compute();
   EXPECT_GT(speed.twist.linear.x, 0);
   EXPECT_EQ(speed.header.frame_id, "base_footprint");
-  spin(20);
-  EXPECT_EQ(command.velocity.linear.x, 0) << "Mode context alone cannot move the chassis";
-  velocities->publish(speed);
-  spin(20);
-  EXPECT_GT(command.velocity.linear.x, 0);
-  auto zero = speed;
-  zero.header.stamp = source->now();
-  zero.twist = geometry_msgs::msg::Twist{};
-  velocities->publish(zero);
-  spin(20);
-  EXPECT_EQ(command.velocity.linear.x, 0) << "Nav2 zero must override a nonzero controller context";
   controller->setSpeedLimit(0.1, false);
   speed = compute();
   EXPECT_LE(std::hypot(speed.twist.linear.x, speed.twist.linear.y), 0.1 + 1e-9);
@@ -172,7 +146,6 @@ TEST_F(Nav2PluginTest, LifecycleSpeedLimitsAndServerVelocityAuthority)
   EXPECT_GT(compute().twist.linear.x, 0.1);
   EXPECT_TRUE(controller->cancel());
   spin(20);
-  EXPECT_EQ(command.velocity.linear.x, 0);
   EXPECT_THROW(compute(), nav2_core::InvalidPath);
   controller->setPlan(path({{0, 0, 0}, {1, 0, 0}}));
   EXPECT_GT(compute().twist.linear.x, 0);
@@ -180,30 +153,12 @@ TEST_F(Nav2PluginTest, LifecycleSpeedLimitsAndServerVelocityAuthority)
   EXPECT_THROW(compute(), nav2_core::ControllerException);
   controller->activate();
 }
-TEST_F(Nav2PluginTest, ModeHandshakeAndOrderedGoalChecker)
+TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
 {
-  controller->setPlan(path({{0, 0, 0}, {0, 1, 0}}));
-  auto speed = compute();
-  spin(20);
-  EXPECT_EQ(context.mode, Observation::CRAB);
-  EXPECT_EQ(context.request_id, 1u);
-  EXPECT_EQ(speed.twist.linear.y, 0);
-  const auto entry = context.entry_velocity;
-  // No chassis echo yet: the plugin keeps its pending request and entry frozen.
-  compute();
-  spin(20);
-  EXPECT_EQ(context.request_id, 1u);
-  EXPECT_EQ(context.entry_velocity, entry);
-  observed.request_id = 1;
-  observed.actual_mode = observed.requested_mode = Observation::CRAB;
-  observed.accepted_entry_velocity = entry;
-  for (auto & a : observed.steering_angles) a = std::acos(-1.0) / 2;
-  compute();
-  observed = Observation{};
-  observed.header.frame_id = "base_footprint";
-  observed.confirmed = true;
-  observed.phase = Observation::READY;
-  publish_state();
+  controller->setPlan(path({{0, 0, 0}, {0.5, 0.5, 0.5}}));
+  const auto speed = compute();
+  EXPECT_GT(speed.twist.linear.y, 0);
+  EXPECT_GT(speed.twist.angular.z, 0);
   controller->reset();
   controller->setPlan(path({{0, 0, 0}, {1, 0, 0}, {0, 0, 0}}));
   goal->reset();
@@ -246,34 +201,17 @@ TEST_F(Nav2PluginTest, CostmapTfAndInvalidInputs)
     controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get()),
     nav2_core::NoValidControl);
 }
-TEST_F(Nav2PluginTest, BridgeRejectsStaleAndModeIncompatibleSpeed)
+TEST_F(Nav2PluginTest, FaultRecoveryAndConfigurationMismatch)
 {
   controller->setPlan(path({{0, 0, 0}, {1, 0, 0}}));
-  auto speed = compute();
-  spin(20);
-  auto stale = speed;
-  stale.header.stamp = source->now() - rclcpp::Duration::from_seconds(1);
-  velocities->publish(stale);
-  spin(20);
-  EXPECT_EQ(command.velocity.linear.x, 0);
-  auto wrong = speed;
-  wrong.header.stamp = source->now();
-  wrong.twist.linear.y = 0.2;
-  velocities->publish(wrong);
-  spin(20);
-  EXPECT_EQ(command.velocity.linear.x, 0);
-  EXPECT_EQ(command.velocity.linear.y, 0);
-  speed.header.stamp = source->now();
-  velocities->publish(speed);
-  spin(20);
-  EXPECT_GT(command.velocity.linear.x, 0);
-  // Fresh chassis feedback cannot renew an expired plugin context.
-  spin(280);
-  publish_state();
-  speed.header.stamp = source->now();
-  velocities->publish(speed);
-  spin(20);
-  EXPECT_EQ(command.velocity.linear.x, 0);
+  observed.fault = 1;
+  observed.generator_valid = false;
+  EXPECT_EQ(compute().twist.linear.x, 0);
+  observed.fault = 0;
+  observed.generator_valid = true;
+  EXPECT_GT(compute().twist.linear.x, 0);
+  observed.geometry[0] = 0.7;
+  EXPECT_THROW(compute(), nav2_core::NoValidControl);
 }
 TEST_F(Nav2PluginTest, PluginDoesNotRetainItsLifecycleParent)
 {

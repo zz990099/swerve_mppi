@@ -1,13 +1,15 @@
 #pragma once
 
+#include <chrono>
 #include <mutex>
 #include <nav2_core/goal_checker.hpp>
+#include <swerve_chassis_msgs/msg/chassis_state.hpp>
 
 #include "swerve_mppi_ros/control_support.hpp"
 
 namespace swerve_mppi_ros
 {
-// Nav2 owns completion. The controller supplies only ordered-progress/mode readiness.
+// Nav2 owns completion. The controller supplies only ordered-progress readiness.
 class OrderedGoalChecker : public nav2_core::GoalChecker
 {
 public:
@@ -27,6 +29,10 @@ private:
   rclcpp::Clock::SharedPtr clock_;
   GoalTolerance tolerance_;
   swerve_mppi_ros::GoalChecker checker_;
-  bool ready_ = false;
+  bool ready_ = false, healthy_ = false;
+  double feedback_stamp_ = 0, state_timeout_ = 0.25;
+  std::string body_frame_;
+  std::chrono::steady_clock::time_point feedback_wall_{};
+  rclcpp::Subscription<swerve_chassis_msgs::msg::ChassisState>::SharedPtr state_sub_;
 };
 }  // namespace swerve_mppi_ros

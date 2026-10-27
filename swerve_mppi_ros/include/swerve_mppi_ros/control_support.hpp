@@ -29,7 +29,7 @@ public:
     bool inside = distance(state.pose, goal) <= t_.position &&
                   std::abs(wrap_angle(state.pose.yaw - goal.yaw)) <= t_.yaw &&
                   std::hypot(state.velocity.vx, state.velocity.vy) <= t_.linear_speed &&
-                  std::abs(state.velocity.wz) <= t_.angular_speed && !state.switching;
+                  std::abs(state.velocity.wz) <= t_.angular_speed;
     if (!inside || !std::isfinite(stamp)) {
       reset();
       return false;
@@ -100,55 +100,7 @@ private:
 struct ChassisFeedback
 {
   State state;
-  std::uint64_t request_id = 0;
-  Velocity entry;
-  bool fault = false;
-};
-struct WireCommand
-{
-  Command command;
-  std::uint64_t request_id = 0;
-  Velocity entry;
-};
-class ChassisAdapter
-{
-public:
-  void observe(ChassisFeedback feedback)
-  {
-    feedback_ = feedback;
-    // An accepted request that later faults needs a newer zero request.
-    if (pending_ && feedback.fault && feedback.request_id >= pending_->request_id) pending_.reset();
-    if (
-      pending_ && feedback.request_id == pending_->request_id && !feedback.fault &&
-      !feedback.state.switching && feedback.state.mode == pending_->command.mode)
-      pending_.reset();
-  }
-  State state() const
-  {
-    auto state = feedback_.state;
-    if (pending_) {
-      state.switching = true;
-      state.requested_mode = pending_->command.mode;
-    }
-    return state;
-  }
-  WireCommand translate(Command desired)
-  {
-    if (pending_) return *pending_;
-    if (feedback_.fault || desired.mode != feedback_.state.mode) {
-      if (feedback_.request_id == std::numeric_limits<std::uint64_t>::max())
-        throw std::overflow_error("chassis request ID exhausted");
-      pending_ = WireCommand{
-        {{}, feedback_.fault ? feedback_.state.mode : desired.mode},
-        feedback_.request_id + 1,
-        feedback_.fault ? Velocity{} : desired.velocity};
-      return *pending_;
-    }
-    return {desired, feedback_.request_id, feedback_.entry};
-  }
-
-private:
-  ChassisFeedback feedback_;
-  std::optional<WireCommand> pending_;
+  bool fault = false, feedback_valid = false;
+  double feedback_stamp = 0;
 };
 }  // namespace swerve_mppi_ros

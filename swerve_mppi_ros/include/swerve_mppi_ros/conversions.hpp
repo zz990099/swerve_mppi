@@ -4,8 +4,9 @@
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <stdexcept>
-#include <swerve_gazebo_sim/msg/chassis_state.hpp>
+#include <swerve_chassis_msgs/msg/chassis_state.hpp>
 
+#include "swerve_mppi/model.hpp"
 #include "swerve_mppi_ros/control_support.hpp"
 
 namespace swerve_mppi_ros
@@ -50,30 +51,39 @@ inline geometry_msgs::msg::Pose pose_message(Pose p)
   out.orientation.w = std::cos(p.yaw / 2);
   return out;
 }
-inline ChassisFeedback feedback(const swerve_gazebo_sim::msg::ChassisState & msg, double radius)
+inline ChassisFeedback feedback(
+  const swerve_chassis_msgs::msg::ChassisState & msg, const Config & c)
 {
-  if (msg.actual_mode > 2 || msg.requested_mode > 2)
-    throw std::invalid_argument("invalid chassis mode");
+  auto equal = [](double a, double b) {
+    return std::isfinite(a) && std::isfinite(b) &&
+           std::abs(a - b) <= 1e-9 * std::max({1.0, std::abs(a), std::abs(b)});
+  };
+  const auto & l = c.limits;
+  std::array<double, 3> geometry{c.geometry.wheelbase, c.geometry.track_width, c.geometry.radius};
+  std::array<double, 10> limits{
+    l.steering,           l.steering_rate, l.wheel_speed,         l.wheel_acceleration,
+    l.linear_speed,       l.angular_speed, l.linear_acceleration, l.angular_acceleration,
+    l.tracking_tolerance, l.stopped_speed};
+  for (std::size_t i = 0; i < 3; ++i)
+    if (!equal(msg.geometry[i], geometry[i]))
+      throw std::invalid_argument("chassis geometry mismatch");
+  for (std::size_t i = 0; i < 10; ++i)
+    if (!equal(msg.limits[i], limits[i])) throw std::invalid_argument("chassis limits mismatch");
+  if (
+    msg.header.stamp.sec < 0 || msg.header.stamp.nanosec >= 1000000000 ||
+    msg.feedback_stamp.sec < 0 || msg.feedback_stamp.nanosec >= 1000000000 || msg.execution > 4 ||
+    msg.fault > 3)
+    throw std::invalid_argument("invalid chassis metadata");
   ChassisFeedback f;
-  f.request_id = msg.request_id;
-  f.entry = velocity(msg.accepted_entry_velocity);
   f.fault = msg.fault != 0;
-  f.state.mode = static_cast<Mode>(msg.actual_mode);
-  f.state.requested_mode = static_cast<Mode>(msg.requested_mode);
-  f.state.switching = !msg.confirmed;
+  f.feedback_valid = msg.feedback_valid;
+  f.feedback_stamp = seconds(msg.feedback_stamp);
   f.state.steering = msg.steering_angles;
-  for (std::size_t i = 0; i < 4; ++i) {
-    if (!std::isfinite(msg.steering_angles[i]) || !std::isfinite(msg.wheel_speeds[i]))
-      throw std::invalid_argument("invalid joint feedback");
-    f.state.wheel_speeds[i] = msg.wheel_speeds[i] * radius;
-  }
+  f.state.wheel_speeds = msg.wheel_speeds;
+  f.state.velocity = velocity(msg.velocity);
+  f.state.generator = {{msg.target_steering, msg.target_wheel_speeds}, msg.generator_valid};
+  if (!f.fault && !Model(c).valid(f.state))
+    throw std::invalid_argument("invalid execution snapshot");
   return f;
-}
-inline bool permitted(Mode mode, Velocity v)
-{
-  if (!valid_mode(mode) || !finite(v)) return false;
-  if (mode == Mode::Spin) return v.vx == 0 && v.vy == 0;
-  if (mode == Mode::Crab) return v.wz == 0;
-  return v.vy == 0 && (v.vx != 0 || v.wz == 0);
 }
 }  // namespace swerve_mppi_ros

@@ -19,4 +19,4 @@ struct Config
   std::uint32_t seed = 42;
 };
 void validate(const Config & config);
-}
+}  // namespace swerve_mppi

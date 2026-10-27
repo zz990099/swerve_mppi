@@ -6,7 +6,6 @@
 #include <nav2_core/controller_exceptions.hpp>
 #include <nav2_costmap_2d/costmap_filters/filter_values.hpp>
 #include <pluginlib/class_list_macros.hpp>
-#include <swerve_gazebo_sim/msg/chassis_command.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include "swerve_mppi/controller.hpp"
@@ -33,17 +32,15 @@ struct Nav2Controller::Runtime
   Config config, baseline;
   Critics critics;
   std::unique_ptr<swerve_mppi::Controller> controller;
-  ChassisAdapter adapter;
   PathHandler path;
   std::optional<ChassisFeedback> measured;
   double state_stamp = 0, last_time = 0, frequency = 20, timeout = 0.25, transform_tolerance = 0.1;
   Steady::time_point state_wall{};
   bool active = false, map_enabled = true;
-  rclcpp_lifecycle::LifecyclePublisher<swerve_gazebo_sim::msg::ChassisCommand>::SharedPtr context;
   rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>::SharedPtr prediction;
   rclcpp_lifecycle::LifecyclePublisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr
     diagnostics;
-  rclcpp::Subscription<swerve_gazebo_sim::msg::ChassisState>::SharedPtr states;
+  rclcpp::Subscription<swerve_chassis_msgs::msg::ChassisState>::SharedPtr states;
 
   template <class T>
   T parameter(const std::string & key, T value)
@@ -59,31 +56,28 @@ struct Nav2Controller::Runtime
   void parameters()
   {
     auto number = [&](const char * key, double & value) { value = parameter<double>(key, value); };
-    number("wheelbase", config.wheelbase);
-    number("track", config.track);
-    number("wheel_radius", config.wheel_radius);
+    number("wheelbase", config.geometry.wheelbase);
+    number("track_width", config.geometry.track_width);
+    number("wheel_radius", config.geometry.radius);
     number("max_speed", config.max_speed);
     number("max_yaw_rate", config.max_yaw_rate);
-    number("min_turn_radius", config.min_turn_radius);
-    number("linear_accel", config.linear_accel);
-    number("angular_accel", config.angular_accel);
-    number("max_wheel_speed", config.max_wheel_speed);
-    number("wheel_accel", config.wheel_accel);
-    number("steer_rate", config.steer_rate);
-    number("steer_limit", config.steer_limit);
-    number("realign_angle", config.realign_angle);
-    number("alignment_tolerance", config.alignment_tolerance);
-    number("alignment_dwell", config.alignment_dwell);
-    number("stopped_wheel_speed", config.stopped_wheel_speed);
+    number("physical_linear_speed", config.limits.linear_speed);
+    number("physical_angular_speed", config.limits.angular_speed);
+    number("linear_accel", config.limits.linear_acceleration);
+    number("angular_accel", config.limits.angular_acceleration);
+    number("max_wheel_speed", config.limits.wheel_speed);
+    number("wheel_accel", config.limits.wheel_acceleration);
+    number("steer_rate", config.limits.steering_rate);
+    number("steer_limit", config.limits.steering);
+    number("steering_tracking_tolerance", config.limits.tracking_tolerance);
+    number("stopped_wheel_speed", config.limits.stopped_speed);
+    number("max_residual", config.max_residual);
     number("model_dt", config.model_dt);
     number("integration_dt", config.integration_dt);
     number("noise_linear", config.noise_linear);
     number("noise_angular", config.noise_angular);
     number("noise_correlation", config.noise_correlation);
     number("temperature", config.temperature);
-    number("minimum_mode_dwell", config.minimum_mode_dwell);
-    number("switch_penalty", config.switch_penalty);
-    number("switch_hysteresis", config.switch_hysteresis);
     number("lookahead", config.lookahead);
     number("approach_distance", config.approach_distance);
     number("approach_gain", config.approach_gain);
@@ -113,11 +107,18 @@ struct Nav2Controller::Runtime
     number("effort_weight", weights.effort);
     number("smoothness_weight", weights.smoothness);
     number("steering_change_weight", weights.steering_change);
+    number("consistency_weight", weights.consistency);
     critics = tracking_critics(weights);
     map_enabled = parameter<bool>("use_costmap", true);
     double weight = parameter<double>("costmap_weight", 5);
     bool unknown = parameter<bool>("unknown_is_obstacle", true);
-    if (map_enabled) critics.push_back(std::make_shared<CostmapCritic>(weight, unknown));
+    if (map_enabled) {
+      double radius = 0;
+      for (const auto & point : costmap->getRobotFootprint())
+        radius = std::max(radius, std::hypot(point.x, point.y));
+      if (radius <= 0) throw std::invalid_argument("nonempty robot footprint required");
+      critics.push_back(std::make_shared<CostmapCritic>(weight, unknown, radius));
+    }
     baseline = config;
     controller = std::make_unique<swerve_mppi::Controller>(config, critics);
   }
@@ -137,25 +138,10 @@ struct Nav2Controller::Runtime
       throw nav2_core::ControllerTFError(e.what());
     }
   }
-  WireCommand publish(Command command)
-  {
-    auto wire = adapter.translate(command);
-    swerve_gazebo_sim::msg::ChassisCommand msg;
-    msg.header.stamp = node()->now();
-    msg.header.frame_id = body_frame;
-    msg.mode = static_cast<std::uint8_t>(wire.command.mode);
-    msg.request_id = wire.request_id;
-    msg.entry_velocity = twist(wire.entry);
-    msg.velocity = twist(wire.command.velocity);
-    // Context never drives the chassis. Only Nav2's final cmd_vel can do that.
-    context->publish(msg);
-    return wire;
-  }
   void stop()
   {
     if (controller) controller->reset();
     last_time = 0;
-    if (active && measured && context) publish({{}, adapter.state().mode});
   }
   void report(const Result & result)
   {
@@ -177,7 +163,7 @@ struct Nav2Controller::Runtime
     item.name = node()->get_fully_qualified_name() + std::string("/") + name;
     item.hardware_id = "swerve";
     item.level = result.status == Status::NoSolution ? item.WARN : item.OK;
-    item.message = result.status == Status::Switching ? "mode transition" : "tracking";
+    item.message = "continuous tracking";
     for (const auto & p : std::vector<std::pair<std::string, std::string>>{
            {"compute_ms", std::to_string(result.compute_ms)},
            {"cost", std::to_string(result.cost)},
@@ -207,23 +193,31 @@ void Nav2Controller::configure(
   r.global_frame = r.costmap->getGlobalFrameID();
   r.body_frame = r.costmap->getBaseFrameID();
   r.parameters();
-  r.context = r.node()->create_publisher<swerve_gazebo_sim::msg::ChassisCommand>(
-    r.parameter<std::string>("context_topic", "mppi/command_context"), 1);
   r.prediction = r.node()->create_publisher<nav_msgs::msg::Path>(r.name + "/prediction", 1);
   r.diagnostics =
     r.node()->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(r.name + "/diagnostics", 1);
-  r.states = r.node()->create_subscription<swerve_gazebo_sim::msg::ChassisState>(
+  r.states = r.node()->create_subscription<swerve_chassis_msgs::msg::ChassisState>(
     r.parameter<std::string>("state_topic", "chassis_controller/state"), rclcpp::SensorDataQoS(),
-    [&r](const swerve_gazebo_sim::msg::ChassisState & msg) {
+    [&r](const swerve_chassis_msgs::msg::ChassisState & msg) {
       std::lock_guard<std::mutex> guard(r.mutex);
       if (msg.header.frame_id != r.body_frame) return;
       try {
-        auto f = feedback(msg, r.config.wheel_radius);
+        auto f = feedback(msg, r.config);
+        const double stamp = seconds(msg.header.stamp);
+        if (r.node()->now().seconds() < r.state_stamp) {
+          r.measured.reset();
+          r.stop();
+        }
+        if (stamp > r.node()->now().seconds() + 0.01) {
+          r.measured.reset();
+          return;
+        }
+        if (r.measured && stamp <= r.state_stamp) return;
         r.measured = f;
-        r.adapter.observe(f);
         r.state_stamp = seconds(msg.header.stamp);
         r.state_wall = Steady::now();
       } catch (const std::invalid_argument &) {
+        r.measured.reset();
       }
     });
 }
@@ -231,7 +225,6 @@ void Nav2Controller::activate()
 {
   auto & r = *runtime_;
   std::lock_guard<std::mutex> lock(r.mutex);
-  r.context->on_activate();
   r.prediction->on_activate();
   r.diagnostics->on_activate();
   r.active = true;
@@ -243,7 +236,6 @@ void Nav2Controller::deactivate()
   std::lock_guard<std::mutex> lock(r.mutex);
   r.stop();
   r.active = false;
-  r.context->on_deactivate();
   r.prediction->on_deactivate();
   r.diagnostics->on_deactivate();
 }
@@ -254,14 +246,12 @@ void Nav2Controller::cleanup()
   r.stop();
   r.active = false;
   r.states.reset();
-  r.context.reset();
   r.prediction.reset();
   r.diagnostics.reset();
   r.controller.reset();
   r.critics.clear();
   r.measured.reset();
   r.path = PathHandler{};
-  r.adapter = ChassisAdapter{};
   r.tf.reset();
   r.costmap.reset();
   r.parent.reset();
@@ -301,7 +291,9 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     r.last_time = now;
     if (dt <= 0 || dt > 1) throw nav2_core::NoValidControl("control clock discontinuity");
     if (
-      !r.measured || now - r.state_stamp < -0.05 || now - r.state_stamp > r.timeout ||
+      !r.measured || !r.measured->feedback_valid || now - r.measured->feedback_stamp < -0.01 ||
+      now - r.measured->feedback_stamp > r.timeout || now - r.state_stamp < -0.05 ||
+      now - r.state_stamp > r.timeout ||
       std::chrono::duration<double>(Steady::now() - r.state_wall).count() > r.timeout)
       throw nav2_core::NoValidControl("chassis state is stale or missing");
     geometry_msgs::msg::TwistStamped out;
@@ -310,13 +302,12 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     if (r.measured->fault) {
       if (ordered) ordered->setReady(false);
       r.controller->reset();
-      r.publish({{}, r.measured->state.mode});
       return out;
     }
     Input input;
-    input.state = r.adapter.state();
+    input.state = r.measured->state;
     input.state.pose = pose(r.transform(current, r.global_frame).pose);
-    input.state.velocity = velocity(speed);
+    (void)velocity(speed);  // Validate Nav2 velocity; wheel feedback anchors actuator prediction.
     input.dt = dt;
     const auto local = r.path.local(pose(r.transform(current, r.plan_frame).pose));
     auto transform_path_pose = [&](Pose p) {
@@ -340,11 +331,10 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
                    map->getOriginY()};
     }
     auto result = r.controller->compute(input);
-    if (result.status != Status::Ok && result.status != Status::Switching)
+    if (result.status != Status::Ok)
       throw nav2_core::NoValidControl("MPPI found no usable control");
-    auto wire = r.publish(result.command);
-    out.twist = twist(wire.command.velocity);
-    if (ordered) ordered->setReady(input.goal_active && !r.adapter.state().switching);
+    out.twist = twist(result.command.velocity);
+    if (ordered) ordered->setReady(input.goal_active);
     r.report(result);
     return out;
   } catch (const nav2_core::ControllerException &) {
