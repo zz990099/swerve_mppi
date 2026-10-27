@@ -1,7 +1,6 @@
 name: Core and path following
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -17,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zz990099/swerve_gazebo_sim
-          ref: 9358c96884d7fa4866cea7c053daa7a7cec82d8f
+          ref: 0894bd1ad765d1c68bbe16f869f3e294c9c4e509
           path: companion-chassis
       - uses: actions/setup-python@v5
         with:
@@ -28,13 +27,17 @@ jobs:
         run: python tools/format.py --check
       - name: Standalone core and installed consumer
         run: |
-          cmake -S swerve_mppi_core -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_CXX_FLAGS=-Werror
+          cmake -S companion-chassis/swerve_chassis_core -B build-chassis -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/install-chassis"
+          cmake --build build-chassis --parallel 2
+          cmake --install build-chassis
+          cmake -S swerve_mppi_core -B build -DCMAKE_PREFIX_PATH="$PWD/install-chassis" -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DCMAKE_CXX_FLAGS=-Werror
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
           cmake --install build --prefix "$PWD/install-core"
-      - name: Caller contracts and actual Python chassis closed loops
+      - name: Caller contracts and continuous execution closed loops
+        if: matrix.build_type == 'Release'
         run: |
-          cmake -S swerve_mppi_ros/tests/portable -B build-support -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DCMAKE_PREFIX_PATH="$PWD/install-core" -DCHASSIS_SOURCE_DIR="$PWD/companion-chassis"
+          cmake -S swerve_mppi_ros/tests/portable -B build-support -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DCMAKE_PREFIX_PATH="$PWD/install-core;$PWD/install-chassis"
           cmake --build build-support --parallel 2
           ctest --test-dir build-support --output-on-failure
   ros:
@@ -53,17 +56,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zz990099/swerve_gazebo_sim
-          ref: 9358c96884d7fa4866cea7c053daa7a7cec82d8f
+          ref: 0894bd1ad765d1c68bbe16f869f3e294c9c4e509
           path: companion-chassis
       - name: Install Jazzy and Harmonic dependencies
         run: |
           apt-get update
           apt-get install -y --no-install-recommends build-essential cmake python3-colcon-common-extensions python3-psutil ros-jazzy-ament-cmake-gtest ros-jazzy-ament-cmake-pytest ros-jazzy-ament-cmake-python ros-jazzy-rosidl-default-generators python3-pytest ros-jazzy-tf2-geometry-msgs ros-jazzy-nav2-controller ros-jazzy-nav2-lifecycle-manager ros-jazzy-ros-gz ros-jazzy-gz-ros2-control ros-jazzy-joint-state-broadcaster ros-jazzy-forward-command-controller ros-jazzy-robot-state-publisher ros-jazzy-xacro
-      - name: Build all three packages
+      - name: Build chassis and MPPI packages
         run: |
           source /opt/ros/jazzy/setup.bash
           colcon build --base-paths swerve_mppi_core swerve_mppi_ros companion-chassis --packages-up-to swerve_mppi_ros --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=ON
-      - name: Test Nav2 plugin lifecycle and chassis bridge
+      - name: Test continuous Nav2 lifecycle and state contracts
         run: |
           source /opt/ros/jazzy/setup.bash
           source install/local_setup.bash
