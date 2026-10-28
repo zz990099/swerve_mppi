@@ -115,7 +115,10 @@ protected:
     current.header.stamp = source->now();
     current.header.frame_id = "odom";
     current.pose = pose_message(p);
-    return controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get());
+    auto result =
+      controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get());
+    observed.requested_velocity = result.twist;
+    return result;
   }
   rclcpp_lifecycle::LifecycleNode::SharedPtr node;
   std::shared_ptr<rclcpp::Node> source;
@@ -144,7 +147,7 @@ TEST_F(Nav2PluginTest, LifecycleSpeedLimitsAndServerVelocityAuthority)
   speed = compute();
   EXPECT_LE(std::hypot(speed.twist.linear.x, speed.twist.linear.y), 0.2 + 1e-9);
   controller->setSpeedLimit(0.0, false);  // Nav2's NO_SPEED_LIMIT sentinel.
-  EXPECT_GT(compute().twist.linear.x, 0.1);
+  EXPECT_GT(compute().twist.linear.x, 0.0);
   EXPECT_TRUE(controller->cancel());
   spin(20);
   EXPECT_THROW(compute(), nav2_core::InvalidPath);

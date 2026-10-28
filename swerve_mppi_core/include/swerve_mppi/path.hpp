@@ -17,6 +17,7 @@ struct PathMatch
 class PathView
 {
 public:
+  static constexpr double stop_angle = 0.2617993878;
   explicit PathView(const std::vector<Pose> & points) : p_(points), arc_(points.size(), 0)
   {
     for (std::size_t i = 1; i < p_.size(); ++i) arc_[i] = arc_[i - 1] + distance(p_[i - 1], p_[i]);
@@ -69,7 +70,7 @@ public:
   double next_corner(double s) const
   {
     for (std::size_t i = 1; i + 1 < p_.size(); ++i)
-      if (arc_[i] > s + 1e-5 && turn(i) >= 1.0471975512) return arc_[i];
+      if (arc_[i] > s + 1e-5 && turn(i) >= stop_angle) return arc_[i];
     return length();
   }
   double speed_limit(
@@ -80,7 +81,7 @@ public:
       double d = arc_[i] - s;
       if (d < 1e-5) continue;
       double angle = turn(i), vertex_speed = maximum;
-      if (angle >= 1.0471975512)
+      if (angle >= stop_angle)
         vertex_speed = 0;
       else {
         double curvature = angle / std::max(.01, .5 * (arc_[i + 1] - arc_[i - 1]));

@@ -5,7 +5,7 @@ import math
 LIMITS = dict(path_rms_m=.03, path_peak_m=.075, heading_rms_rad=.05,
               heading_peak_rad=.12, final_position_error_m=.06,
               final_yaw_error_rad=.06, stopped_fraction=.55,
-              max_request_linear_rate=1.05, max_request_angular_rate=1.5)
+              max_request_linear_rate=1.05, max_request_angular_rate=1.5, compute_p99_ms=50.)
 
 
 def reference_match(x, y, points):

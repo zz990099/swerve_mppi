@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 namespace swerve_mppi
 {
 namespace chassis = swerve_chassis_core;
@@ -25,12 +26,71 @@ Velocity Model::project(Velocity v) const
     ratio = std::min(ratio, config_.limits.wheel_speed / std::max(1e-12, std::abs(speed)));
   return {t.vx * ratio, t.vy * ratio, t.wz * ratio};
 }
+Velocity Model::condition(
+  Velocity desired, Velocity previous, const std::array<double, 4> & reference, double dt) const
+{
+  if(!chassis::finite(chassis::Twist{desired.vx,desired.vy,desired.wz}) ||
+     !chassis::finite(chassis::Twist{previous.vx,previous.vy,previous.wz}) ||
+     !std::isfinite(dt) || dt<=0 || dt>1)throw std::invalid_argument("invalid request conditioning input");
+  desired = project(desired);
+  previous = project(previous);
+  if (std::hypot(previous.vx, previous.vy) + .3 * std::abs(previous.wz) > .03) {
+    const auto old =
+      chassis::inverse(config_.geometry, {previous.vx, previous.vy, previous.wz}, reference);
+    for (int iteration = 0; iteration < 12; ++iteration) {
+      auto next =
+        chassis::inverse(config_.geometry, {desired.vx, desired.vy, desired.wz}, old.steering);
+      bool changed = false;
+      for (std::size_t i = 0; i < 4; ++i) {
+        if (
+          std::abs(next.steering[i] - old.steering[i]) <= chassis::pi / 2 + 1e-6 ||
+          std::abs(old.speed[i]) < .01)
+          continue;
+        double sign = old.speed[i] > 0 ? 1. : -1.;
+        double y = (i % 2 == 0 ? 1. : -1.) * config_.geometry.track_width / 2;
+        // Current rolling branch is a half-space in body twist. Projection onto
+        // it retains lateral intent instead of requesting a near-180 degree flip.
+        double value = sign * (desired.vx - desired.wz * y);
+        if (value < 0) {
+          const double radius = .4;
+          double denominator = 1 + y * y / (radius * radius);
+          desired.vx -= value * sign / denominator;
+          desired.wz += value * sign * y / (radius * radius * denominator);
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+    auto next =
+      chassis::inverse(config_.geometry, {desired.vx, desired.vy, desired.wz}, old.steering);
+    for (std::size_t i = 0; i < 4; ++i)
+      if (std::abs(next.steering[i] - old.steering[i]) > chassis::pi / 2 + 1e-4) {
+        desired = {};
+        break;  // No continuous branch: brake before selecting a new intent.
+      }
+  }
+  desired = project(desired);
+  const double dv = std::hypot(desired.vx - previous.vx, desired.vy - previous.vy),
+               dw = std::abs(desired.wz - previous.wz);
+  double ratio = std::min(
+    {1., config_.limits.linear_acceleration * dt / std::max(1e-12, dv),
+     config_.limits.angular_acceleration * dt / std::max(1e-12, dw)});
+  Velocity result{
+    previous.vx + ratio * (desired.vx - previous.vx),
+    previous.vy + ratio * (desired.vy - previous.vy),
+    previous.wz + ratio * (desired.wz - previous.wz)};
+  if (std::abs(result.vx) < 1e-8) result.vx = 0;
+  if (std::abs(result.vy) < 1e-8) result.vy = 0;
+  if (std::abs(result.wz) < 1e-8) result.wz = 0;
+  return result;
+}
 bool Model::valid(const State & s) const
 {
   if (
     !s.generator.valid || !std::isfinite(s.pose.x) || !std::isfinite(s.pose.y) ||
     !std::isfinite(s.pose.yaw) ||
     !chassis::finite(chassis::Twist{s.velocity.vx, s.velocity.vy, s.velocity.wz}) ||
+    !chassis::finite(chassis::Twist{s.requested.vx, s.requested.vy, s.requested.wz}) ||
     !chassis::finite(chassis::Joints{s.steering, s.wheel_speeds}) ||
     !chassis::finite(s.generator.command))
     return false;
@@ -99,6 +159,7 @@ Trajectory Model::rollout(const State & initial, const std::vector<Velocity> & c
         auto v = chassis::forward(config_.geometry, next);
         s.velocity = {v.vx, v.vy, v.wz};
       }
+      s.requested = u;
       out.states.push_back(s);
     }
   } catch (const std::exception &) {

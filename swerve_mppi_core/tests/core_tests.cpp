@@ -46,6 +46,20 @@ int main()
       prediction.states.back().steering[0] > 0 &&
         prediction.states.back().steering[0] < actual.state.command.steering[0],
       "measured steering lags the shared target");
+    std::array<double, 4> lateral_reference;
+    lateral_reference.fill(swerve_chassis_core::pi / 2);
+    auto stable = model.condition({-.001, .6, .001}, {0, .6, 0}, lateral_reference, .05);
+    auto stable_wheels = swerve_chassis_core::inverse(
+      c.geometry, {stable.vx, stable.vy, stable.wz}, lateral_reference);
+    for (double angle : stable_wheels.steering)
+      check(
+        std::abs(angle - swerve_chassis_core::pi / 2) < .01,
+        "small lateral correction cannot flip steering by pi");
+    auto bounded = model.condition({.8, .8, .8}, {}, state.steering, .05);
+    check(
+      std::hypot(bounded.vx, bounded.vy) <= c.limits.linear_acceleration * .05 + 1e-9 &&
+        std::abs(bounded.wz) <= c.limits.angular_acceleration * .05 + 1e-9,
+      "request slew follows accepted previous command");
     state.generator.valid = false;
     check(!model.rollout(state, {{0.2, 0, 0}}).valid, "missing snapshot rejected");
     state.generator.valid = true;
@@ -62,6 +76,27 @@ int main()
     check(controller.compute(input).status == Status::InvalidInput, "invalid input");
     input.state = state;
     check(controller.compute(input).status == Status::Ok, "input recovery");
+    Input lateral;
+    lateral.state.generator.valid = true;
+    lateral.path = {{0, 0, 0}, {0, .8, 0}};
+    lateral.goal = lateral.path.back();
+    Controller lateral_controller(c);
+    auto lateral_result = lateral_controller.compute(lateral);
+    check(
+      lateral_result.status == Status::Ok && std::abs(lateral_result.command.velocity.vx) < 1e-6 &&
+        std::abs(lateral_result.command.velocity.wz) < 1e-6,
+      "perpendicular startup retains a pure lateral request");
+    Trajectory on_path, shortcut;
+    on_path.states = {lateral.state, lateral.state};
+    on_path.states.back().pose = {0, .05, 0};
+    on_path.controls = {{0, .5, 0}};
+    shortcut = on_path;
+    shortcut.states.back().pose = {.08, .07, 0};
+    std::vector<double> costs(2, 0);
+    tracking_critics().front()->score({lateral, c}, {on_path, shortcut}, costs);
+    check(
+      std::isfinite(costs[0]) && !std::isfinite(costs[1]),
+      "progress cannot buy an eight-centimetre shortcut");
     Controller rejecting(c, {std::make_shared<Reject>()});
     check(rejecting.compute(input).status == Status::NoSolution, "no solution");
     c.max_speed = 0;

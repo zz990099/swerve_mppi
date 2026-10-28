@@ -10,6 +10,8 @@ class Model
 {
 public:
   explicit Model(Config config);
+  Velocity condition(
+    Velocity desired, Velocity previous, const std::array<double, 4> & reference, double dt) const;
   Velocity project(Velocity velocity) const;
   bool valid(const State & state) const;
   Trajectory rollout(const State & initial, const std::vector<Velocity> & controls) const;

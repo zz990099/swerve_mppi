@@ -20,6 +20,7 @@ struct State
 {
   Pose pose;
   Velocity velocity;
+  Velocity requested;  // Last request accepted by the executor, distinct from measured velocity.
   std::array<double, 4> steering{};
   std::array<double, 4> wheel_speeds{};  // Angular rad/s, FL/FR/RL/RR.
   swerve_chassis_core::State generator;  // Complete execution snapshot, targets in rad/rad/s.
@@ -57,7 +58,7 @@ struct Result
 {
   Command command;
   Status status = Status::InvalidInput;
-  double cost = 0, compute_ms = 0;
+  double cost = 0, compute_ms = 0, effective_samples = 0;
   std::size_t evaluated = 0;
   std::vector<Pose> prediction;
 };

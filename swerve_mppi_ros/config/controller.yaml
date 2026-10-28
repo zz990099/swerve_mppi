@@ -31,11 +31,11 @@ controller_server:
       transform_tolerance: 0.1
       use_costmap: true
       unknown_is_obstacle: true
-      horizon: 20
+      horizon: 24
       model_dt: 0.1
       integration_dt: 0.01
       steering_time_constant: 0.05
-      samples: 16
+      samples: 24
       iterations: 1
       max_speed: 0.8
       max_yaw_rate: 0.8

@@ -19,6 +19,22 @@ int main()
     {{0, 0, 0}, {0.7, 0, 0}, {0, 0, 0}},
     {{0, 0, 0}, {.8, 0, 0}, {.8, .8, 0}, {0, .8, 0}, {0, 0, 0}},
     {{0, 0, 0}, {.4, .15, 0}, {.8, -.15, 0}, {1.2, 0, 0}}};
+  paths.push_back({{0, 0, 0}, {0, -.8, 0}});
+  std::vector<Pose> smooth_s, bezier, reverse_curve;
+  for (int i = 0; i <= 40; ++i) {
+    double t = i / 40.;
+    smooth_s.push_back({1.8 * t, .22 * std::sin(2 * chassis::pi * t), 0});
+    double x = 3 * (1 - t) * (1 - t) * t * .5 + 3 * (1 - t) * t * t * 1.1 + t * t * t * 1.6;
+    double y = 3 * (1 - t) * t * t * .6 + t * t * t * .6;
+    double dx = 3 * ((1 - t) * (1 - t) * .5 + 2 * (1 - t) * t * .6 + t * t * .5),
+           dy = 3 * 2 * (1 - t) * t * .6;
+    double yaw = std::atan2(dy, dx);
+    bezier.push_back({x, y, yaw});
+    reverse_curve.push_back({-x, -y, yaw});
+  }
+  paths.push_back(smooth_s);
+  paths.push_back(bezier);
+  paths.push_back(reverse_curve);
   std::vector<double> times;
   for (int plant = 0; plant < 2; ++plant) {
     for (std::size_t scenario = 0; scenario < paths.size(); ++scenario) {
@@ -30,6 +46,9 @@ int main()
       State s;
       s.generator.valid = true;
       bool reached = false;
+      PathView reference(paths[scenario]);
+      double square_error = 0, peak = 0, heading_square = 0, heading_peak = 0, settled_since = -1;
+      int observations = 0, stopped = 0;
       for (int step = 0; step < 800; ++step) {
         Input input;
         input.state = s;
@@ -63,11 +82,42 @@ int main()
           v = chassis::forward(config.geometry, joints);
           s.velocity = {v.vx, v.vy, v.wz};
         }
-        if (path.goal_active() && goal.reached(s, path.goal(), step * 0.05)) {
+        double dv = std::hypot(
+          result.command.velocity.vx - s.requested.vx, result.command.velocity.vy - s.requested.vy);
+        double dw = std::abs(result.command.velocity.wz - s.requested.wz);
+        if (
+          dv > config.limits.linear_acceleration * .05 + 1e-7 ||
+          dw > config.limits.angular_acceleration * .05 + 1e-7)
+          throw std::runtime_error("request slew exceeded");
+        s.requested = result.command.velocity;
+        auto match = reference.match(s.pose);
+        double angle = std::abs(wrap_angle(s.pose.yaw - match.pose.yaw));
+        square_error += match.error * match.error;
+        peak = std::max(peak, match.error);
+        heading_square += angle * angle;
+        heading_peak = std::max(heading_peak, angle);
+        ++observations;
+        double wheel_peak = 0;
+        for (double v : s.wheel_speeds) wheel_peak = std::max(wheel_peak, std::abs(v));
+        stopped += wheel_peak < .05;
+        if (wheel_peak >= .05)
+          settled_since = -1;
+        else if (settled_since < 0)
+          settled_since = step * .05;
+        if (
+          path.goal_active() && goal.reached(s, path.goal(), step * 0.05) && settled_since >= 0 &&
+          step * .05 - settled_since >= .3) {
           reached = true;
           std::cout << "plant=" << plant << " scenario=" << scenario
                     << " simulated_s=" << step * 0.05 << " error=" << distance(s.pose, path.goal())
-                    << '\n';
+                    << " rms=" << std::sqrt(square_error / observations) << " peak=" << peak
+                    << " stopped=" << double(stopped) / observations << '\n';
+          if (
+            std::sqrt(square_error / observations) > .03 || peak > .075 ||
+            double(stopped) / observations > .55 ||
+            (reference.length() > 1e-6 &&
+             (std::sqrt(heading_square / observations) > .05 || heading_peak > .12)))
+            throw std::runtime_error("closed-loop tracking quality gate failed");
           break;
         }
       }

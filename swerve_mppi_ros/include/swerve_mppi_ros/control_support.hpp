@@ -74,7 +74,7 @@ public:
       double dot = (pose.x - a.x) * dx + (pose.y - a.y) * dy;
       double cross = (pose.x - a.x) * dy - (pose.y - a.y) * dx;
       bool passed = l2 < 1e-12 || (dot >= l2 && cross * cross <= .03 * .03 * l2);
-      bool corner = view.turn(progress_ + 1) >= 1.0471975512 && distance(pose, b) < .015;
+      bool corner = view.turn(progress_ + 1) >= PathView::stop_angle && distance(pose, b) < .015;
       if (!passed && !corner) break;
       progress_arc_ = view.vertex_arc(progress_ + 1);
       ++progress_;

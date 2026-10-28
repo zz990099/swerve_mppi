@@ -6,6 +6,8 @@
 #include <limits>
 #include <stdexcept>
 
+#include "swerve_mppi/path.hpp"
+
 namespace swerve_mppi
 {
 namespace
@@ -15,40 +17,6 @@ bool finite(Velocity v)
   return std::isfinite(v.vx) && std::isfinite(v.vy) && std::isfinite(v.wz);
 }
 bool finite(Pose p) { return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.yaw); }
-Pose target_point(const Pose & pose, const std::vector<Pose> & path, double lookahead)
-{
-  if (path.size() == 1) return path.front();
-  double best = std::numeric_limits<double>::infinity(), fraction = 0;
-  std::size_t segment = 1;
-  for (std::size_t i = 1; i < path.size(); ++i) {
-    double dx = path[i].x - path[i - 1].x, dy = path[i].y - path[i - 1].y, l2 = dx * dx + dy * dy;
-    double t =
-      l2 > 1e-12
-        ? std::clamp(((pose.x - path[i - 1].x) * dx + (pose.y - path[i - 1].y) * dy) / l2, 0.0, 1.0)
-        : 0;
-    double e = std::hypot(pose.x - path[i - 1].x - t * dx, pose.y - path[i - 1].y - t * dy);
-    if (e < best) {
-      best = e;
-      fraction = t;
-      segment = i;
-    }
-  }
-  for (std::size_t i = segment; i < path.size(); ++i) {
-    const auto & a = path[i - 1];
-    const auto & b = path[i];
-    double length = distance(a, b);
-    double available = length * (1 - fraction);
-    if (length > 1e-12 && lookahead < available) {
-      double t = fraction + lookahead / length;
-      return {
-        a.x + t * (b.x - a.x), a.y + t * (b.y - a.y),
-        wrap_angle(a.yaw + t * wrap_angle(b.yaw - a.yaw))};
-    }
-    lookahead -= available;
-    fraction = 0;
-  }
-  return path.back();
-}
 }  // namespace
 Controller::Controller(Config config, Critics critics)
 : config_(config), critics_(std::move(critics)), model_(config), random_(config.seed)
@@ -68,25 +36,36 @@ void Controller::reset()
 std::vector<Velocity> Controller::seed(const Input & input) const
 {
   State s = input.state;
+  PathView path(input.path);
+  double progress = path.match(s.pose).arc;
   std::vector<Velocity> out;
   out.reserve(config_.horizon);
   for (std::size_t i = 0; i < config_.horizon; ++i) {
-    auto target = target_point(s.pose, input.path, config_.lookahead);
-    double dx = target.x - s.pose.x, dy = target.y - s.pose.y;
-    double limit = config_.max_speed;
-    const bool terminal = input.goal_active && distance(input.path.back(), input.goal) < 0.001;
-    if (terminal) limit = std::min(limit, config_.approach_gain * distance(s.pose, input.goal));
-    const double yaw = terminal && distance(s.pose, input.goal) < config_.approach_distance
-                         ? input.goal.yaw
-                         : target.yaw;
-    Velocity v{
-      config_.approach_gain * (std::cos(s.pose.yaw) * dx + std::sin(s.pose.yaw) * dy),
-      config_.approach_gain * (-std::sin(s.pose.yaw) * dx + std::cos(s.pose.yaw) * dy),
-      1.5 * wrap_angle(yaw - s.pose.yaw)};
-    double scale = std::max(1.0, std::hypot(v.vx, v.vy) / std::max(limit, 1e-12));
-    v.vx /= scale;
-    v.vy /= scale;
-    v = model_.project(v);
+    auto m = path.match(
+      s.pose, progress,
+      std::min(path.length(), progress + config_.max_speed * config_.model_dt * 1.5 + .02));
+    progress = m.arc;
+    double corner = path.next_corner(progress);
+    if (
+      corner < path.length() - 1e-5 && corner - progress < .015 &&
+      std::hypot(s.velocity.vx, s.velocity.vy) < .04) {
+      progress = corner;
+      m = path.match(s.pose, progress, progress + .05);
+    }
+    const double servo_rate = std::min(
+      config_.limits.steering_rate * .6,
+      config_.limits.tracking_tolerance / (1.4 * config_.steering_time_constant));
+    double speed = path.speed_limit(
+      progress, config_.max_speed, config_.limits.linear_acceleration, config_.approach_gain,
+      servo_rate);
+    double wx = speed * m.tx - config_.cross_gain * (s.pose.x - m.pose.x);
+    double wy = speed * m.ty - config_.cross_gain * (s.pose.y - m.pose.y);
+    double wz = path.yaw_derivative(progress) * speed + 2.5 * wrap_angle(m.pose.yaw - s.pose.yaw);
+    Velocity desired{
+      std::cos(s.pose.yaw) * wx + std::sin(s.pose.yaw) * wy,
+      -std::sin(s.pose.yaw) * wx + std::cos(s.pose.yaw) * wy, wz};
+    auto v = model_.condition(
+      desired, s.requested, s.generator.command.steering, i ? config_.model_dt : input.dt);
     out.push_back(v);
     auto next = model_.rollout(s, {v});
     if (next.valid) s = next.states.back();
@@ -138,6 +117,28 @@ Result Controller::compute(const Input & input)
   try {
     for (auto & critic : critics_) critic->prepare(context);
     auto fresh = seed(input);
+    auto condition = [&](std::vector<Velocity> controls) {
+      auto previous = input.state.requested;
+      auto reference = input.state.generator.command.steering;
+      for (std::size_t i = 0; i < controls.size(); ++i) {
+        controls[i] =
+          model_.condition(controls[i], previous, reference, i ? config_.model_dt : input.dt);
+        auto wheels = swerve_chassis_core::inverse(
+          config_.geometry, {controls[i].vx, controls[i].vy, controls[i].wz}, reference);
+        reference = wheels.steering;
+        previous = controls[i];
+      }
+      return controls;
+    };
+    auto intent = swerve_chassis_core::inverse(
+      config_.geometry, {fresh[0].vx, fresh[0].vy, fresh[0].wz},
+      input.state.generator.command.steering);
+    double alignment = 1;
+    for (std::size_t i = 0; i < 4; ++i)
+      alignment =
+        std::min(alignment, std::max(0., std::cos(intent.steering[i] - input.state.steering[i])));
+    alignment *= alignment;
+    bool rotation_only = PathView(input.path).length() < 1e-6;
     auto mean = warm_.size() == config_.horizon ? warm_ : fresh;
     auto score = [&](const std::vector<Trajectory> & traces) {
       std::vector<double> costs(traces.size(), 0);
@@ -158,7 +159,11 @@ Result Controller::compute(const Input & input)
         auto candidate = k == 1 ? fresh : mean;
         if (k == 2) candidate.assign(config_.horizon, {});
         if (k == 3)
-          candidate.assign(config_.horizon, fresh.front());  // Sustained presteering intent.
+          for (auto & u : candidate) {
+            u.vx *= .7;
+            u.vy *= .7;
+            u.wz *= .7;
+          }
         Velocity noise;
         if (k >= 4)
           for (auto & u : candidate) {
@@ -167,11 +172,13 @@ Result Controller::compute(const Input & input)
               a * noise.vx + b * normal_(random_), a * noise.vy + b * normal_(random_),
               a * noise.wz + b * normal_(random_)};
             u = model_.project(
-              {u.vx + config_.noise_linear * noise_scale * noise.vx,
-               u.vy + config_.noise_linear * noise_scale * noise.vy,
-               u.wz + config_.noise_angular * noise_scale * noise.wz});
+              {u.vx +
+                 (rotation_only ? 0 : config_.noise_linear) * noise_scale * alignment * noise.vx,
+               u.vy +
+                 (rotation_only ? 0 : config_.noise_linear) * noise_scale * alignment * noise.vy,
+               u.wz + config_.noise_angular * noise_scale * alignment * noise.wz});
           }
-        batch.push_back(model_.rollout(input.state, candidate));
+        batch.push_back(model_.rollout(input.state, condition(std::move(candidate))));
       }
       const auto costs = score(batch);
       const auto winner =
@@ -183,25 +190,28 @@ Result Controller::compute(const Input & input)
         selected_trace = batch[winner];
       }
       std::vector<Velocity> weighted(config_.horizon);
-      double total = 0;
+      double total = 0, squared = 0;
       for (std::size_t k = 0; k < batch.size(); ++k) {
         const double w = std::exp(-(costs[k] - costs[winner]) / config_.temperature);
         total += w;
+        squared += w * w;
         for (std::size_t t = 0; t < weighted.size(); ++t) {
           weighted[t].vx += w * batch[k].controls[t].vx;
           weighted[t].vy += w * batch[k].controls[t].vy;
           weighted[t].wz += w * batch[k].controls[t].wz;
         }
       }
+      result.effective_samples = total * total / squared;
       for (auto & u : weighted) u = model_.project({u.vx / total, u.vy / total, u.wz / total});
+      weighted = condition(std::move(weighted));
       std::vector<Trajectory> update{model_.rollout(input.state, weighted)};
       const double cost = score(update).front();
-      if (cost <= best) {
+      if (cost <= best + .02) {
         best = cost;
         selected = weighted;
         selected_trace = std::move(update.front());
       }
-      mean = cost <= costs[winner] ? weighted : batch[winner].controls;
+      mean = cost <= costs[winner] + .02 ? weighted : batch[winner].controls;
     }
   } catch (const std::exception &) {
     reset();

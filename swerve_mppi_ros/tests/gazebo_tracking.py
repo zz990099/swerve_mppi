@@ -53,6 +53,8 @@ def main():
     compute_times = []
     node.create_subscription(ChassisState, '/chassis_controller/state', lambda m: execution.__setitem__(0,m), qos_profile_sensor_data)
     def diagnostics(msg):
+        if recording is not None:
+            recording.diagnostic(msg)
         for item in msg.status:
             for kv in item.values:
                 if kv.key == 'compute_ms': compute_times.append(float(kv.value))

@@ -24,9 +24,9 @@ public:
 using Critics = std::vector<std::shared_ptr<Critic>>;
 struct TrackingWeights
 {
-  double path_distance = 4.0, path_heading = 0.3, progress = 8.0;
-  double goal_position = 30.0, goal_heading = 12.0;
-  double effort = 0.01, smoothness = 0.08, steering_change = 0.02, consistency = 1.0;
+  double path_distance = 1.0, path_heading = 0.5, progress = 1.0;
+  double goal_position = 2.0, goal_heading = 1.0;
+  double effort = 0.005, smoothness = 0.1, steering_change = 0.05, consistency = 1.0;
 };
 // Pure numerical defaults; ROS costmap critics implement the same interface.
 Critics tracking_critics(TrackingWeights weights = {});

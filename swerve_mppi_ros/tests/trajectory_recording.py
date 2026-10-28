@@ -52,6 +52,7 @@ class Recording:
         self.last_pose = None
         self.heading_errors = []
         self.last_request = None
+        self.effective_samples = []
         self.max_request_linear_rate = 0.
         self.max_request_angular_rate = 0.
         self.stopped = 0
@@ -65,13 +66,25 @@ class Recording:
                               'truth_yaw_rad', 'odom_time_s', 'odom_x_m', 'odom_y_m',
                               'odom_yaw_rad', 'path_error_m', 'peak_wheel_rad_s',
                               'requested_vx_m_s', 'requested_vy_m_s', 'requested_wz_rad_s',
-                              'chassis_stamp_s', 'command_stamp_s', 'execution', 'fault'] +
+                              'chassis_stamp_s', 'feedback_stamp_s', 'command_stamp_s', 'execution', 'fault', 'generator_valid'] +
                              [f'{field}_{wheel}' for field in ('steering_rad', 'wheel_rad_s',
                               'target_steering_rad', 'target_wheel_rad_s') for wheel in ('fl','fr','rl','rr')])
         self.prediction_file = (self.directory/'predictions.csv').open('w', newline='', buffering=1)
         self.prediction_writer = csv.writer(self.prediction_file)
         self.prediction_writer.writerow(['prediction_stamp_s', 'horizon_step', 'x_m', 'y_m', 'yaw_rad'])
+        self.diagnostic_file = (self.directory/'diagnostics.csv').open('w',newline='',buffering=1)
+        self.diagnostic_writer = csv.writer(self.diagnostic_file)
+        self.diagnostic_writer.writerow(['stamp_s','compute_ms','cost','evaluated','effective_samples'])
         self._write_metadata()
+
+    def diagnostic(self, message):
+        for status in message.status:
+            values={item.key:item.value for item in status.values}
+            if 'compute_ms' not in values:
+                continue
+            self.diagnostic_writer.writerow([stamp(message)]+[values.get(key,'') for key in ('compute_ms','cost','evaluated','effective_samples')])
+            if 'effective_samples' in values:
+                self.effective_samples.append(float(values['effective_samples']))
 
     def prediction(self, message):
         for i, item in enumerate(message.poses):
@@ -97,7 +110,7 @@ class Recording:
             peak = max(map(abs, execution.wheel_speeds)) if execution is not None else None
             requested = execution.requested_velocity if execution is not None else None
             self.stopped += peak is not None and peak < .05
-            extra = [None]*20
+            extra = [None]*22
             if execution is not None:
                 command_time = execution.command_stamp.sec+execution.command_stamp.nanosec*1e-9
                 request = (requested.linear.x, requested.linear.y, requested.angular.z)
@@ -110,7 +123,7 @@ class Recording:
                         self.max_request_angular_rate = max(self.max_request_angular_rate,
                             abs(request[2]-previous[2])/dt)
                 self.last_request = (command_time, request, execution.fault)
-                extra = [stamp(execution), command_time, execution.execution, execution.fault] + list(
+                extra = [stamp(execution), execution.feedback_stamp.sec+execution.feedback_stamp.nanosec*1e-9, command_time, execution.execution, execution.fault, int(execution.generator_valid)] + list(
                     execution.steering_angles)+list(execution.wheel_speeds)+list(
                     execution.target_steering)+list(execution.target_wheel_speeds)
             self.writer.writerow([timestamp, time.monotonic()-self.start, x, y, a,
@@ -122,6 +135,7 @@ class Recording:
     def close(self, success, reason, compute_times):
         self.file.close()
         self.prediction_file.close()
+        self.diagnostic_file.close()
         count = len(self.errors)
         self.metadata.update(status='passed' if success else 'failed', reason=reason,
                              samples=count, wall_duration_s=time.monotonic()-self.start)
@@ -141,6 +155,11 @@ class Recording:
             self.metadata['compute_ms'] = {
                 str(p): ordered[min(len(ordered)-1, int(len(ordered)*p/100))]
                 for p in (50, 95, 99)}
+        if compute_times:
+            self.metadata['compute_p99_ms'] = self.metadata['compute_ms']['99']
+        if self.effective_samples:
+            self.metadata['effective_samples_mean'] = sum(self.effective_samples)/len(self.effective_samples)
+            self.metadata['effective_samples_min'] = min(self.effective_samples)
         self.metadata['goal_success'] = success
         limits, failures = evaluate(self.metadata)
         self.metadata.update(quality_limits=limits, quality_failures=failures)

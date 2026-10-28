@@ -81,6 +81,7 @@ inline ChassisFeedback feedback(
   f.state.steering = msg.steering_angles;
   f.state.wheel_speeds = msg.wheel_speeds;
   f.state.velocity = velocity(msg.velocity);
+  f.state.requested = velocity(msg.requested_velocity);
   f.state.generator = {{msg.target_steering, msg.target_wheel_speeds}, msg.generator_valid};
   if (!f.fault && !Model(c).valid(f.state))
     throw std::invalid_argument("invalid execution snapshot");

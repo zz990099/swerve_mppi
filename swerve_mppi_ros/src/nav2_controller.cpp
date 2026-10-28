@@ -72,6 +72,11 @@ struct Nav2Controller::Runtime
     number("steering_tracking_tolerance", config.limits.tracking_tolerance);
     number("stopped_wheel_speed", config.limits.stopped_speed);
     number("max_residual", config.max_residual);
+    number("position_scale", config.position_scale);
+    number("heading_scale", config.heading_scale);
+    number("path_corridor", config.path_corridor);
+    number("heading_corridor", config.heading_corridor);
+    number("cross_gain", config.cross_gain);
     number("model_dt", config.model_dt);
     number("integration_dt", config.integration_dt);
     number("steering_time_constant", config.steering_time_constant);
@@ -168,7 +173,8 @@ struct Nav2Controller::Runtime
     for (const auto & p : std::vector<std::pair<std::string, std::string>>{
            {"compute_ms", std::to_string(result.compute_ms)},
            {"cost", std::to_string(result.cost)},
-           {"evaluated", std::to_string(result.evaluated)}}) {
+           {"evaluated", std::to_string(result.evaluated)},
+           {"effective_samples", std::to_string(result.effective_samples)}}) {
       diagnostic_msgs::msg::KeyValue value;
       value.key = p.first;
       value.value = p.second;

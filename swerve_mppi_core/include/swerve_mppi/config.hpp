@@ -12,11 +12,13 @@ struct Config
   double max_speed = 0.8, max_yaw_rate = 0.8;
   double model_dt = 0.1, integration_dt = 0.01;
   double steering_time_constant = 0.05;  // Nominal servo lag in seconds.
-  std::size_t horizon = 20, samples = 16, iterations = 1;
-  double noise_linear = 0.18, noise_angular = 0.25, noise_correlation = 0.8;
-  double temperature = 0.3;
-  double lookahead = 0.6, approach_distance = 0.5, approach_gain = 1.2;
+  std::size_t horizon = 24, samples = 24, iterations = 1;
+  double noise_linear = 0.06, noise_angular = 0.08, noise_correlation = 0.8;
+  double temperature = 0.5;
+  double lookahead = 0.3, approach_distance = 0.5, approach_gain = 2.0;
   double max_residual = 0.08;
+  double position_scale = .03, heading_scale = .05, cross_gain = 4.;
+  double path_corridor = .04, heading_corridor = .10;
   std::uint32_t seed = 42;
 };
 void validate(const Config & config);

@@ -53,7 +53,7 @@ class RecordingTests(unittest.TestCase):
                         path_rms_m=.01, path_peak_m=.02, heading_rms_rad=.01,
                         heading_peak_rad=.02, final_position_error_m=.01,
                         final_yaw_error_rad=.01, stopped_fraction=.2, wall_duration_s=5.,
-                        max_request_linear_rate=.9, max_request_angular_rate=1.3)
+                        max_request_linear_rate=.9, max_request_angular_rate=1.3, compute_p99_ms=20.)
         self.assertEqual(evaluate(metadata)[1], [])
         metadata['path_peak_m'] = .19
         self.assertTrue(any('path_peak_m' in value for value in evaluate(metadata)[1]))
