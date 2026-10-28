@@ -295,7 +295,8 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
   try {
     if (!r.active || !r.controller) throw nav2_core::ControllerException("MPPI is inactive");
     if (r.path.empty()) throw nav2_core::InvalidPath("no path");
-    const double now = r.node()->now().seconds();
+    const auto control_stamp = r.node()->now();
+    const double now = control_stamp.seconds();
     const double dt = r.last_time > 0 ? now - r.last_time : 1 / r.frequency;
     r.last_time = now;
     if (dt <= 0 || dt > 1) throw nav2_core::NoValidControl("control clock discontinuity");
@@ -306,7 +307,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
       std::chrono::duration<double>(Steady::now() - r.state_wall).count() > r.timeout)
       throw nav2_core::NoValidControl("chassis state is stale or missing");
     geometry_msgs::msg::TwistStamped out;
-    out.header.stamp = r.node()->now();
+    out.header.stamp = control_stamp;
     out.header.frame_id = r.body_frame;
     if (r.measured->fault) {
       if (ordered) ordered->setReady(false);

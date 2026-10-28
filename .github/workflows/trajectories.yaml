@@ -43,7 +43,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends build-essential cmake python3-colcon-common-extensions python3-psutil python3-yaml python3-matplotlib ros-jazzy-ament-cmake-gtest ros-jazzy-ament-cmake-pytest ros-jazzy-ament-cmake-python ros-jazzy-rosidl-default-generators python3-pytest ros-jazzy-tf2-geometry-msgs ros-jazzy-nav2-controller ros-jazzy-nav2-lifecycle-manager ros-jazzy-ros-gz ros-jazzy-gz-ros2-control ros-jazzy-joint-state-broadcaster ros-jazzy-forward-command-controller ros-jazzy-robot-state-publisher ros-jazzy-xacro
       - name: Check recording contracts
-        run: python3 -m unittest discover -s swerve_mppi_ros/tests -p test_trajectory_recording.py -v
+        run: python3 -m unittest discover -s swerve_mppi_ros/tests -p 'test_*.py' -v
       - name: Build chassis and MPPI
         run: |
           source /opt/ros/jazzy/setup.bash
