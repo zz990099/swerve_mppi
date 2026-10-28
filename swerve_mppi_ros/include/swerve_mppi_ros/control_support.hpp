@@ -80,9 +80,13 @@ public:
         if (forward_x == 0 && forward_y == 0) {
           forward_x = dx;
           forward_y = dy;
-        } else if (forward_x * dx + forward_y * dy <= 0) {
-          // A monotonic local section prevents nearest-point scoring from
-          // rewarding a later return leg before the intervening path is visited.
+        } else if (
+          forward_x * dx + forward_y * dy <=
+          std::sqrt(0.5 * (forward_x * forward_x + forward_y * forward_y) * (dx * dx + dy * dy))) {
+          // Stop the local window at sharp turns (45 degrees or more).
+          // Otherwise lookahead can cut an ordered corner, reach a later
+          // segment and leave progress permanently behind. A normalized
+          // margin also makes right-angle cuts stable under frame rotations.
           break;
         }
       }

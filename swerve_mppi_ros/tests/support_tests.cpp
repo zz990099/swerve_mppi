@@ -43,6 +43,25 @@ int main()
       !path.goal_active() && local.front().x == 0, "off-path projection cannot skip a turnaround");
     path.local({1, 0, 0});
     check(path.goal_active(), "turnaround unlocks return goal");
+    for (double angle : {-2.7, -0.3, 0.00001, 1.2}) {
+      auto rotate = [angle](double x, double y) {
+        return Pose{
+          x * std::cos(angle) - y * std::sin(angle), x * std::sin(angle) + y * std::cos(angle),
+          angle};
+      };
+      path.set({rotate(0, 0), rotate(.8, 0), rotate(.8, .8), rotate(0, .8), rotate(0, 0)});
+      local = path.local(rotate(.8, .8));
+      // Advance in order rather than jumping to a later square vertex.
+      path.local(rotate(.8, 0));
+      local = path.local(rotate(.8, .8));
+      check(
+        local.size() == 2 && distance(local.back(), rotate(0, .8)) < 1e-9,
+        "rotated square cannot expose its final leg before the last corner");
+      check(!path.goal_active(), "rotated corner remains ordered");
+    }
+    path.set({{0, 0, 0}, {.4, .15, 0}, {.8, -.15, 0}, {1.2, 0, 0}});
+    local = path.local({0, 0, 0});
+    check(local.size() == 2, "S bend keeps the next sharp corner inside the local section");
     path.set({{0, 0, 1.2}});
     check(path.goal_active(), "single-pose rotation remains a terminal task");
     CostmapCritic critic;
