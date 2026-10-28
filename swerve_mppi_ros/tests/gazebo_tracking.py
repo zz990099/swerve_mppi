@@ -58,6 +58,9 @@ def main():
                 if kv.key == 'compute_ms': compute_times.append(float(kv.value))
     node.create_subscription(DiagnosticArray, '/FollowPath/diagnostics', diagnostics, 10)
     node.create_subscription(Odometry, '/odom', lambda m: odom.__setitem__(0, m), 10)
+    if args.output:
+        node.create_subscription(PathMessage, '/FollowPath/prediction',
+                                 lambda m: recording.prediction(m) if recording is not None else None, 10)
     client = ActionClient(node, FollowPath, '/follow_path')
     lifecycle = node.create_client(GetState, '/controller_server/get_state')
     pending_state = [None]
@@ -206,6 +209,8 @@ def main():
         client.destroy()
         node.destroy_node()
         rclpy.shutdown()
+    if recording is not None and recording.metadata['status'] != 'passed':
+        raise AssertionError(recording.metadata['quality_failures'])
 
 
 if __name__ == '__main__':

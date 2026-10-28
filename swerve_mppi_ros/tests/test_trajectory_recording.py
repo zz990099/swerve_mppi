@@ -9,6 +9,7 @@ import unittest
 
 from trajectory_recording import Recording, local_pose, path_error
 from trajectory_scenarios import BENCHMARK_CASES, PATHS
+from tracking_quality import evaluate
 
 
 def pose(x, y, angle):
@@ -46,6 +47,16 @@ class RecordingTests(unittest.TestCase):
             self.assertEqual(result['status'], 'failed')
             self.assertEqual(result['samples'], 1)
             self.assertAlmostEqual(result['final_position_error_m'], .5)
+
+    def test_endpoint_success_cannot_hide_bad_tracking(self):
+        metadata = dict(scenario='straight', reference=[(0,0,0),(1,0,0)], samples=100,
+                        path_rms_m=.01, path_peak_m=.02, heading_rms_rad=.01,
+                        heading_peak_rad=.02, final_position_error_m=.01,
+                        final_yaw_error_rad=.01, stopped_fraction=.2, wall_duration_s=5.,
+                        max_request_linear_rate=.9, max_request_angular_rate=1.3)
+        self.assertEqual(evaluate(metadata)[1], [])
+        metadata['path_peak_m'] = .19
+        self.assertTrue(any('path_peak_m' in value for value in evaluate(metadata)[1]))
 
     def test_required_initial_directions_and_dense_curves(self):
         self.assertEqual(len(BENCHMARK_CASES), 12)

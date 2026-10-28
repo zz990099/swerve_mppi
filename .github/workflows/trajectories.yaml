@@ -3,6 +3,11 @@ on:
   push:
     paths:
       - '.github/workflows/trajectories.yaml'
+      - 'swerve_mppi_core/**'
+      - 'swerve_mppi_ros/src/**'
+      - 'swerve_mppi_ros/include/**'
+      - 'swerve_mppi_ros/config/**'
+      - 'swerve_mppi_ros/tests/tracking_quality.py'
       - 'swerve_mppi_ros/tests/trajectory*.py'
       - 'swerve_mppi_ros/tests/run_trajectory*.py'
       - 'swerve_mppi_ros/tests/plot_trajectories.py'

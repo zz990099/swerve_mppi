@@ -69,7 +69,7 @@ def plot_round(directory, output=None):
         ax.grid(alpha=.18)
         passed = data['status'] == 'passed'
         ax.set_title(TITLES.get(name, name), loc='left', weight='bold', fontsize=10)
-        ax.text(.98, .98, 'GOAL OK' if passed else 'FAIL', transform=ax.transAxes,
+        ax.text(.98, .98, 'TRACK OK' if passed else 'FAIL', transform=ax.transAxes,
                 ha='right', va='top', color='#15803d' if passed else '#c03221', weight='bold',
                 bbox=dict(facecolor='white', alpha=.9, edgecolor='none'))
         if samples:
@@ -83,7 +83,7 @@ def plot_round(directory, output=None):
         ax.set_visible(False)
     passed = sum(item.get('status') == 'passed' for item in summaries)
     fig.suptitle(f"MPPI / Gazebo physical trajectories — Round {manifest['round']:02d}\n"
-                 f"Seed {manifest['seed']}  |  {passed}/{len(names)} goal checks passed  |  "
+                 f"Seed {manifest['seed']}  |  {passed}/{len(names)} tracking checks passed  |  "
                  f"ROS 2 Jazzy + Gazebo Harmonic  |  commit {manifest['commit'][:8]}",
                  fontsize=17, weight='bold', y=.995)
     handles = [Line2D([0], [0], color='#2563b9', linestyle='--', label='Reference path / goal ★'),
@@ -95,8 +95,8 @@ def plot_round(directory, output=None):
     fig.tight_layout(rect=(0, .04, 1, .925), h_pad=2.3, w_pad=2.0)
     fig.text(.5, .012, 'Fresh simulation per case; axes aligned with initial body; arrows show body yaw. '
              'Failed cases retain partial recordings.\n'
-             'GOAL OK: action success, final error < 0.15 m / 0.10 rad and required ordered checkpoints. '
-             'Path RMS / peak are measured, not acceptance gates.',
+             'TRACK OK: path RMS <= 3 cm / peak <= 7.5 cm; heading, endpoint, request slew, stop fraction and duration gates. '
+             'See result.json for every limit and failure.',
              ha='center', fontsize=9, color='#475569')
     output = Path(output) if output else directory/f"round_{manifest['round']:02d}.png"
     output.parent.mkdir(parents=True, exist_ok=True)

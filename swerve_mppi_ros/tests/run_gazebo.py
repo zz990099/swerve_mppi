@@ -105,7 +105,7 @@ def main():
                      'out_and_back', 'closed_loop', 'combined', 's_curve', 'cancel'):
         print(f'Independent physical scenario: {scenario}', flush=True)
         try:
-            run_case(args.chassis_root, args.logs/scenario, scenario)
+            run_case(args.chassis_root, args.logs/scenario, scenario, seed=42, record=True)
         except (RuntimeError, TimeoutError) as error:
             failures.append(scenario)
             print(f"FAIL {scenario}: {error}",flush=True)
