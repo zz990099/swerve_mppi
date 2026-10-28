@@ -319,7 +319,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     };
     for (auto p : local) input.path.push_back(transform_path_pose(p));
     input.goal = transform_path_pose(r.path.goal());
-    input.goal_active = r.path.goal_active();
+    input.goal_active = r.path.goal_active(r.config.approach_distance);
     std::vector<std::uint8_t> grid;
     if (r.map_enabled) {
       auto map = r.costmap->getCostmap();

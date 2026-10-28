@@ -22,48 +22,40 @@ int main()
     state.pose.yaw = 0.2;
     check(!checker.reached(state, goal, 1.5), "heading required");
     PathHandler path;
-    path.set({{0, 0, 0}, {1, 0, 0}, {1, 1, 1.57}, {0, 1, 3.14}, {0, 0, 0}});
-    auto local = path.local({0, 0, 0}, 0.5);
-    check(local.size() == 2 && local.back().x == 1, "crossing keeps initial segment");
-    check(!path.goal_active(), "closed path cannot finish at its initial pose");
-    path.local({1, 0, 0});
-    check(!path.goal_active(), "intermediate segment cannot activate terminal goal");
-    path.local({1, 1, 0});
-    check(!path.goal_active(), "penultimate corner still precedes final segment");
-    path.local({0, 1, 0});
-    check(path.goal_active(), "final ordered segment activates goal convergence");
+    path.set({{0, 0, 0}, {.8, 0, 0}, {.8, .8, 0}, {0, .8, 0}, {0, 0, 0}});
+    auto local = path.local({0, 0, 0});
+    check(local.size() > 2, "sharp corners remain in the preview");
+    check(!path.goal_active(), "closed path cannot finish at the start");
+    path.local({.8, 0, 0});
+    path.local({.8, .8, 0});
+    check(!path.goal_active(), "ordered square still has two legs remaining");
+    path.local({0, .8, 0});
+    check(!path.goal_active(), "final leg activation uses remaining arc length");
+    path.local({0, .4, 0});
+    check(path.goal_active(), "final approach activates by distance");
     path.set({{0, 0, 0}, {1, 0, 0}, {0, 0, 0}});
-    local = path.local({0, 0, 0});
-    check(
-      local.size() == 2 && local.back().x == 1,
-      "local scoring excludes the overlapping return leg");
-    check(!path.goal_active(), "out-and-back requires the turnaround first");
-    local = path.local({1, 0.5, 0});
-    check(
-      !path.goal_active() && local.front().x == 0, "off-path projection cannot skip a turnaround");
+    path.local({0, 0, 0});
+    check(!path.goal_active(), "return endpoint cannot attract at startup");
     path.local({1, 0, 0});
-    check(path.goal_active(), "turnaround unlocks return goal");
-    for (double angle : {-2.7, -0.3, 0.00001, 1.2}) {
-      auto rotate = [angle](double x, double y) {
-        return Pose{
-          x * std::cos(angle) - y * std::sin(angle), x * std::sin(angle) + y * std::cos(angle),
-          angle};
-      };
-      path.set({rotate(0, 0), rotate(.8, 0), rotate(.8, .8), rotate(0, .8), rotate(0, 0)});
-      local = path.local(rotate(.8, .8));
-      // Advance in order rather than jumping to a later square vertex.
-      path.local(rotate(.8, 0));
-      local = path.local(rotate(.8, .8));
+    path.local({.4, 0, 0});
+    check(path.goal_active(), "return leg reaches final approach");
+    std::vector<Pose> dense;
+    for (int i = 0; i <= 40; ++i) dense.push_back({0, .8 * i / 40, 0});
+    PathHandler sparse, sampled;
+    sparse.set({{0, 0, 0}, {0, .8, 0}});
+    sampled.set(dense);
+    for (double y : {0., .315, .5, .7}) {
+      auto a = sparse.local({0, y, 0}), b = sampled.local({0, y, 0});
       check(
-        local.size() == 2 && distance(local.back(), rotate(0, .8)) < 1e-9,
-        "rotated square cannot expose its final leg before the last corner");
-      check(!path.goal_active(), "rotated corner remains ordered");
+        distance(a.front(), b.front()) < 1e-9,
+        "sampling does not move local origin ahead of robot");
+      check(
+        std::abs(sparse.remaining() - sampled.remaining()) < 1e-9,
+        "arc progress is sampling invariant");
+      check(sparse.goal_active() == sampled.goal_active(), "goal activation is sampling invariant");
     }
-    path.set({{0, 0, 0}, {.4, .15, 0}, {.8, -.15, 0}, {1.2, 0, 0}});
-    local = path.local({0, 0, 0});
-    check(local.size() == 2, "S bend keeps the next sharp corner inside the local section");
     path.set({{0, 0, 1.2}});
-    check(path.goal_active(), "single-pose rotation remains a terminal task");
+    check(path.goal_active(), "rotation remains terminal");
     CostmapCritic critic;
     std::uint8_t bytes[] = {0, 254, 255, 253};
     Input input;

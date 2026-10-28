@@ -147,4 +147,3 @@ class Recording:
         if failures:
             self.metadata['status'] = 'failed'
         self._write_metadata()
-
