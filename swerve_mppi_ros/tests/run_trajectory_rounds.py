@@ -1,6 +1,7 @@
 """Repeat isolated Nav2/Gazebo cases, record CSV/JSON and render one PNG per round."""
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -16,12 +17,14 @@ def main():
     parser.add_argument('--rounds', type=int, default=3)
     parser.add_argument('--start-round', type=int, default=1)
     parser.add_argument('--seed-base', type=int, default=42)
+    parser.add_argument('--commit', default=os.environ.get('GITHUB_SHA'))
     parser.add_argument('--cases', nargs='+', choices=BENCHMARK_CASES, default=BENCHMARK_CASES)
     args = parser.parse_args()
     if args.rounds < 1 or args.start_round < 1 or args.seed_base < 0:
         parser.error('rounds/start-round must be positive and seed-base nonnegative')
     repo = Path(__file__).resolve().parents[2]
-    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()
+    commit = args.commit or subprocess.check_output(
+        ['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()
     failures = []
     for number in range(args.start_round, args.start_round+args.rounds):
         directory = args.output/f'round_{number:02d}'
