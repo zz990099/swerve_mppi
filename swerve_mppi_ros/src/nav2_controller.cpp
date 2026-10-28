@@ -34,6 +34,7 @@ struct Nav2Controller::Runtime
   std::unique_ptr<swerve_mppi::Controller> controller;
   PathHandler path;
   std::optional<ChassisFeedback> measured;
+  std::optional<Velocity> published_request;
   double state_stamp = 0, last_time = 0, frequency = 20, timeout = 0.25, transform_tolerance = 0.1;
   Steady::time_point state_wall{};
   bool active = false, map_enabled = true;
@@ -147,6 +148,7 @@ struct Nav2Controller::Runtime
   void stop()
   {
     if (controller) controller->reset();
+    published_request.reset();
     last_time = 0;
   }
   void report(const Result & result)
@@ -309,10 +311,15 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     if (r.measured->fault) {
       if (ordered) ordered->setReady(false);
       r.controller->reset();
+      r.published_request.reset();
       return out;
     }
     Input input;
     input.state = r.measured->state;
+    // Feedback may still describe an older accepted command. Slew the next
+    // published request from our actual previous output, while retaining the
+    // measured generator snapshot as the actuator prediction initial state.
+    if (r.published_request) input.state.requested = *r.published_request;
     input.state.pose = pose(r.transform(current, r.global_frame).pose);
     (void)velocity(speed);  // Validate Nav2 velocity; wheel feedback anchors actuator prediction.
     input.dt = dt;
@@ -341,6 +348,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     if (result.status != Status::Ok)
       throw nav2_core::NoValidControl("MPPI found no usable control");
     out.twist = twist(result.command.velocity);
+    r.published_request = result.command.velocity;
     if (ordered) ordered->setReady(input.goal_active);
     r.report(result);
     return out;

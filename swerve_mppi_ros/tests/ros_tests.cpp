@@ -157,6 +157,27 @@ TEST_F(Nav2PluginTest, LifecycleSpeedLimitsAndServerVelocityAuthority)
   EXPECT_THROW(compute(), nav2_core::ControllerException);
   controller->activate();
 }
+TEST_F(Nav2PluginTest, RequestSlewUsesPublishedOutputWhenFeedbackLags)
+{
+  controller->setPlan(path({{0, 0, 0}, {1, 0, 0}}));
+  geometry_msgs::msg::TwistStamped previous;
+  for (int i = 0; i < 5; ++i) {
+    // Re-publish a fresh actuator snapshot carrying an old accepted request.
+    observed.requested_velocity = geometry_msgs::msg::Twist{};
+    if (i) observed.requested_velocity.linear.x = -0.2;
+    const auto current = compute();
+    if (i) {
+      const double dt = seconds(current.header.stamp) - seconds(previous.header.stamp);
+      EXPECT_LE(
+        std::hypot(
+          current.twist.linear.x - previous.twist.linear.x,
+          current.twist.linear.y - previous.twist.linear.y),
+        dt + 1e-7);
+      EXPECT_LE(std::abs(current.twist.angular.z - previous.twist.angular.z), 1.5 * dt + 1e-7);
+    }
+    previous = current;
+  }
+}
 TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
 {
   controller->setPlan(path({{0, 0, 0}, {0.5, 0.5, 0.5}}));
