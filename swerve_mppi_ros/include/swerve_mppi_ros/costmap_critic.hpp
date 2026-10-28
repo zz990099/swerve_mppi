@@ -24,6 +24,25 @@ public:
   {
     const auto & map = c.input.map;
     if (!map.valid()) throw std::invalid_argument("costmap missing");
+    // Empty maps need only the swept footprint bounds. A rectangle is convex,
+    // so segment endpoints suffice; occupied/unknown maps retain full sweep tests.
+    const bool all_free = std::all_of(
+      map.data, map.data + map.width * map.height, [](std::uint8_t v) { return v == 0; });
+    if (all_free) {
+      for (std::size_t k = 0; k < batch.size(); ++k) {
+        if (!batch[k].valid) continue;
+        for (const auto & state : batch[k].states) {
+          std::size_t x, y;
+          if (
+            !map.world_to_map(state.pose.x - radius_, state.pose.y - radius_, x, y) ||
+            !map.world_to_map(state.pose.x + radius_, state.pose.y + radius_, x, y)) {
+            costs[k] = std::numeric_limits<double>::infinity();
+            break;
+          }
+        }
+      }
+      return;
+    }
     auto evaluate = [&](double x, double y) {
       std::size_t x0, y0, x1, y1;
       if (

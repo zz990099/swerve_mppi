@@ -89,6 +89,19 @@ int main()
     costs = {0};
     footprint.score({input, config}, {swept}, costs);
     check(!std::isfinite(costs[0]), "footprint edge collision away from center");
+    cells.assign(400, 0);
+    costs = {0};
+    footprint.score({input, config}, {swept}, costs);
+    check(costs[0] == 0, "empty map fast path remains collision free");
+    swept.states[0].pose = {.95, 0, 0};
+    costs = {0};
+    footprint.score({input, config}, {swept}, costs);
+    check(!std::isfinite(costs[0]), "empty map fast path preserves footprint bounds");
+    swept.states[0].pose = {0, 0, 0};
+    cells[10 * 20 + 12] = 254;
+    costs = {0};
+    footprint.score({input, config}, {swept}, costs);
+    check(!std::isfinite(costs[0]), "new obstacle immediately disables empty map fast path");
     std::cout << "ROS support tests passed\n";
   } catch (const std::exception & e) {
     std::cerr << e.what() << '\n';

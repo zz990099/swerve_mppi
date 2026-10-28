@@ -9,7 +9,7 @@ protocol have been removed.
 
 - Input `chassis_controller/state`: `swerve_chassis_msgs/ChassisState`, sensor-data QoS.
 - Output: standard Nav2 `cmd_vel` (`TwistStamped` with body frame and source stamp).
-- Diagnostics: `FollowPath/diagnostics`, including compute_ms, cost, evaluated count.
+- Diagnostics: `FollowPath/diagnostics`, including compute_ms, cost, evaluated count and effective_samples.
 - Prediction: `FollowPath/prediction`, published when subscribed.
 - Localization/odometry and costmap remain ordinary Nav2 inputs.
 
@@ -34,8 +34,15 @@ translation. Core permits a zero translation cap and still permits rotation.
 
 Optimizer parameters: horizon, samples, iterations, model_dt, integration_dt,
 noise_linear, noise_angular, noise_correlation, temperature and seed. Default
-model_dt=0.1 s, integration_dt=0.01 s, horizon=20, samples=16. Confirm percentile
+model_dt=0.1 s, integration_dt=0.01 s, horizon=24, samples=24. Confirm percentile
 latency on the deployment CPU before choosing a controller frequency.
+`position_scale` (0.03 m) and `heading_scale` (0.05 rad) normalize tracking
+errors; `path_corridor` (0.04 m) and `heading_corridor` (0.10 rad) bound planned
+departures, with a recovery allowance if the measured state is already outside.
+`cross_gain` defaults to 4/s. Path arc length drives terminal activation and speed
+preview. Polyline vertices above 15 degrees are approached at zero speed; smooth
+curves use lateral-acceleration and steering-servo tracking limits. Accepted
+requested velocity is part of State, not substituted with measured body velocity.
 `max_residual` is the hard predicted/measured wheel-vector disagreement limit in
 m/s, not a permission to accept arbitrary slipping wheel commands.
 

@@ -20,7 +20,7 @@ No old/new physical performance improvement is claimed without matched recording
    stale input and ordered goal completion.
 5. Gazebo/Nav2 FollowPath: eleven independent physical scenarios including combined
    vx/vy/wz, fixed-heading S curve and live action cancellation, measured by independent Gazebo poses.
-   Terminal gates are 0.15 m and 0.10 rad; ordered checkpoints are required for
+   Endpoint gates are 0.06 m and 0.06 rad; ordered checkpoints are required for
    return/closed paths. Each case logs path RMS/peak, stopped sample fraction,
    wall duration and compute percentile diagnostics.
 
@@ -68,3 +68,28 @@ python3 swerve_mppi_ros/tests/plot_trajectories.py artifacts/round_01
 The recordings workflow runs three independent rounds in parallel and uploads
 the PNG, CSV, JSON and process logs for each round. These are repeated simulated
 physics tests, not hardware trials or a statistical reliability estimate.
+
+## Tracking quality gates (fixed before the new physical comparison)
+
+All physical cases now record actuator feedback, source/command times, selected
+predictions and compute/cost/effective-sample diagnostics. A successful action
+alone is not sufficient. `tracking_quality.py` enforces:
+
+| Metric | Limit |
+| --- | --- |
+| Full-path position RMS / peak | 0.03 m / 0.075 m |
+| Body-heading RMS / peak along translating references | 0.05 rad / 0.12 rad |
+| Endpoint position / heading | 0.06 m / 0.06 rad |
+| Fraction of observations with all wheels below 0.05 rad/s | 0.55 |
+| Accepted-request linear / angular rate | 1.05 m/s² / 1.5 rad/s² |
+| Core compute P99 on the CI CPU | 50 ms |
+| Duration | max(8, 5 + 4 max(path_length/0.8, yaw_travel/0.8)) seconds |
+
+In-place rotation has no unique heading as a function of geometric path position,
+so its along-path heading RMS/peak is omitted; endpoint heading remains gated.
+Cancellation omits endpoint gates and still requires a canceled action and stopped
+measured wheels. Failures retain raw data and remain FAIL in each montage. The
+26 numerical loops additionally gate position/heading errors, request slew and
+stopped fraction for rate-limited and slower first-order servo plants. The prior
+36-case recordings at 543613e are the comparison baseline; seeds 42/43/44 and all
+reference paths remain unchanged. Target-board timing still requires measurement.

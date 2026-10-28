@@ -29,9 +29,11 @@ Velocity Model::project(Velocity v) const
 Velocity Model::condition(
   Velocity desired, Velocity previous, const std::array<double, 4> & reference, double dt) const
 {
-  if(!chassis::finite(chassis::Twist{desired.vx,desired.vy,desired.wz}) ||
-     !chassis::finite(chassis::Twist{previous.vx,previous.vy,previous.wz}) ||
-     !std::isfinite(dt) || dt<=0 || dt>1)throw std::invalid_argument("invalid request conditioning input");
+  if (
+    !chassis::finite(chassis::Twist{desired.vx, desired.vy, desired.wz}) ||
+    !chassis::finite(chassis::Twist{previous.vx, previous.vy, previous.wz}) || !std::isfinite(dt) ||
+    dt <= 0 || dt > 1)
+    throw std::invalid_argument("invalid request conditioning input");
   desired = project(desired);
   previous = project(previous);
   if (std::hypot(previous.vx, previous.vy) + .3 * std::abs(previous.wz) > .03) {
@@ -52,7 +54,8 @@ Velocity Model::condition(
         // it retains lateral intent instead of requesting a near-180 degree flip.
         double value = sign * (desired.vx - desired.wz * y);
         if (value < 0) {
-          const double radius = .4;
+          const double radius =
+            std::hypot(config_.geometry.wheelbase, config_.geometry.track_width) / 2;
           double denominator = 1 + y * y / (radius * radius);
           desired.vx -= value * sign / denominator;
           desired.wz += value * sign * y / (radius * radius * denominator);

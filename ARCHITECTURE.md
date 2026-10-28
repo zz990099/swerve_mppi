@@ -4,7 +4,8 @@
 
 Core input contains ordered local path, terminal goal, current pose, measured
 steering angles and wheel speeds (rad/s), and the complete shared generator state
-(previous target steering/speed arrays and valid flag). Pose/velocity measurements
+(previous target steering/speed arrays and valid flag), plus the last accepted
+requested velocity. Pose/velocity measurements
 and generator targets are deliberately distinct. A missing/invalid snapshot does
 not silently become an ideal holonomic chassis.
 
@@ -28,17 +29,28 @@ response. Substep actuator effort and residual costs cover the entire horizon.
 ## Sampling and costs
 
 One continuous three-dimensional sample batch replaces mode branches. Structured
-candidates include warm start, path guidance, zero request and sustained steering
-intent. Temporally correlated noise explores vx/vy/wz together. Softmax updates
-are rolled out and rescored; the best feasible sampled candidate remains a
-fallback. Warm start advances with elapsed model intervals and is reanchored to
+candidates include warm start, arc-length path guidance, zero request and slower
+guidance. Temporally correlated noise explores vx/vy/wz together. Softmax updates
+are rolled out and rescored; a feasible weighted update within 0.02 normalized
+cost of the best candidate is preferred, with the best candidate as fallback.
+Noise attenuates continuously with wheel alignment; effective sample count is
+reported. Requests obey vector/angular slew from the last accepted request. Near
+steering representation boundaries, twist half-space projection preserves the
+current rolling branch; unavoidable changes brake first. This never extends the
+physical +/-90 degree steering range. Warm start advances with elapsed model intervals and is reanchored to
 fresh measured/target state on every compute. Invalid state, new tasks and clock
 resets clear it; ordinary presteering does not.
 
 Path yaw is the desired body orientation, not inferred from the path tangent.
-Lateral tracking can keep yaw constant; final yaw attracts only on the final
-ordered segment. Critics cover path error/progress, goal pose, command effort,
-smoothness, normalized steering/drive changes and consistency. NoSolution returns
+Lateral tracking can keep yaw constant. Body-yaw feedforward follows the path
+reference, while curvature/corner preview reduces speed before actuator demands
+become infeasible. Ordered progress is geometric arc length, with no waypoint
+acceptance-radius pruning of a dense curve. Terminal activation uses remaining
+arc length, and the local path retains later turns for preview. Critics cover
+normalized path errors, ordered progress/remaining distance, command effort,
+cross-cycle request smoothness, normalized steering/drive changes and consistency.
+Predicted path/heading corridor violations reject a candidate; direct Euclidean
+terminal attraction is not allowed to buy shortcuts through a curve. NoSolution returns
 a zero request; it does not guarantee instantaneous stopping of a moving vehicle.
 
 The grid critic conservatively sweeps a circumscribed footprint disk along each
