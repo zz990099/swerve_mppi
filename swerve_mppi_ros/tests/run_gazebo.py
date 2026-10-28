@@ -87,10 +87,17 @@ def main():
     parser.add_argument('--chassis-root', required=True)
     parser.add_argument('--logs', type=Path, required=True)
     args = parser.parse_args()
+    failures=[]
     for scenario in ('straight', 'crab', 'reverse', 'spin', 'final_yaw', 'curve',
                      'out_and_back', 'closed_loop', 'combined', 's_curve', 'cancel'):
         print(f'Independent physical scenario: {scenario}', flush=True)
-        run_case(args.chassis_root, args.logs/scenario, scenario)
+        try:
+            run_case(args.chassis_root, args.logs/scenario, scenario)
+        except (RuntimeError, TimeoutError) as error:
+            failures.append(scenario)
+            print(f"FAIL {scenario}: {error}",flush=True)
+    if failures:
+        raise RuntimeError(f"Physical scenarios failed: {failures}")
 
 
 if __name__ == '__main__':

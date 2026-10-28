@@ -138,9 +138,14 @@ def main():
             stopped_samples=0
             total_samples=0
             last_truth_stamp=None
+            last_report=start
 
             def finished():
-                nonlocal visited, stopped_samples, total_samples, last_truth_stamp
+                nonlocal visited, stopped_samples, total_samples, last_truth_stamp, last_report
+                if time.monotonic()-last_report > 5:
+                    last_report=time.monotonic()
+                    p=odom[0].pose.pose.position
+                    print(f"TRACE {name} xy=({p.x:.5f},{p.y:.5f}) visited={visited} state={execution[0]}",flush=True)
                 observation=truth.latest
                 stamp=(observation.header.stamp.sec,observation.header.stamp.nanosec)
                 if stamp!=last_truth_stamp:
