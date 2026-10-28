@@ -112,7 +112,9 @@ Result Controller::compute(const Input & input)
   }
   warm_elapsed_ += input.dt;
   if (!warm_.empty()) {
-    auto shift = std::min(warm_.size(), static_cast<std::size_t>(warm_elapsed_ / config_.model_dt));
+    auto shift = warm_elapsed_ >= warm_.size() * config_.model_dt
+                   ? warm_.size()
+                   : static_cast<std::size_t>(warm_elapsed_ / config_.model_dt);
     if (shift) {
       warm_.erase(warm_.begin(), warm_.begin() + shift);
       warm_.resize(config_.horizon, warm_.empty() ? Velocity{} : warm_.back());

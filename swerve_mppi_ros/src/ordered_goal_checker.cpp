@@ -48,6 +48,7 @@ void OrderedGoalChecker::initialize(
       if (stamp <= feedback_stamp_ && clock_->now().seconds() >= feedback_stamp_) return;
       feedback_stamp_ = stamp;
       feedback_wall_ = std::chrono::steady_clock::now();
+      healthy_ = false;
       try {
         auto v = velocity(msg.velocity);
         healthy_ = std::hypot(v.vx, v.vy) <= tolerance_.linear_speed &&

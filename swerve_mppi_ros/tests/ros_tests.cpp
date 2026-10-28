@@ -174,6 +174,9 @@ TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
   EXPECT_FALSE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
   std::this_thread::sleep_for(60ms);
   EXPECT_TRUE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
+  observed.velocity.linear.z = 1;  // Invalid feedback must clear an earlier stopped sample.
+  publish_state();
+  EXPECT_FALSE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
 }
 TEST_F(Nav2PluginTest, CostmapTfAndInvalidInputs)
 {
