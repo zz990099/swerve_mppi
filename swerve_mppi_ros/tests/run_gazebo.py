@@ -8,6 +8,8 @@ import sys
 import time
 import uuid
 
+import yaml
+
 import psutil
 
 
@@ -28,8 +30,19 @@ def stop(process):
         process.wait(timeout=5)
 
 
-def run_case(chassis_root, logs, scenario):
+def run_case(chassis_root, logs, scenario, seed=None, record=False):
     logs.mkdir(parents=True, exist_ok=True)
+    launch_options = []
+    probe_options = []
+    if seed is not None:
+        config = yaml.safe_load((Path(__file__).parents[1]/'config'/'controller.yaml').read_text())
+        config['controller_server']['ros__parameters']['FollowPath']['seed'] = seed
+        parameters = (logs/'parameters.yaml').resolve()
+        parameters.write_text(yaml.safe_dump(config))
+        launch_options.append(f'parameters:={parameters}')
+        probe_options.extend(['--seed', str(seed)])
+    if record:
+        probe_options.extend(['--output', str(logs.resolve())])
     environment = dict(os.environ, GZ_PARTITION='mppi_'+uuid.uuid4().hex)
     simulation = probe = None
     descendants = {}
@@ -38,12 +51,12 @@ def run_case(chassis_root, logs, scenario):
              (logs/'tracking.log').open('w') as tracking_log:
             simulation = subprocess.Popen([
                 'ros2', 'launch', 'swerve_mppi_ros', 'demo.launch.py',
-                'headless:=true', 'publish_ground_truth:=true'],
+                'headless:=true', 'publish_ground_truth:=true', *launch_options],
                 stdout=sim_log, stderr=subprocess.STDOUT,
                 env=environment, start_new_session=True)
             probe = subprocess.Popen([
                 sys.executable, '-u', str(Path(__file__).with_name('gazebo_tracking.py')),
-                '--chassis-root', chassis_root, '--scenario', scenario],
+                '--chassis-root', str(chassis_root), '--scenario', scenario, *probe_options],
                 stdout=tracking_log, stderr=subprocess.STDOUT,
                 env=environment, start_new_session=True)
             deadline = time.monotonic()+200

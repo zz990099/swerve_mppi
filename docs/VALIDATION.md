@@ -34,3 +34,37 @@ obstacle navigation is not included in the physical tracking scenes.
 Run `python tools/format.py --check` with the pinned Rolling ament tools. See CI
 for exact standalone dependency installation and colcon commands. Version 1.0
 removes the Python executor comparison because that executor no longer exists.
+
+## Repeated physical recordings
+
+With the workspace built and sourced, run:
+
+```bash
+python3 swerve_mppi_ros/tests/run_trajectory_rounds.py \
+  --chassis-root /path/to/swerve_gazebo_sim --output artifacts --rounds 3
+```
+
+Install Python matplotlib, PyYAML and psutil. Each round uses seed `42 + round - 1`
+and independently launches twelve fresh Gazebo/Nav2 cases: forward, smooth S,
+smooth Bezier curve, left/right perpendicular starts, reverse straight/curve,
+combined translation/rotation, spin, final heading, out-and-back and square loop.
+Use `--cases` to select a subset and `--seed-base` to change the seed series.
+An existing round directory is rejected rather than overwritten.
+
+Every case streams independent Gazebo observations and wheel odometry to
+`trajectory.csv`, with original source timestamps and requested velocity. A fixed
+startup transform expresses both observed tracks and the reference in the initial
+body frame; this makes perpendicular/reverse starts explicit. Body-yaw arrows
+show orientation independently of travel direction. `result.json` retains the
+reference, seed, status, errors and compute percentiles. Interrupted/failed cases
+retain partial data and remain marked FAIL in the montage. A round produces one
+`round_NN.png` and a `summary.json`; no simulated/reconstructed track is substituted
+for missing observations. Re-render without ROS using:
+
+```bash
+python3 swerve_mppi_ros/tests/plot_trajectories.py artifacts/round_01
+```
+
+The recordings workflow runs three independent rounds in parallel and uploads
+the PNG, CSV, JSON and process logs for each round. These are repeated simulated
+physics tests, not hardware trials or a statistical reliability estimate.

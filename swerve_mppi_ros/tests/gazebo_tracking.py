@@ -18,6 +18,9 @@ from diagnostic_msgs.msg import DiagnosticArray
 from swerve_chassis_msgs.msg import ChassisState
 from rclpy.qos import qos_profile_sensor_data
 
+from trajectory_scenarios import PATHS
+from trajectory_recording import Recording, stamp
+
 
 def yaw(q):
     return math.atan2(2*q.w*q.z, 1-2*q.z*q.z)
@@ -30,9 +33,15 @@ def wrap(a):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--chassis-root', type=Path, required=True)
-    parser.add_argument('--scenario', choices=('straight', 'crab', 'reverse', 'spin', 'final_yaw',
-                                             'curve', 'out_and_back', 'closed_loop', 'combined', 's_curve', 'cancel'))
+    parser.add_argument('--scenario', choices=tuple(PATHS))
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
+    if args.output and not args.scenario:
+        parser.error('--output requires one --scenario')
+    recording = None
+    success = False
+    failure_reason = ''
     sys.path.insert(0, str(args.chassis_root.resolve() / 'swerve_gazebo_sim' / 'test'))
     from gazebo_truth import GazeboTruth
 
@@ -58,6 +67,8 @@ def main():
         deadline = time.monotonic()+timeout
         while time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=0.02)
+            if recording is not None and odom[0] is not None:
+                recording.observe(truth.history, odom[0], execution[0])
             if predicate():
                 return
         raise AssertionError(f'tracking condition timed out, odom={odom[0]}')
@@ -82,20 +93,7 @@ def main():
         rotation = wrap(yaw(initial_truth.orientation)-yaw(initial.orientation))
         origin = (initial.position.x, initial.position.y,
                   initial_truth.position.x, initial_truth.position.y)
-        scenarios = {
-            'cancel': [(0,0,0),(2,0,0)],
-            'combined': [(0, 0, 0), (.8, .5, .6)],
-            's_curve': [(0,0,0),(.4,.15,0),(.8,-.15,0),(1.2,0,0)],
-            'straight': [(0, 0, 0), (1, 0, 0)],
-            'crab': [(0, 0, 0), (0, .8, 0)],
-            'reverse': [(0, 0, 0), (-.8, 0, 0)],
-            'spin': [(0, 0, 0), (0, 0, .9)],
-            'final_yaw': [(0, 0, 0), (.8, 0, -.9)],
-            'curve': [(0, 0, 0), (.4, .1, .2), (.9, .25, .2), (1.3, .25, 0)],
-            'out_and_back': [(0, 0, 0), (.8, 0, 0), (0, 0, 0)],
-            'closed_loop': [(0, 0, 0), (.8, 0, 0), (.8, .8, 0), (0, .8, 0), (0, 0, 0)],
-        }
-        for name, points in scenarios.items():
+        for name, points in PATHS.items():
             if args.scenario and name != args.scenario:
                 continue
             print(f"START {name}", flush=True)
@@ -112,6 +110,9 @@ def main():
                 p.pose.orientation.z = math.sin((a+heading)/2)
                 p.pose.orientation.w = math.cos((a+heading)/2)
                 message.poses.append(p)
+            if args.output:
+                recording = Recording(args.output, name, points, args.seed, base,
+                                      truth.latest.pose.pose, stamp(truth.latest))
             goal = FollowPath.Goal()
             goal.path = message
             goal.controller_id = 'FollowPath'
@@ -194,7 +195,13 @@ def main():
             compute_times.sort()
             print('compute_ms percentiles:', {p:compute_times[min(len(compute_times)-1,int(len(compute_times)*p/100))] for p in (50,95,99)}, flush=True)
         print('PASS Nav2 FollowPath physical tracking and ordered goal completion', flush=True)
+        success = True
+    except BaseException as error:
+        failure_reason = str(error)
+        raise
     finally:
+        if recording is not None:
+            recording.close(success, failure_reason, compute_times)
         truth.close()
         client.destroy()
         node.destroy_node()

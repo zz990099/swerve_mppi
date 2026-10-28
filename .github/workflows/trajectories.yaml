@@ -1,0 +1,56 @@
+name: Repeated physical trajectory recordings
+on:
+  push:
+    paths:
+      - '.github/workflows/trajectories.yaml'
+      - 'swerve_mppi_ros/tests/trajectory*.py'
+      - 'swerve_mppi_ros/tests/run_trajectory*.py'
+      - 'swerve_mppi_ros/tests/plot_trajectories.py'
+      - 'swerve_mppi_ros/tests/test_trajectory_recording.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  record:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        round: [1, 2, 3]
+    container: ros:jazzy-ros-base-noble
+    defaults:
+      run:
+        shell: bash
+    env:
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+      ROS_DOMAIN_ID: '83'
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: zz990099/swerve_gazebo_sim
+          ref: 0894bd1ad765d1c68bbe16f869f3e294c9c4e509
+          path: companion-chassis
+      - name: Install Jazzy, Harmonic and plotting dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential cmake python3-colcon-common-extensions python3-psutil python3-yaml python3-matplotlib ros-jazzy-ament-cmake-gtest ros-jazzy-ament-cmake-pytest ros-jazzy-ament-cmake-python ros-jazzy-rosidl-default-generators python3-pytest ros-jazzy-tf2-geometry-msgs ros-jazzy-nav2-controller ros-jazzy-nav2-lifecycle-manager ros-jazzy-ros-gz ros-jazzy-gz-ros2-control ros-jazzy-joint-state-broadcaster ros-jazzy-forward-command-controller ros-jazzy-robot-state-publisher ros-jazzy-xacro
+      - name: Check recording contracts
+        run: python3 -m unittest discover -s swerve_mppi_ros/tests -p test_trajectory_recording.py -v
+      - name: Build chassis and MPPI
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --base-paths swerve_mppi_core swerve_mppi_ros companion-chassis --packages-up-to swerve_mppi_ros --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=OFF
+      - name: Record twelve physical cases and render round montage
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/local_setup.bash
+          python3 swerve_mppi_ros/tests/run_trajectory_rounds.py --chassis-root companion-chassis --output artifacts --rounds 1 --start-round ${{ matrix.round }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mppi-trajectories-round-${{ matrix.round }}
+          path: artifacts/
+          if-no-files-found: warn
