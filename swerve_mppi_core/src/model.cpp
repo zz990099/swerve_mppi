@@ -67,7 +67,14 @@ Trajectory Model::rollout(const State & initial, const std::vector<Velocity> & c
       for (int tick = 0; tick < ticks; ++tick) {
         const chassis::Joints measured{s.steering, s.wheel_speeds};
         auto result = generator_.step({u.vx, u.vy, u.wz}, measured, s.generator, dt);
-        auto next = chassis::response(measured, result.state.command, config_.limits, dt);
+        // A position servo does not instantly attain each rate-limited target.
+        // Apply a first-order nominal response before the shared actuator limits.
+        auto servo_target = result.state.command;
+        const double gain = -std::expm1(-dt / config_.steering_time_constant);
+        for (std::size_t i = 0; i < 4; ++i)
+          servo_target.steering[i] =
+            measured.steering[i] + gain * (servo_target.steering[i] - measured.steering[i]);
+        auto next = chassis::response(measured, servo_target, config_.limits, dt);
         const double residual = chassis::residual(config_.geometry, next);
         if (!std::isfinite(residual) || residual > config_.max_residual) {
           out.valid = false;

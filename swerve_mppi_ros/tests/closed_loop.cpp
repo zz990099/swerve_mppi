@@ -20,52 +20,62 @@ int main()
     {{0, 0, 0}, {.8, 0, 0}, {.8, .8, 0}, {0, .8, 0}, {0, 0, 0}},
     {{0, 0, 0}, {.4, .15, 0}, {.8, -.15, 0}, {1.2, 0, 0}}};
   std::vector<double> times;
-  for (std::size_t scenario = 0; scenario < paths.size(); ++scenario) {
-    Controller controller(config);
-    chassis::Generator executor(config.geometry, config.limits);
-    swerve_mppi_ros::PathHandler path;
-    path.set(paths[scenario]);
-    swerve_mppi_ros::GoalChecker goal;
-    State s;
-    s.generator.valid = true;
-    bool reached = false;
-    for (int step = 0; step < 800; ++step) {
-      Input input;
-      input.state = s;
-      input.path = path.local(s.pose);
-      input.goal = path.goal();
-      input.goal_active = path.goal_active();
-      auto result = controller.compute(input);
-      times.push_back(result.compute_ms);
-      if (result.status != Status::Ok) throw std::runtime_error("no valid closed-loop command");
-      for (int tick = 0; tick < 5; ++tick) {
-        auto out = executor.step(
-          {result.command.velocity.vx, result.command.velocity.vy, result.command.velocity.wz},
-          {s.steering, s.wheel_speeds}, s.generator, 0.01);
-        auto v = chassis::forward(config.geometry, {s.steering, s.wheel_speeds});
-        auto p = chassis::integrate({s.pose.x, s.pose.y, s.pose.yaw}, v, 0.01);
-        s.pose = {p.x, p.y, p.yaw};
-        auto response_limits = config.limits;
-        response_limits.steering_rate *= 0.8;
-        auto joints =
-          chassis::response({s.steering, s.wheel_speeds}, out.state.command, response_limits, 0.01);
-        s.generator = out.state;
-        s.steering = joints.steering;
-        s.wheel_speeds = joints.speed;
-        v = chassis::forward(config.geometry, joints);
-        s.velocity = {v.vx, v.vy, v.wz};
+  for (int plant = 0; plant < 2; ++plant) {
+    for (std::size_t scenario = 0; scenario < paths.size(); ++scenario) {
+      Controller controller(config);
+      chassis::Generator executor(config.geometry, config.limits);
+      swerve_mppi_ros::PathHandler path;
+      path.set(paths[scenario]);
+      swerve_mppi_ros::GoalChecker goal;
+      State s;
+      s.generator.valid = true;
+      bool reached = false;
+      for (int step = 0; step < 800; ++step) {
+        Input input;
+        input.state = s;
+        input.path = path.local(s.pose);
+        input.goal = path.goal();
+        input.goal_active = path.goal_active();
+        auto result = controller.compute(input);
+        times.push_back(result.compute_ms);
+        if (result.status != Status::Ok) throw std::runtime_error("no valid closed-loop command");
+        for (int tick = 0; tick < 5; ++tick) {
+          auto out = executor.step(
+            {result.command.velocity.vx, result.command.velocity.vy, result.command.velocity.wz},
+            {s.steering, s.wheel_speeds}, s.generator, 0.01);
+          auto v = chassis::forward(config.geometry, {s.steering, s.wheel_speeds});
+          auto p = chassis::integrate({s.pose.x, s.pose.y, s.pose.yaw}, v, 0.01);
+          s.pose = {p.x, p.y, p.yaw};
+          auto response_limits = config.limits;
+          response_limits.steering_rate *= 0.8;
+          auto target = out.state.command;
+          if (plant == 1) {
+            // Independent 60 ms servo, slower than the nominal 50 ms prediction.
+            const double gain = 1 - std::exp(-0.01 / 0.06);
+            for (std::size_t i = 0; i < 4; ++i)
+              target.steering[i] = s.steering[i] + gain * (target.steering[i] - s.steering[i]);
+          }
+          auto joints =
+            chassis::response({s.steering, s.wheel_speeds}, target, response_limits, 0.01);
+          s.generator = out.state;
+          s.steering = joints.steering;
+          s.wheel_speeds = joints.speed;
+          v = chassis::forward(config.geometry, joints);
+          s.velocity = {v.vx, v.vy, v.wz};
+        }
+        if (path.goal_active() && goal.reached(s, path.goal(), step * 0.05)) {
+          reached = true;
+          std::cout << "plant=" << plant << " scenario=" << scenario
+                    << " simulated_s=" << step * 0.05 << " error=" << distance(s.pose, path.goal())
+                    << '\n';
+          break;
+        }
       }
-      if (path.goal_active() && goal.reached(s, path.goal(), step * 0.05)) {
-        reached = true;
-        std::cout << "scenario=" << scenario << " simulated_s=" << step * 0.05
-                  << " error=" << distance(s.pose, path.goal()) << '\n';
-        break;
+      if (!reached) {
+        std::cerr << "failed scenario " << scenario << " pose=" << s.pose.x << ',' << s.pose.y
+                  << ',' << s.pose.yaw << '\n';
+        return 1;
       }
-    }
-    if (!reached) {
-      std::cerr << "failed scenario " << scenario << " pose=" << s.pose.x << ',' << s.pose.y << ','
-                << s.pose.yaw << '\n';
-      return 1;
     }
   }
   std::sort(times.begin(), times.end());

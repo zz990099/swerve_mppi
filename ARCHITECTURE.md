@@ -14,6 +14,11 @@ checks every physical field against the chassis status before permitting motion.
 
 Every prediction substep calls the same `Generator::step` as the executor, then
 advances nominal actuator response and exact constant-twist SE(2) integration.
+Steering uses a first-order servo with configurable `steering_time_constant`
+(default 0.05 s), followed by the shared rate limits. This models the finite
+position-servo settling time; targets and measured steering remain distinct.
+The time constant is a prediction parameter to calibrate for the actual servo,
+not an extra physical limit or an execution mode.
 Predicted measured wheel inconsistency is bounded by `max_residual` (RMS m/s);
 invalid trajectories cannot become valid merely because a later critic writes a
 finite score. The forward wheel solution is an estimate, not a tire/slip model.

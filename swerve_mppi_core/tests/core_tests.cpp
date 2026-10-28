@@ -25,7 +25,7 @@ int main()
     Model model(c);
     State state;
     state.generator.valid = true;
-    auto t = model.rollout(state, std::vector<Velocity>(c.horizon, {0, 0.4, 0}));
+    auto t = model.rollout(state, std::vector<Velocity>(30, {0, 0.4, 0}));
     check(t.valid && t.states.back().pose.y > 0.3, "lateral presteering rollout");
     auto combo = model.rollout(state, std::vector<Velocity>(c.horizon, {0.3, 0.15, 0.2}));
     check(
@@ -42,6 +42,10 @@ int main()
     check(
       prediction.states.back().generator.command.steering == actual.state.command.steering,
       "shared next-step target");
+    check(
+      prediction.states.back().steering[0] > 0 &&
+        prediction.states.back().steering[0] < actual.state.command.steering[0],
+      "measured steering lags the shared target");
     state.generator.valid = false;
     check(!model.rollout(state, {{0.2, 0, 0}}).valid, "missing snapshot rejected");
     state.generator.valid = true;

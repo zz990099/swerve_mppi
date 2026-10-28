@@ -12,7 +12,8 @@ No old/new physical performance improvement is claimed without matched recording
 2. Portable caller contracts: ordered progress, closed/out-and-back path handling,
    stopped goal checks, grid bounds, footprint edge and between-sample collisions.
 3. Portable closed loops: straight, lateral, reverse, spin, combined movement,
-   S curve and return path, with execution steering rate reduced to 80% of nominal.
+   S curves, square and return paths, with execution steering rate reduced to 80%
+   of nominal, plus a separate 60 ms servo plant against the 50 ms prediction.
    These are numerical model tests, not independent physical evidence.
 4. ROS plugin tests: plugin loading/cleanup, lifecycle, speed caps, continuous
    output, fault zero/recovery, physical configuration mismatch, TF/map errors,

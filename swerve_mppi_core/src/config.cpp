@@ -31,8 +31,8 @@ void validate(const Config & c)
 {
   swerve_chassis_core::validate(c.geometry, c.limits);
   for (double x :
-       {c.max_yaw_rate, c.model_dt, c.integration_dt, c.temperature, c.lookahead,
-        c.approach_distance, c.approach_gain, c.max_residual})
+       {c.max_yaw_rate, c.model_dt, c.integration_dt, c.steering_time_constant, c.temperature,
+        c.lookahead, c.approach_distance, c.approach_gain, c.max_residual})
     if (!std::isfinite(x) || x <= 0)
       throw std::invalid_argument("positive finite parameter required");
   for (double x : {c.max_speed, c.noise_linear, c.noise_angular})

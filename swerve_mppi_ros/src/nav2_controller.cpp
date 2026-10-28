@@ -74,6 +74,7 @@ struct Nav2Controller::Runtime
     number("max_residual", config.max_residual);
     number("model_dt", config.model_dt);
     number("integration_dt", config.integration_dt);
+    number("steering_time_constant", config.steering_time_constant);
     number("noise_linear", config.noise_linear);
     number("noise_angular", config.noise_angular);
     number("noise_correlation", config.noise_correlation);
