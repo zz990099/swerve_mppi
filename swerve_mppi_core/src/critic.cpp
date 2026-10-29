@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "swerve_mppi/path.hpp"
+#include "swerve_mppi/reference.hpp"
 namespace swerve_mppi
 {
 namespace
@@ -17,7 +18,8 @@ public:
   {
     for (double x :
          {w.path_distance, w.path_heading, w.progress, w.goal_position, w.goal_heading, w.effort,
-          w.smoothness, w.steering_change, w.consistency})
+          w.smoothness, w.steering_change, w.consistency, w.reference_velocity,
+          w.presteering_alignment})
       if (!std::isfinite(x) || x < 0) throw std::invalid_argument("invalid critic weight");
   }
   void score(
@@ -25,9 +27,12 @@ public:
     std::vector<double> & costs) const override
   {
     PathView path(c.input.path);
+    std::unique_ptr<ReferenceProfile> local_reference;
+    if (!c.reference) local_reference = std::make_unique<ReferenceProfile>(c.input.path, c.config);
+    const auto & reference = c.reference ? *c.reference : *local_reference;
     auto start = path.match(c.input.state.pose);
+    const double checkpoint = path.next_corner(start.arc);
     bool terminal = c.input.goal_active && distance(c.input.path.back(), c.input.goal) < .001;
-    double initial_heading = std::abs(wrap_angle(c.input.state.pose.yaw - start.pose.yaw));
     for (std::size_t k = 0; k < batch.size(); ++k) {
       const auto & t = batch[k];
       if (!t.valid || t.states.empty()) continue;
@@ -39,18 +44,43 @@ public:
       PathMatch m = start;
       for (std::size_t i = 1; i < t.states.size(); ++i) {
         const auto & s = t.states[i];
-        m = path.match(
+        m = path.match_ordered(
           s.pose, progress,
           std::min(path.length(), progress + c.config.max_speed * c.config.model_dt * 1.5 + .02));
         progress = m.arc;
         double heading = wrap_angle(s.pose.yaw - m.pose.yaw);
-        if (
-          m.error > std::max(c.config.path_corridor, start.error + .005) ||
-          std::abs(heading) > std::max(c.config.heading_corridor, initial_heading + .005)) {
-          costs[k] = std::numeric_limits<double>::infinity();
-          break;
-        }
+        // Tracking corridors are soft objectives. Rejecting every temporarily
+        // deviating prediction also rejects physically necessary recovery/braking.
+        // Collision and actuator feasibility remain independent hard checks.
+        const double slack =
+          std::pow(std::max(0., m.error - c.config.path_corridor) / c.config.position_scale, 2) +
+          std::pow(
+            std::max(0., std::abs(heading) - c.config.heading_corridor) / c.config.heading_scale,
+            2);
         const auto & u = t.controls[i - 1];
+        const auto unit = reference.unit(progress, s.pose.yaw);
+        const double along = s.velocity.vx * unit.vx + s.velocity.vy * unit.vy;
+        double target_speed = reference.speed(progress);
+        double alignment_error = 0;
+        bool stopped = true;
+        for (double v : s.wheel_speeds) stopped &= std::abs(v) < c.config.limits.stopped_speed;
+        if (stopped && target_speed > .01) {
+          const auto request = swerve_chassis_core::inverse(
+            c.config.geometry, {u.vx, u.vy, u.wz}, s.generator.command.steering);
+          bool reorienting = false;
+          for (double v : request.speed)
+            reorienting |= std::abs(v) > 2 * c.config.limits.stopped_speed;
+          const auto intent = swerve_chassis_core::inverse(
+            c.config.geometry, {unit.vx, unit.vy, unit.wz}, s.generator.command.steering);
+          for (std::size_t w = 0; w < 4; ++w) {
+            const double error = intent.steering[w] - s.steering[w];
+            alignment_error += std::pow(error / .5, 2) / 4;
+            if (reorienting && std::abs(error) > c.config.limits.tracking_tolerance)
+              target_speed = 0;  // Reference time pauses during necessary reorientation.
+          }
+        }
+        const double excess_speed = std::max(0., along - target_speed);
+        const double velocity_error = (along - target_speed) / .2;
         double dt = i == 1 ? c.input.dt : c.config.model_dt;
         double smooth =
           std::pow(
@@ -59,7 +89,10 @@ public:
             2) +
           std::pow((u.wz - previous.wz) / (c.config.limits.angular_acceleration * dt), 2);
         costs[k] +=
-          norm * (w_.path_distance * std::pow(m.error / c.config.position_scale, 2) +
+          norm * (4 * slack + std::pow(excess_speed / .1, 2) +
+                  w_.reference_velocity * velocity_error * velocity_error +
+                  w_.presteering_alignment * alignment_error +
+                  w_.path_distance * std::pow(m.error / c.config.position_scale, 2) +
                   w_.path_heading * std::pow(heading / c.config.heading_scale, 2) +
                   w_.effort * (u.vx * u.vx + u.vy * u.vy + u.wz * u.wz) + w_.smoothness * smooth);
         previous = u;
@@ -67,6 +100,14 @@ public:
       double reference_distance =
         std::max(.1, std::min(path.length() - start.arc, c.config.max_speed * duration));
       costs[k] -= w_.progress * (progress - start.arc) / reference_distance;
+      if (
+        checkpoint < path.length() - 1e-5 && checkpoint - start.arc < c.config.approach_distance) {
+        // Reaching a mandatory corner is a task objective, even when the full
+        // goal is still far away. Otherwise a short horizon can prefer parking
+        // just before the corner to avoid paying the future steering cost.
+        costs[k] += w_.goal_position *
+                    std::pow(std::max(0., checkpoint - progress) / c.config.position_scale, 2);
+      }
       if (terminal) {
         // Remaining ordered distance replaces direct attraction through a curve/corner.
         double remaining = path.length() - progress;

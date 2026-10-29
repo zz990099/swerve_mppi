@@ -35,6 +35,7 @@ int main()
   paths.push_back(smooth_s);
   paths.push_back(bezier);
   paths.push_back(reverse_curve);
+  paths.push_back({{0, 0, 0}, {.8, 0, -.9}});
   std::vector<double> times;
   for (int plant = 0; plant < 2; ++plant) {
     for (std::size_t scenario = 0; scenario < paths.size(); ++scenario) {
@@ -68,9 +69,9 @@ int main()
           auto response_limits = config.limits;
           response_limits.steering_rate *= 0.8;
           auto target = out.state.command;
-          if (plant == 1) {
-            // Independent 60 ms servo, slower than the nominal 50 ms prediction.
-            const double gain = 1 - std::exp(-0.01 / 0.06);
+          {
+            // Independent nominal and 20% slower servo responses.
+            const double gain = 1 - std::exp(-0.01 / (plant == 0 ? .10 : .12));
             for (std::size_t i = 0; i < 4; ++i)
               target.steering[i] = s.steering[i] + gain * (target.steering[i] - s.steering[i]);
           }

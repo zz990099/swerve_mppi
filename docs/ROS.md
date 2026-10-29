@@ -37,14 +37,19 @@ noise_linear, noise_angular, noise_correlation, temperature and seed. Default
 model_dt=0.1 s, integration_dt=0.01 s, horizon=24, samples=24. Confirm percentile
 latency on the deployment CPU before choosing a controller frequency.
 `position_scale` (0.03 m) and `heading_scale` (0.05 rad) normalize tracking
-errors; `path_corridor` (0.04 m) and `heading_corridor` (0.10 rad) bound planned
-departures, with a recovery allowance if the measured state is already outside.
+errors; `path_corridor` (0.04 m) and `heading_corridor` (0.10 rad) add continuous
+slack penalties for departures without removing recovery candidates.
 `cross_gain` defaults to 4/s. Path arc length drives terminal activation and speed
 preview. Polyline vertices above 15 degrees are approached at zero speed; smooth
 curves use lateral-acceleration and steering-servo tracking limits. Accepted
 requested velocity is part of State, not substituted with measured body velocity.
 `max_residual` is the hard predicted/measured wheel-vector disagreement limit in
 m/s, not a permission to accept arbitrary slipping wheel commands.
+`steering_time_constant` defaults to 0.10 s. `reference_velocity_weight` and
+`presteering_alignment_weight` each default to 1.0. The reference-speed envelope
+accounts for coupled wheel steering and drive demands. Invalid input, actuator,
+collision and custom-critic rejection counts are published on diagnostics,
+including computes that return NoSolution.
 
 Goal checker state_topic/state_timeout can be set independently of the controller
 but must identify the same robot. Feedback must be fresh and fault-free with all

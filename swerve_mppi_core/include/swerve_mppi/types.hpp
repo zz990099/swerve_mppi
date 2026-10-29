@@ -54,12 +54,33 @@ enum class Status
   InvalidInput,
   NoSolution
 };
+enum class Rejection
+{
+  None,
+  InvalidState,
+  InvalidControl,
+  ActuatorResidual,
+  GeneratorError,
+  Critic,
+  Collision
+};
+struct Diagnostics
+{
+  std::size_t invalid_input = 0;
+  std::size_t controller_errors = 0;
+  std::size_t invalid_state = 0, invalid_control = 0, actuator_residual = 0;
+  std::size_t generator_error = 0, critic_rejected = 0, collision_rejected = 0, critic_errors = 0;
+};
 struct Result
 {
   Command command;
   Status status = Status::InvalidInput;
   double cost = 0, compute_ms = 0, effective_samples = 0;
   std::size_t evaluated = 0;
+  Diagnostics diagnostics;
+  bool braking_selected = false;
+  bool presteering = false;
+  double reference_speed = 0;
   std::vector<Pose> prediction;
 };
 struct Trajectory
@@ -68,6 +89,7 @@ struct Trajectory
   std::vector<Velocity> controls;
   double actuator_cost = 0, residual_cost = 0;
   bool valid = true;
+  Rejection rejection = Rejection::None;
 };
 double wrap_angle(double value);
 double distance(const Pose & a, const Pose & b);

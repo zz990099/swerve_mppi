@@ -7,16 +7,19 @@
 
 namespace swerve_mppi
 {
+class ReferenceProfile;
 struct CriticContext
 {
   const Input & input;
   const Config & config;
+  const ReferenceProfile * reference = nullptr;
 };
 class Critic
 {
 public:
   virtual ~Critic() = default;
   virtual void prepare(const CriticContext &) {}
+  virtual Rejection rejection_reason() const { return Rejection::Critic; }
   // Add costs for the whole batch. Infinity rejects a candidate.
   virtual void score(
     const CriticContext &, const std::vector<Trajectory> &, std::vector<double> & costs) const = 0;
@@ -27,6 +30,8 @@ struct TrackingWeights
   double path_distance = 1.0, path_heading = 0.5, progress = 1.0;
   double goal_position = 2.0, goal_heading = 1.0;
   double effort = 0.005, smoothness = 0.1, steering_change = 0.05, consistency = 1.0;
+  double reference_velocity = 1.0;
+  double presteering_alignment = 1.0;
 };
 // Pure numerical defaults; ROS costmap critics implement the same interface.
 Critics tracking_critics(TrackingWeights weights = {});

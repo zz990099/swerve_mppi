@@ -16,7 +16,7 @@ checks every physical field against the chassis status before permitting motion.
 Every prediction substep calls the same `Generator::step` as the executor, then
 advances nominal actuator response and exact constant-twist SE(2) integration.
 Steering uses a first-order servo with configurable `steering_time_constant`
-(default 0.05 s), followed by the shared rate limits. This models the finite
+(default 0.10 s, identified against recorded target/encoder timestamps), followed by the shared rate limits. This models the finite
 position-servo settling time; targets and measured steering remain distinct.
 The time constant is a prediction parameter to calibrate for the actual servo,
 not an extra physical limit or an execution mode.
@@ -49,9 +49,25 @@ acceptance-radius pruning of a dense curve. Terminal activation uses remaining
 arc length, and the local path retains later turns for preview. Critics cover
 normalized path errors, ordered progress/remaining distance, command effort,
 cross-cycle request smoothness, normalized steering/drive changes and consistency.
-Predicted path/heading corridor violations reject a candidate; direct Euclidean
-terminal attraction is not allowed to buy shortcuts through a curve. NoSolution returns
+Path/heading corridors add continuous slack penalties instead of rejecting
+recoverable tracking errors. Collision, actuator and ordered-checkpoint checks
+remain independent. Direct Euclidean terminal attraction cannot buy shortcuts
+through a curve. A fresh slew-limited braking candidate is always rolled out and
+checked against the same critics. If every candidate is rejected, NoSolution returns
 a zero request; it does not guarantee instantaneous stopping of a moving vehicle.
+
+`ReferenceProfile` constructs an arc-speed envelope using each wheel's steering
+and speed changes, body-yaw rate, servo tracking error and acceleration preview.
+Sharp corners are explicit stop/reorientation knots. Prediction must reach a
+5 mm checkpoint before changing legs; the caller's measured checkpoint remains
+15 mm, leaving model-mismatch margin. Velocity tracking and presteering alignment
+costs discourage parking before a turn. Reference motion pauses only for an
+active nonzero reorientation intent; a zero command cannot claim that pause.
+The external command remains continuous vx/vy/wz; no motion-mode API is added.
+
+Diagnostics distinguish invalid inputs, model rejection reasons, collision/custom
+critic rejection and critic/controller exceptions. Rejections are counted once
+per candidate by their first cause. ROS reports failed computes as well as successes.
 
 The grid critic conservatively sweeps a circumscribed footprint disk along each
 predicted segment, sampling at half-cell spacing and checking touched grid cells.

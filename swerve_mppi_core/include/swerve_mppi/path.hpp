@@ -67,6 +67,17 @@ public:
     if (std::hypot(ax, ay) < 1e-8 || std::hypot(bx, by) < 1e-8) return 0;
     return std::abs(std::atan2(ax * by - ay * bx, ax * bx + ay * by));
   }
+  PathMatch match_ordered(Pose pose, double lo, double hi) const
+  {
+    const double corner = next_corner(lo);
+    // A soft tracking objective must not let predicted progress jump onto a
+    // return leg before the mandatory corner/checkpoint was physically reached.
+    // Prediction uses a tighter checkpoint than the caller's 15 mm measured
+    // gate, leaving margin for actuator/model mismatch at sharp corners.
+    if (corner < length() - 1e-5 && distance(pose, at(corner)) > .005)
+      hi = std::min(hi, std::max(lo, corner - 1e-4));
+    return match(pose, lo, hi);
+  }
   double next_corner(double s) const
   {
     for (std::size_t i = 1; i + 1 < p_.size(); ++i)

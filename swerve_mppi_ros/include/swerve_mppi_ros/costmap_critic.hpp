@@ -12,6 +12,10 @@ namespace swerve_mppi_ros
 class CostmapCritic final : public swerve_mppi::Critic
 {
 public:
+  swerve_mppi::Rejection rejection_reason() const override
+  {
+    return swerve_mppi::Rejection::Collision;
+  }
   explicit CostmapCritic(double weight = 5, bool unknown_is_obstacle = true, double radius = 0)
   : weight_(weight), radius_(radius), unknown_(unknown_is_obstacle)
   {

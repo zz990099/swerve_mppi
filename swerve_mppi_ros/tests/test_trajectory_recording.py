@@ -21,6 +21,38 @@ def observation(x, y, angle, seconds):
 
 
 class RecordingTests(unittest.TestCase):
+    def test_execution_stream_and_startup_wait_are_distinct_from_tracking_stops(self):
+        with TemporaryDirectory() as temporary:
+            record = Recording(temporary, 'straight', [(0, 0, 0), (1, 0, 0)], 42,
+                               pose(0, 0, 0), pose(0, 0, 0), 2)
+            velocity = NS(linear=NS(x=.1, y=0.), angular=NS(z=0.))
+            state = NS(header=NS(stamp=NS(sec=2, nanosec=0)),
+                feedback_stamp=NS(sec=2, nanosec=0), command_stamp=NS(sec=2, nanosec=0),
+                command_sequence=1, execution=3, fault=0, generator_valid=True,
+                requested_velocity=velocity, steering_angles=[0.]*4, wheel_speeds=[0.]*4,
+                target_steering=[0.]*4, target_wheel_speeds=[0.]*4)
+            record.command(NS(header=state.header, twist=velocity), 2.01)
+            record.execution(state)
+            state.header.stamp = NS(sec=2, nanosec=20000000)
+            state.execution = 0
+            record.execution(state)
+            for t, speed in [(2, 0.), (3, 1.), (4, 0.)]:
+                state.wheel_speeds = [speed]*4
+                obs = observation(.1*(t-2), 0, 0, t)
+                record.observe([obs], obs, state)
+            record.close(False, 'partial diagnostic example', [])
+            self.assertEqual(record.metadata['initial_wait_to_motion_s'], 1.)
+            self.assertAlmostEqual(record.metadata['execution_duration_s']['presteering'], .02)
+            self.assertEqual(record.metadata['tracking_stopped_fraction'], .5)
+            self.assertAlmostEqual(record.metadata['stopped_fraction'], 2/3)
+            with (Path(temporary)/'execution.csv').open() as file:
+                rows = list(csv.DictReader(file))
+            self.assertEqual(rows[0]['command_sequence'], '1')
+            self.assertEqual(rows[0]['target_steering_rad_fl'], '0.0')
+            with (Path(temporary)/'commands.csv').open() as file:
+                commands = list(csv.DictReader(file))
+            self.assertEqual(float(commands[0]['observer_stamp_s']), 2.01)
+
     def test_rotated_coordinate_frames(self):
         x, y, angle = local_pose(pose(10, 21, math.pi), pose(10, 20, math.pi/2))
         self.assertAlmostEqual(x, 1)

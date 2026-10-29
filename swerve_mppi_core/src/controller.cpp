@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 #include "swerve_mppi/path.hpp"
+#include "swerve_mppi/reference.hpp"
 
 namespace swerve_mppi
 {
@@ -33,7 +34,8 @@ void Controller::reset()
   random_.seed(config_.seed);
   normal_.reset();
 }
-std::vector<Velocity> Controller::seed(const Input & input) const
+std::vector<Velocity> Controller::seed(
+  const Input & input, const ReferenceProfile & reference) const
 {
   State s = input.state;
   PathView path(input.path);
@@ -41,29 +43,41 @@ std::vector<Velocity> Controller::seed(const Input & input) const
   std::vector<Velocity> out;
   out.reserve(config_.horizon);
   for (std::size_t i = 0; i < config_.horizon; ++i) {
-    auto m = path.match(
+    auto m = path.match_ordered(
       s.pose, progress,
       std::min(path.length(), progress + config_.max_speed * config_.model_dt * 1.5 + .02));
     progress = m.arc;
     double corner = path.next_corner(progress);
     if (
-      corner < path.length() - 1e-5 && corner - progress < .015 &&
+      corner < path.length() - 1e-5 && distance(s.pose, path.at(corner)) < .005 &&
       std::hypot(s.velocity.vx, s.velocity.vy) < .04) {
       progress = corner;
       m = path.match(s.pose, progress, progress + .05);
     }
-    const double servo_rate = std::min(
-      config_.limits.steering_rate * .6,
-      config_.limits.tracking_tolerance / (1.4 * config_.steering_time_constant));
-    double speed = path.speed_limit(
-      progress, config_.max_speed, config_.limits.linear_acceleration, config_.approach_gain,
-      servo_rate);
-    double wx = speed * m.tx - config_.cross_gain * (s.pose.x - m.pose.x);
-    double wy = speed * m.ty - config_.cross_gain * (s.pose.y - m.pose.y);
-    double wz = path.yaw_derivative(progress) * speed + 2.5 * wrap_angle(m.pose.yaw - s.pose.yaw);
+    const double speed = reference.speed(progress);
+    const auto unit = reference.unit(progress, s.pose.yaw);
+    const double ex = config_.cross_gain * (m.pose.x - s.pose.x),
+                 ey = config_.cross_gain * (m.pose.y - s.pose.y);
     Velocity desired{
-      std::cos(s.pose.yaw) * wx + std::sin(s.pose.yaw) * wy,
-      -std::sin(s.pose.yaw) * wx + std::cos(s.pose.yaw) * wy, wz};
+      speed * unit.vx + std::cos(s.pose.yaw) * ex + std::sin(s.pose.yaw) * ey,
+      speed * unit.vy - std::sin(s.pose.yaw) * ex + std::cos(s.pose.yaw) * ey,
+      speed * unit.wz + 2.5 * wrap_angle(m.pose.yaw - s.pose.yaw)};
+    // While the wheels are stopped and reorienting, hold nominal steering
+    // intent. Pose noise must not continually move the presteering target.
+    bool stopped = true;
+    for (double v : s.wheel_speeds) stopped &= std::abs(v) < config_.limits.stopped_speed;
+    if (
+      stopped && speed > .01 && m.error < .02 &&
+      std::abs(wrap_angle(m.pose.yaw - s.pose.yaw)) < .06) {
+      const auto nominal = reference.unit(progress, m.pose.yaw);
+      const auto wheels = swerve_chassis_core::inverse(
+        config_.geometry, {nominal.vx, nominal.vy, nominal.wz}, s.generator.command.steering);
+      bool aligning = false;
+      for (std::size_t w = 0; w < 4; ++w)
+        aligning |=
+          std::abs(wheels.steering[w] - s.steering[w]) > config_.limits.tracking_tolerance;
+      if (aligning) desired = {speed * nominal.vx, speed * nominal.vy, speed * nominal.wz};
+    }
     auto v = model_.condition(
       desired, s.requested, s.generator.command.steering, i ? config_.model_dt : input.dt);
     out.push_back(v);
@@ -85,7 +99,9 @@ Result Controller::compute(const Input & input)
     input.path.empty() || input.path.size() > 4096 || !model_.valid(input.state) ||
     !finite(input.state.velocity) || !finite(input.goal) || !std::isfinite(input.dt) ||
     input.dt <= 0 || input.dt > 1 ||
-    std::any_of(input.path.begin(), input.path.end(), [](Pose p) { return !finite(p); })) {
+    std::any_of(input.path.begin(), input.path.end(), [](Pose p) { return !finite(p); }) ||
+    !std::isfinite(PathView(input.path).length())) {
+    result.diagnostics.invalid_input = 1;
     reset();
     return finish();
   }
@@ -102,6 +118,7 @@ Result Controller::compute(const Input & input)
   } else {
     warm_elapsed_ = 0;
   }
+  std::unique_ptr<ReferenceProfile> reference;
   CriticContext context{input, config_};
   const bool terminal = input.goal_active && distance(input.path.back(), input.goal) < 0.001;
   const double noise_scale =
@@ -115,8 +132,27 @@ Result Controller::compute(const Input & input)
   std::vector<Velocity> selected;
   Trajectory selected_trace;
   try {
-    for (auto & critic : critics_) critic->prepare(context);
-    auto fresh = seed(input);
+    reference = std::make_unique<ReferenceProfile>(input.path, config_);
+    context.reference = reference.get();
+    for (auto & critic : critics_) {
+      try {
+        critic->prepare(context);
+      } catch (...) {
+        ++result.diagnostics.critic_errors;
+        throw;
+      }
+    }
+    auto fresh = seed(input, *reference);
+    result.reference_speed = reference->speed(PathView(input.path).match(input.state.pose).arc);
+    const auto initial_intent = swerve_chassis_core::inverse(
+      config_.geometry, {fresh.front().vx, fresh.front().vy, fresh.front().wz},
+      input.state.steering);
+    bool stopped = true;
+    for (double v : input.state.wheel_speeds) stopped &= std::abs(v) < config_.limits.stopped_speed;
+    for (std::size_t w = 0; w < 4; ++w)
+      result.presteering |=
+        stopped && std::abs(initial_intent.steering[w] - input.state.steering[w]) >
+                     config_.limits.tracking_tolerance;
     auto condition = [&](std::vector<Velocity> controls) {
       auto previous = input.state.requested;
       auto reference = input.state.generator.command.steering;
@@ -142,13 +178,51 @@ Result Controller::compute(const Input & input)
     auto mean = warm_.size() == config_.horizon ? warm_ : fresh;
     auto score = [&](const std::vector<Trajectory> & traces) {
       std::vector<double> costs(traces.size(), 0);
-      for (const auto & critic : critics_) {
-        critic->score(context, traces, costs);
-        if (costs.size() != traces.size()) throw std::runtime_error("critic changed batch size");
-      }
+      std::vector<Rejection> rejected(traces.size(), Rejection::None);
       for (std::size_t i = 0; i < traces.size(); ++i)
-        if (!traces[i].valid || !std::isfinite(costs[i]))
+        if (!traces[i].valid) {
+          rejected[i] = traces[i].rejection;
           costs[i] = std::numeric_limits<double>::infinity();
+        }
+      for (const auto & critic : critics_) {
+        try {
+          critic->score(context, traces, costs);
+          if (costs.size() != traces.size()) throw std::runtime_error("critic changed batch size");
+        } catch (...) {
+          ++result.diagnostics.critic_errors;
+          throw;
+        }
+        for (std::size_t i = 0; i < traces.size(); ++i)
+          if (!std::isfinite(costs[i]) && rejected[i] == Rejection::None)
+            rejected[i] = critic->rejection_reason();
+      }
+      for (std::size_t i = 0; i < traces.size(); ++i) {
+        // A later custom critic must not revive a rejected candidate.
+        if (!traces[i].valid || rejected[i] != Rejection::None)
+          costs[i] = std::numeric_limits<double>::infinity();
+        switch (rejected[i]) {
+          case Rejection::InvalidState:
+            ++result.diagnostics.invalid_state;
+            break;
+          case Rejection::InvalidControl:
+            ++result.diagnostics.invalid_control;
+            break;
+          case Rejection::ActuatorResidual:
+            ++result.diagnostics.actuator_residual;
+            break;
+          case Rejection::GeneratorError:
+            ++result.diagnostics.generator_error;
+            break;
+          case Rejection::Collision:
+            ++result.diagnostics.collision_rejected;
+            break;
+          case Rejection::Critic:
+            ++result.diagnostics.critic_rejected;
+            break;
+          case Rejection::None:
+            break;
+        }
+      }
       result.evaluated += traces.size();
       return costs;
     };
@@ -157,6 +231,8 @@ Result Controller::compute(const Input & input)
       batch.reserve(config_.samples);
       for (std::size_t k = 0; k < config_.samples; ++k) {
         auto candidate = k == 1 ? fresh : mean;
+        // Always regenerate a slew-limited brake from this cycle's state. It
+        // goes through the same rollout and collision checks as every sample.
         if (k == 2) candidate.assign(config_.horizon, {});
         if (k == 3)
           for (auto & u : candidate) {
@@ -188,6 +264,7 @@ Result Controller::compute(const Input & input)
         best = costs[winner];
         selected = batch[winner].controls;
         selected_trace = batch[winner];
+        result.braking_selected = winner == 2;
       }
       std::vector<Velocity> weighted(config_.horizon);
       double total = 0, squared = 0;
@@ -195,6 +272,7 @@ Result Controller::compute(const Input & input)
         const double w = std::exp(-(costs[k] - costs[winner]) / config_.temperature);
         total += w;
         squared += w * w;
+        if (w == 0) continue;
         for (std::size_t t = 0; t < weighted.size(); ++t) {
           weighted[t].vx += w * batch[k].controls[t].vx;
           weighted[t].vy += w * batch[k].controls[t].vy;
@@ -210,10 +288,12 @@ Result Controller::compute(const Input & input)
         best = cost;
         selected = weighted;
         selected_trace = std::move(update.front());
+        result.braking_selected = winner == 2 && result.effective_samples < 1 + 1e-9;
       }
       mean = cost <= costs[winner] + .02 ? weighted : batch[winner].controls;
     }
-  } catch (const std::exception &) {
+  } catch (...) {
+    if (!result.diagnostics.critic_errors) ++result.diagnostics.controller_errors;
     reset();
     result.status = Status::NoSolution;
     return finish();

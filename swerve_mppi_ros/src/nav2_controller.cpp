@@ -115,6 +115,8 @@ struct Nav2Controller::Runtime
     number("smoothness_weight", weights.smoothness);
     number("steering_change_weight", weights.steering_change);
     number("consistency_weight", weights.consistency);
+    number("reference_velocity_weight", weights.reference_velocity);
+    number("presteering_alignment_weight", weights.presteering_alignment);
     critics = tracking_critics(weights);
     map_enabled = parameter<bool>("use_costmap", true);
     double weight = parameter<double>("costmap_weight", 5);
@@ -170,12 +172,24 @@ struct Nav2Controller::Runtime
     diagnostic_msgs::msg::DiagnosticStatus item;
     item.name = node()->get_fully_qualified_name() + std::string("/") + name;
     item.hardware_id = "swerve";
-    item.level = result.status == Status::NoSolution ? item.WARN : item.OK;
+    item.level = result.status == Status::Ok ? item.OK : item.WARN;
     item.message = "continuous tracking";
     for (const auto & p : std::vector<std::pair<std::string, std::string>>{
            {"compute_ms", std::to_string(result.compute_ms)},
            {"cost", std::to_string(result.cost)},
            {"evaluated", std::to_string(result.evaluated)},
+           {"invalid_state", std::to_string(result.diagnostics.invalid_state)},
+           {"invalid_input", std::to_string(result.diagnostics.invalid_input)},
+           {"invalid_control", std::to_string(result.diagnostics.invalid_control)},
+           {"actuator_residual", std::to_string(result.diagnostics.actuator_residual)},
+           {"generator_error", std::to_string(result.diagnostics.generator_error)},
+           {"critic_rejected", std::to_string(result.diagnostics.critic_rejected)},
+           {"collision_rejected", std::to_string(result.diagnostics.collision_rejected)},
+           {"critic_errors", std::to_string(result.diagnostics.critic_errors)},
+           {"controller_errors", std::to_string(result.diagnostics.controller_errors)},
+           {"braking_selected", std::to_string(result.braking_selected)},
+           {"presteering", std::to_string(result.presteering)},
+           {"reference_speed", std::to_string(result.reference_speed)},
            {"effective_samples", std::to_string(result.effective_samples)}}) {
       diagnostic_msgs::msg::KeyValue value;
       value.key = p.first;
@@ -346,12 +360,12 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
                    map->getOriginY()};
     }
     auto result = r.controller->compute(input);
+    r.report(result);
     if (result.status != Status::Ok)
       throw nav2_core::NoValidControl("MPPI found no usable control");
     out.twist = twist(result.command.velocity);
     r.published_request = result.command.velocity;
     if (ordered) ordered->setReady(input.goal_active);
-    r.report(result);
     return out;
   } catch (const nav2_core::ControllerException &) {
     if (ordered) ordered->setReady(false);

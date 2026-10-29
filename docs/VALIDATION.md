@@ -13,7 +13,8 @@ No old/new physical performance improvement is claimed without matched recording
    stopped goal checks, grid bounds, footprint edge and between-sample collisions.
 3. Portable closed loops: straight, lateral, reverse, spin, combined movement,
    S curves, square and return paths, with execution steering rate reduced to 80%
-   of nominal, plus a separate 60 ms servo plant against the 50 ms prediction.
+   of nominal, with independent 100 ms and 120 ms servo plants against the
+   100 ms prediction. Fourteen scenarios per plant include negative final heading.
    These are numerical model tests, not independent physical evidence.
 4. ROS plugin tests: plugin loading/cleanup, lifecycle, speed caps, continuous
    output, fault zero/recovery, physical configuration mismatch, TF/map errors,
@@ -89,7 +90,10 @@ In-place rotation has no unique heading as a function of geometric path position
 so its along-path heading RMS/peak is omitted; endpoint heading remains gated.
 Cancellation omits endpoint gates and still requires a canceled action and stopped
 measured wheels. Failures retain raw data and remain FAIL in each montage. The
-26 numerical loops additionally gate position/heading errors, request slew and
+28 numerical loops additionally gate position/heading errors, request slew and
 stopped fraction for rate-limited and slower first-order servo plants. The prior
 36-case recordings at 543613e are the comparison baseline; seeds 42/43/44 and all
 reference paths remain unchanged. Target-board timing still requires measurement.
+
+See [A/B implementation and local evidence](AB_IMPLEMENTATION.md) for the
+unpublished follow-up. Portable loop success does not establish ROS/Gazebo acceptance.

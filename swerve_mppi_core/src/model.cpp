@@ -115,6 +115,7 @@ Trajectory Model::rollout(const State & initial, const std::vector<Velocity> & c
   out.states.push_back(initial);
   if (!valid(initial)) {
     out.valid = false;
+    out.rejection = Rejection::InvalidState;
     return out;
   }
   State s = initial;
@@ -124,6 +125,7 @@ Trajectory Model::rollout(const State & initial, const std::vector<Velocity> & c
     for (auto & u : out.controls) {
       if (!chassis::finite(chassis::Twist{u.vx, u.vy, u.wz})) {
         out.valid = false;
+        out.rejection = Rejection::InvalidControl;
         return out;
       }
       u = project(u);
@@ -141,6 +143,7 @@ Trajectory Model::rollout(const State & initial, const std::vector<Velocity> & c
         const double residual = chassis::residual(config_.geometry, next);
         if (!std::isfinite(residual) || residual > config_.max_residual) {
           out.valid = false;
+          out.rejection = Rejection::ActuatorResidual;
           return out;
         }
         // Integrate measured nominal velocity before advancing actuator response.
@@ -167,6 +170,7 @@ Trajectory Model::rollout(const State & initial, const std::vector<Velocity> & c
     }
   } catch (const std::exception &) {
     out.valid = false;
+    out.rejection = Rejection::GeneratorError;
   }
   return out;
 }

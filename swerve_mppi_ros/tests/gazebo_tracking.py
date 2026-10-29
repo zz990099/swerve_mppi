@@ -9,7 +9,7 @@ import rclpy
 from rclpy.parameter import Parameter
 from rclpy.action import ActionClient
 from nav_msgs.msg import Odometry, Path as PathMessage
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav2_msgs.action import FollowPath
 from lifecycle_msgs.srv import GetState
 from lifecycle_msgs.msg import State
@@ -51,7 +51,15 @@ def main():
     odom = [None]
     execution = [None]
     compute_times = []
-    node.create_subscription(ChassisState, '/chassis_controller/state', lambda m: execution.__setitem__(0,m), qos_profile_sensor_data)
+    def chassis_state(message):
+        execution[0] = message
+        if recording is not None:
+            recording.execution(message)
+    node.create_subscription(ChassisState, '/chassis_controller/state', chassis_state, qos_profile_sensor_data)
+    if args.output:
+        node.create_subscription(TwistStamped, '/cmd_vel',
+            lambda m: recording.command(m, node.get_clock().now().nanoseconds*1e-9)
+            if recording is not None else None, 10)
     def diagnostics(msg):
         if recording is not None:
             recording.diagnostic(msg)

@@ -34,7 +34,7 @@ controller_server:
       horizon: 24
       model_dt: 0.1
       integration_dt: 0.01
-      steering_time_constant: 0.05
+      steering_time_constant: 0.10
       samples: 24
       iterations: 1
       max_speed: 0.8

@@ -14,7 +14,7 @@ public:
   void reset();
 
 private:
-  std::vector<Velocity> seed(const Input & input) const;
+  std::vector<Velocity> seed(const Input & input, const ReferenceProfile & reference) const;
   Config config_;
   Critics critics_;
   Model model_;

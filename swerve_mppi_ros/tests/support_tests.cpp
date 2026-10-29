@@ -1,6 +1,7 @@
 #include <iostream>
 #include <stdexcept>
 
+#include "swerve_mppi/controller.hpp"
 #include "swerve_mppi_ros/control_support.hpp"
 #include "swerve_mppi_ros/costmap_critic.hpp"
 using namespace swerve_mppi_ros;
@@ -102,6 +103,15 @@ int main()
     costs = {0};
     footprint.score({input, config}, {swept}, costs);
     check(!std::isfinite(costs[0]), "new obstacle immediately disables empty map fast path");
+    input.state.generator.valid = true;
+    input.path = {{0, 0, 0}, {.5, 0, 0}};
+    input.goal = input.path.back();
+    cells[10 * 20 + 10] = 254;
+    auto blocked =
+      swerve_mppi::Controller(config, {std::make_shared<CostmapCritic>()}).compute(input);
+    check(
+      blocked.status == Status::NoSolution && blocked.diagnostics.collision_rejected > 0,
+      "validated brake cannot override collision rejection");
     std::cout << "ROS support tests passed\n";
   } catch (const std::exception & e) {
     std::cerr << e.what() << '\n';

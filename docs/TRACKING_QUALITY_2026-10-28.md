@@ -60,7 +60,7 @@ On the first-round lateral recording, local first-order response estimates from
 the front-left measured/target steering and feedback timestamps have median
 approximately 95 ms (153 intervals with nontrivial error and monotone response).
 Targets can change within each interval, so this is diagnostic evidence, not a
-calibrated actuator model. The current nominal model is 50 ms. A trial of a
+calibrated actuator model. The nominal model at this checkpoint is 50 ms. A trial of a
 100 ms nominal model with a 120 ms independent servo failed the unchanged stopped
 fraction gate (0.685 for lateral motion). That trial was reverted; changing the
 model constant alone is insufficient.
@@ -102,3 +102,5 @@ consistency; no quality gate is relaxed.
 4. Check terminal odometry/truth differences and request-rate failures after
    aborts. Keep the same scenarios, seed series and comparison provenance.
 5. Merge to `main` only after the full physical acceptance passes. No PR is needed.
+
+The subsequent A/B implementation is documented in [AB_IMPLEMENTATION.md](AB_IMPLEMENTATION.md).

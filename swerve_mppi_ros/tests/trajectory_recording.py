@@ -8,6 +8,11 @@ from pathlib import Path
 from trajectory_scenarios import TITLES
 from tracking_quality import evaluate, reference_match
 
+DIAGNOSTICS = ('compute_ms', 'cost', 'evaluated', 'effective_samples', 'invalid_state',
+               'invalid_input',
+               'invalid_control', 'actuator_residual', 'generator_error', 'critic_rejected',
+               'collision_rejected', 'critic_errors', 'controller_errors', 'braking_selected', 'presteering',
+               'reference_speed')
 
 def heading(pose):
     q = pose.orientation
@@ -56,6 +61,12 @@ class Recording:
         self.max_request_linear_rate = 0.
         self.max_request_angular_rate = 0.
         self.stopped = 0
+        self.moving_started = None
+        self.first_stamp = None
+        self.tracking_samples = 0
+        self.tracking_stopped = 0
+        self.execution_previous = None
+        self.execution_seconds = [0.]*5
         self.metadata = dict(scenario=name, title=TITLES.get(name, name), seed=seed,
                              reference=points, source='Independent Gazebo ground truth',
                              coordinate_frame='initial_body', status='running',
@@ -70,11 +81,20 @@ class Recording:
                              [f'{field}_{wheel}' for field in ('steering_rad', 'wheel_rad_s',
                               'target_steering_rad', 'target_wheel_rad_s') for wheel in ('fl','fr','rl','rr')])
         self.prediction_file = (self.directory/'predictions.csv').open('w', newline='', buffering=1)
+        self.command_file = (self.directory/'commands.csv').open('w', newline='', buffering=1)
+        self.command_writer = csv.writer(self.command_file)
+        self.command_writer.writerow(['command_stamp_s', 'observer_stamp_s', 'vx_m_s', 'vy_m_s', 'wz_rad_s'])
+        self.execution_file = (self.directory/'execution.csv').open('w', newline='', buffering=1)
+        self.execution_writer = csv.writer(self.execution_file)
+        self.execution_writer.writerow(['chassis_stamp_s', 'feedback_stamp_s', 'command_stamp_s',
+            'command_sequence', 'execution', 'fault', 'generator_valid'] +
+            [f'{field}_{wheel}' for field in ('steering_rad', 'wheel_rad_s',
+             'target_steering_rad', 'target_wheel_rad_s') for wheel in ('fl', 'fr', 'rl', 'rr')])
         self.prediction_writer = csv.writer(self.prediction_file)
         self.prediction_writer.writerow(['prediction_stamp_s', 'horizon_step', 'x_m', 'y_m', 'yaw_rad'])
         self.diagnostic_file = (self.directory/'diagnostics.csv').open('w',newline='',buffering=1)
         self.diagnostic_writer = csv.writer(self.diagnostic_file)
-        self.diagnostic_writer.writerow(['stamp_s','compute_ms','cost','evaluated','effective_samples'])
+        self.diagnostic_writer.writerow(['stamp_s']+list(DIAGNOSTICS))
         self._write_metadata()
 
     def diagnostic(self, message):
@@ -82,9 +102,28 @@ class Recording:
             values={item.key:item.value for item in status.values}
             if 'compute_ms' not in values:
                 continue
-            self.diagnostic_writer.writerow([stamp(message)]+[values.get(key,'') for key in ('compute_ms','cost','evaluated','effective_samples')])
+            self.diagnostic_writer.writerow([stamp(message)]+[values.get(key,'') for key in DIAGNOSTICS])
             if 'effective_samples' in values:
                 self.effective_samples.append(float(values['effective_samples']))
+
+    def command(self, message, observer_stamp):
+        self.command_writer.writerow([stamp(message), observer_stamp, message.twist.linear.x,
+                                      message.twist.linear.y, message.twist.angular.z])
+
+    def execution(self, message):
+        timestamp = stamp(message)
+        if self.execution_previous is not None:
+            previous, phase = self.execution_previous
+            dt = timestamp-previous
+            if 0 < dt <= .1 and 0 <= phase < 5:
+                self.execution_seconds[phase] += dt
+        self.execution_previous = (timestamp, message.execution)
+        self.execution_writer.writerow([stamp(message),
+            message.feedback_stamp.sec+message.feedback_stamp.nanosec*1e-9,
+            message.command_stamp.sec+message.command_stamp.nanosec*1e-9,
+            message.command_sequence, message.execution, message.fault, int(message.generator_valid)] +
+            list(message.steering_angles)+list(message.wheel_speeds)+
+            list(message.target_steering)+list(message.target_wheel_speeds))
 
     def prediction(self, message):
         for i, item in enumerate(message.poses):
@@ -108,6 +147,13 @@ class Recording:
             self.heading_errors.append(abs(math.remainder(a-reference_yaw, 2*math.pi)))
             ox, oy, oa = local_pose(odom.pose.pose, self.odom_origin)
             peak = max(map(abs, execution.wheel_speeds)) if execution is not None else None
+            if self.first_stamp is None:
+                self.first_stamp = timestamp
+            if peak is not None and peak >= .05 and self.moving_started is None:
+                self.moving_started = timestamp
+            if self.moving_started is not None and peak is not None:
+                self.tracking_samples += 1
+                self.tracking_stopped += peak < .05
             requested = execution.requested_velocity if execution is not None else None
             self.stopped += peak is not None and peak < .05
             extra = [None]*22
@@ -135,10 +181,18 @@ class Recording:
     def close(self, success, reason, compute_times):
         self.file.close()
         self.prediction_file.close()
+        self.command_file.close()
+        self.execution_file.close()
         self.diagnostic_file.close()
         count = len(self.errors)
         self.metadata.update(status='passed' if success else 'failed', reason=reason,
                              samples=count, wall_duration_s=time.monotonic()-self.start)
+        self.metadata['initial_wait_to_motion_s'] = (self.moving_started-self.first_stamp
+            if self.moving_started is not None and self.first_stamp is not None else None)
+        self.metadata['execution_duration_s'] = dict(zip(
+            ('tracking', 'limited', 'braking', 'presteering', 'stopped'), self.execution_seconds))
+        self.metadata['tracking_stopped_fraction'] = (self.tracking_stopped/self.tracking_samples
+            if self.tracking_samples else None)
         if count:
             gx, gy, ga = self.points[-1]
             x, y, a = self.last_pose

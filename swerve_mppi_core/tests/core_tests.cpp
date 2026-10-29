@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "swerve_mppi/controller.hpp"
+#include "swerve_mppi/reference.hpp"
 using namespace swerve_mppi;
 void check(bool condition, const char * message)
 {
@@ -18,6 +19,32 @@ public:
     for (auto & c : costs) c = std::numeric_limits<double>::infinity();
   }
 };
+class BrakeOnly final : public Critic
+{
+public:
+  void score(
+    const CriticContext &, const std::vector<Trajectory> & batch,
+    std::vector<double> & costs) const override
+  {
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+      const auto u = batch[i].controls.back();
+      const auto first = batch[i].controls.front();
+      if (
+        std::hypot(u.vx, u.vy) + std::abs(u.wz) > 1e-9 ||
+        std::abs(first.vx - .255) + std::abs(first.vy) + std::abs(first.wz) > 1e-9)
+        costs[i] = std::numeric_limits<double>::infinity();
+    }
+  }
+};
+class ThrowingCritic final : public Critic
+{
+public:
+  void score(
+    const CriticContext &, const std::vector<Trajectory> &, std::vector<double> &) const override
+  {
+    throw std::runtime_error("injected critic failure");
+  }
+};
 int main()
 {
   try {
@@ -25,6 +52,35 @@ int main()
     Model model(c);
     State state;
     state.generator.valid = true;
+    std::vector<Pose> coupled{{0, 0, 0}, {1, 0, .8}};
+    Config slower = c;
+    slower.steering_time_constant *= 2;
+    ReferenceProfile profile(coupled, c), slow_profile(coupled, slower);
+    ReferenceProfile owned(std::vector<Pose>{{0, 0, 0}, {1, 0, 0}}, c);
+    check(owned.speed(.3) > 0, "profile owns temporary path storage");
+    check(
+      slow_profile.speed(.3) <= profile.speed(.3) && profile.speed(1) == 0,
+      "reference slows for servo lag and stops at the endpoint");
+    std::vector<Pose> lateral_path{{0, 0, 0}, {0, .8, 0}};
+    ReferenceProfile lateral_profile(lateral_path, c);
+    auto direction = lateral_profile.unit(.2, 0);
+    check(
+      std::abs(direction.vx) < 1e-9 && direction.vy > .99 && direction.wz == 0,
+      "reference preserves body heading during lateral travel");
+    std::vector<Pose> reverse_path{{0, 0, 0}, {-.8, 0, 0}};
+    ReferenceProfile reverse_profile(reverse_path, c);
+    check(
+      reverse_profile.unit(.2, 0).vx < -.99,
+      "reverse reference does not rotate body heading to path tangent");
+    std::vector<Pose> return_path{{0, 0, 0}, {.7, 0, 0}, {0, 0, 0}};
+    check(
+      PathView(return_path).match_ordered({.1, 0, 0}, .67, 1.4).arc < .7,
+      "prediction cannot skip an unvisited return checkpoint");
+    std::vector<Pose> corner_path{{0, 0, 0}, {.8, 0, 0}, {.8, .8, 0}};
+    ReferenceProfile corner_profile(corner_path, c);
+    check(
+      corner_profile.unit(.79, 0).vx > .99 && corner_profile.unit(.8, 0).vy > .99,
+      "mandatory corner does not smear steering into the incoming segment");
     auto t = model.rollout(state, std::vector<Velocity>(30, {0, 0.4, 0}));
     check(t.valid && t.states.back().pose.y > 0.3, "lateral presteering rollout");
     auto combo = model.rollout(state, std::vector<Velocity>(c.horizon, {0.3, 0.15, 0.2}));
@@ -86,6 +142,20 @@ int main()
       lateral_result.status == Status::Ok && std::abs(lateral_result.command.velocity.vx) < 1e-6 &&
         std::abs(lateral_result.command.velocity.wz) < 1e-6,
       "perpendicular startup retains a pure lateral request");
+    Input corner_departure = lateral;
+    corner_departure.state.pose = {.79, 0, 0};
+    corner_departure.path = {{.8, 0, 0}, {.8, .8, 0}};
+    corner_departure.goal = corner_departure.path.back();
+    check(
+      Controller(c).compute(corner_departure).command.velocity.vy > 0,
+      "stationary corner departure retains a presteering intent");
+    Input idle = input;
+    idle.goal_active = false;
+    idle.state.steering.fill(.07);
+    idle.state.generator.command.steering.fill(.07);
+    check(
+      Controller(c).compute(idle).command.velocity.vx > .01,
+      "zero request cannot impersonate a paused presteering reference");
     Trajectory on_path, shortcut;
     on_path.states = {lateral.state, lateral.state};
     on_path.states.back().pose = {0, .05, 0};
@@ -95,10 +165,42 @@ int main()
     std::vector<double> costs(2, 0);
     tracking_critics().front()->score({lateral, c}, {on_path, shortcut}, costs);
     check(
-      std::isfinite(costs[0]) && !std::isfinite(costs[1]),
-      "progress cannot buy an eight-centimetre shortcut");
+      std::isfinite(costs[0]) && std::isfinite(costs[1]) && costs[1] > costs[0] + 5,
+      "tracking slack is finite but shortcuts remain expensive");
+    Input recovery = input;
+    recovery.state.pose.yaw = -.15;
+    auto recovered = Controller(c).compute(recovery);
+    check(recovered.status == Status::Ok, "heading deviation retains recovery candidates");
+    Input moving = input;
+    moving.state.requested = moving.state.velocity = {.3, 0, 0};
+    moving.state.wheel_speeds.fill(3);
+    moving.state.generator.command.speed.fill(3);
+    auto brake = Controller(c, {std::make_shared<BrakeOnly>()}).compute(moving);
+    check(
+      brake.status == Status::Ok && brake.braking_selected && brake.command.velocity.vx < .3 &&
+        brake.command.velocity.vx > .25,
+      "fresh validated brake preserves request slew");
     Controller rejecting(c, {std::make_shared<Reject>()});
-    check(rejecting.compute(input).status == Status::NoSolution, "no solution");
+    auto rejected = rejecting.compute(input);
+    check(
+      rejected.status == Status::NoSolution && rejected.diagnostics.critic_rejected == c.samples,
+      "no solution reports critic rejection counts");
+    auto exception = Controller(c, {std::make_shared<ThrowingCritic>()}).compute(input);
+    check(
+      exception.status == Status::NoSolution && exception.diagnostics.critic_errors == 1 &&
+        exception.diagnostics.controller_errors == 0,
+      "critic exceptions are distinguished from controller errors");
+    auto extreme = input;
+    extreme.path = {
+      {std::numeric_limits<double>::max(), 0, 0}, {-std::numeric_limits<double>::max(), 0, 0}};
+    check(
+      controller.compute(extreme).status == Status::InvalidInput,
+      "overflowing reference arc length is rejected");
+    auto invalid_snapshot = state;
+    invalid_snapshot.generator.valid = false;
+    check(
+      model.rollout(invalid_snapshot, {{.2, 0, 0}}).rejection == Rejection::InvalidState,
+      "model rejection identifies invalid snapshots");
     c.max_speed = 0;
     Controller stopped(c);
     check(stopped.compute(input).command.velocity.vx == 0, "zero speed limit");
