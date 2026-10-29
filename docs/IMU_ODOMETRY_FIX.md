@@ -28,3 +28,11 @@ Use the same 3 rounds x 12 cases, seeds 42/43/44, translation length 12 m and
 1 m/s cap. User geometry gates: path peak <=10 cm, endpoint <=20 cm, final yaw
 <=5 degrees. Keep other engineering failures visible and do not merge to main
 unless complete acceptance is satisfied.
+
+First remote run: 40831925160 / MPPI 4c14d8d. Successful long cases show the
+heading correction working, but several probes sent a goal immediately on
+lifecycle activation before chassis feedback was ready, producing startup aborts.
+The follow-up establishes healthy, stationary actuator feedback for 0.5 source
+seconds using zero commands before any goal; the temporary publisher is then
+destroyed. This preparation is outside measured tracking. All first-run records
+remain attached to that run; a fresh complete three-round run is required.

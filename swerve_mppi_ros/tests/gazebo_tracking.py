@@ -105,6 +105,33 @@ def main():
     try:
         wait(lambda: odom[0] is not None and truth.latest is not None and
              active(), 90)
+        # Lifecycle activation alone does not mean DDS actuator feedback has
+        # arrived. Establish stopped healthy feedback before measuring a case.
+        # These zero commands are sent only before any FollowPath goal.
+        recovery = node.create_publisher(TwistStamped, '/cmd_vel', 10)
+        healthy_since = [None]
+        last_zero = [0.]
+        def feedback_ready():
+            now = node.get_clock().now().nanoseconds*1e-9
+            if time.monotonic()-last_zero[0] >= .05:
+                zero = TwistStamped()
+                zero.header.stamp = node.get_clock().now().to_msg()
+                zero.header.frame_id = 'base_footprint'
+                recovery.publish(zero)
+                last_zero[0] = time.monotonic()
+            state = execution[0]
+            healthy = (state is not None and state.feedback_valid and state.fault == 0
+                       and state.generator_valid and -.01 <= now-stamp(state) < .1
+                       and max(map(abs, state.wheel_speeds)) < .05
+                       and node.count_subscribers('/chassis_controller/state') >= 2)
+            if not healthy:
+                healthy_since[0] = None
+                return False
+            if healthy_since[0] is None:
+                healthy_since[0] = now
+            return now-healthy_since[0] >= .5
+        wait(feedback_ready, 10)
+        node.destroy_publisher(recovery)
         initial = odom[0].pose.pose
         initial_truth = truth.latest.pose.pose
         rotation = wrap(yaw(initial_truth.orientation)-yaw(initial.orientation))
