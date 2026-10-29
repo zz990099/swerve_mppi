@@ -80,6 +80,12 @@ class Recording:
                               'chassis_stamp_s', 'feedback_stamp_s', 'command_stamp_s', 'execution', 'fault', 'generator_valid'] +
                              [f'{field}_{wheel}' for field in ('steering_rad', 'wheel_rad_s',
                               'target_steering_rad', 'target_wheel_rad_s') for wheel in ('fl','fr','rl','rr')])
+        self.imu_file = (self.directory/'imu.csv').open('w', newline='', buffering=1)
+        self.imu_writer = csv.writer(self.imu_file)
+        self.imu_writer.writerow(['stamp_s', 'yaw_rad', 'angular_z_rad_s'])
+        self.wheel_odom_file = (self.directory/'wheel_odometry.csv').open('w', newline='', buffering=1)
+        self.wheel_odom_writer = csv.writer(self.wheel_odom_file)
+        self.wheel_odom_writer.writerow(['stamp_s', 'x_m', 'y_m', 'yaw_rad'])
         self.prediction_file = (self.directory/'predictions.csv').open('w', newline='', buffering=1)
         self.command_file = (self.directory/'commands.csv').open('w', newline='', buffering=1)
         self.command_writer = csv.writer(self.command_file)
@@ -96,6 +102,15 @@ class Recording:
         self.diagnostic_writer = csv.writer(self.diagnostic_file)
         self.diagnostic_writer.writerow(['stamp_s']+list(DIAGNOSTICS))
         self._write_metadata()
+
+    def imu(self, message):
+        q = message.orientation
+        angle = math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
+        self.imu_writer.writerow([stamp(message), angle, message.angular_velocity.z])
+
+    def wheel_odometry(self, message):
+        pose = message.pose.pose
+        self.wheel_odom_writer.writerow([stamp(message), pose.position.x, pose.position.y, heading(pose)])
 
     def diagnostic(self, message):
         for status in message.status:
@@ -179,6 +194,8 @@ class Recording:
                                   requested.angular.z if requested else None] + extra)
 
     def close(self, success, reason, compute_times):
+        self.imu_file.close()
+        self.wheel_odom_file.close()
         self.file.close()
         self.prediction_file.close()
         self.command_file.close()

@@ -39,7 +39,7 @@ def main():
         directory.mkdir(parents=True, exist_ok=False)
         seed = args.seed_base+number-1
         (directory/'round.json').write_text(json.dumps(dict(round=number, seed=seed,
-            commit=commit, minimum_path_length_m=args.min_path_length, max_speed_m_s=args.max_speed, cases=list(args.cases)), indent=2)+'\n')
+            commit=commit, odometry_source='wheel translation + ideal Gazebo IMU orientation (no truth input)', minimum_path_length_m=args.min_path_length, max_speed_m_s=args.max_speed, cases=list(args.cases)), indent=2)+'\n')
         try:
             for name in args.cases:
                 print(f'ROUND {number} SEED {seed} CASE {name}', flush=True)

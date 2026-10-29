@@ -2,4 +2,4 @@ repositories:
   swerve_gazebo_sim:
     type: git
     url: https://github.com/zz990099/swerve_gazebo_sim.git
-    version: fd1c6b6cf8bfd5f818245e24cbbeb2f72985372b
+    version: 41f1d73bd04d11f3eddc16f1a39b492db5fd5945

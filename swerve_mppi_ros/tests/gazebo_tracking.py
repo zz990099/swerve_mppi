@@ -8,6 +8,7 @@ from pathlib import Path
 import rclpy
 from rclpy.parameter import Parameter
 from rclpy.action import ActionClient
+from sensor_msgs.msg import Imu
 from nav_msgs.msg import Odometry, Path as PathMessage
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav2_msgs.action import FollowPath
@@ -58,6 +59,8 @@ def main():
             recording.execution(message)
     node.create_subscription(ChassisState, '/chassis_controller/state', chassis_state, qos_profile_sensor_data)
     if args.output:
+        node.create_subscription(Imu, '/imu/data', lambda m: recording.imu(m) if recording else None, qos_profile_sensor_data)
+        node.create_subscription(Odometry, '/wheel/odom', lambda m: recording.wheel_odometry(m) if recording else None, 10)
         node.create_subscription(TwistStamped, '/cmd_vel',
             lambda m: recording.command(m, node.get_clock().now().nanoseconds*1e-9)
             if recording is not None else None, 10)
