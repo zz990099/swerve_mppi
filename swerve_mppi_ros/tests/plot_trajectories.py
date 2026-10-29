@@ -29,7 +29,7 @@ def plot_round(directory, output=None, case_names=None):
     rows = math.ceil(len(names)/columns)
     plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 10,
                          'axes.spines.top': False, 'axes.spines.right': False})
-    height = rows*4.6+1.5
+    height = rows*4.6+2.8
     fig, axes = plt.subplots(rows, columns, figsize=(19.2, height), squeeze=False)
     summaries = []
     speed_norm = Normalize(0, 1.1)
@@ -115,8 +115,11 @@ def plot_round(directory, output=None, case_names=None):
                Line2D([0], [0], color='#111827', marker='o', label='Start / initial body +x')]
     fig.legend(handles=handles, loc='upper center', bbox_to_anchor=(.5, 1-.62/height),
                ncol=4, frameon=False, fontsize=10)
-    fig.tight_layout(rect=(0, 1.05/height, 1, 1-1.10/height), h_pad=2.3, w_pad=2.0)
-    color_axis = fig.add_axes([.32, .66/height, .36, .12/height])
+    # Fixed physical margins work for both the eight-row overview and two-row
+    # detail pages; equal-aspect axes must leave room for neighbouring labels.
+    fig.subplots_adjust(left=.055, right=.985, bottom=1.45/height,
+                        top=1-1.35/height, wspace=.30, hspace=.25)
+    color_axis = fig.add_axes([.32, .90/height, .36, .12/height])
     bar = fig.colorbar(ScalarMappable(norm=speed_norm, cmap='plasma'), cax=color_axis, orientation='horizontal', extend='max')
     bar.set_label('Truth-derived linear speed [m/s], centred 0.2 s window', fontsize=9)
     fig.text(.5, .10/height, 'Fresh simulation per case; axes aligned with initial body; arrows show body yaw. '
