@@ -8,7 +8,6 @@ from pathlib import Path
 import rclpy
 from rclpy.parameter import Parameter
 from rclpy.action import ActionClient
-from sensor_msgs.msg import Imu
 from tf2_msgs.msg import TFMessage
 from tf2_ros import Buffer, TransformListener
 from rclpy.time import Time
@@ -65,8 +64,7 @@ def main():
             recording.execution(message)
     node.create_subscription(ChassisState, '/chassis_controller/state', chassis_state, qos_profile_sensor_data)
     if args.output:
-        node.create_subscription(Imu, '/imu/data', lambda m: recording.imu(m) if recording else None, qos_profile_sensor_data)
-        node.create_subscription(Odometry, '/odom' if args.path_frame == 'map' else '/wheel/odom', lambda m: recording.wheel_odometry(m) if recording else None, 10)
+        node.create_subscription(Odometry, '/odom', lambda m: recording.wheel_odometry(m) if recording else None, 10)
         node.create_subscription(TwistStamped, '/cmd_vel',
             lambda m: recording.command(m, node.get_clock().now().nanoseconds*1e-9)
             if recording is not None else None, 10)
@@ -174,7 +172,7 @@ def main():
                     map_reference=[(p.pose.position.x, p.pose.position.y, yaw(p.pose.orientation))
                                    for p in message.poses] if args.path_frame == 'map' else None,
                     localization_source='ideal truth map->odom' if args.path_frame == 'map' else 'none',
-                    odometry_source='raw wheel' if args.path_frame == 'map' else 'IMU-assisted wheel')
+                    odometry_source='raw wheel')
                 recording._write_metadata()
             goal = FollowPath.Goal()
             goal.path = message

@@ -1,8 +1,8 @@
 # Map-path validation with ideal external localization
 
 Repeated trajectory recordings now default to `--path-frame map`. Each case
-starts a fresh Gazebo world, keeps raw wheel `/odom` and its TF, disables the
-demo's IMU-assisted odometry, and enables the chassis repository's optional
+starts a fresh Gazebo world, keeps raw wheel `/odom` and its TF, and enables
+the chassis repository's optional
 `publish_ground_truth_map_tf` node. No controller, critic, actuator, or wheel
 odometry algorithm is changed by this experiment.
 
@@ -37,4 +37,6 @@ Acceptance remains completion plus peak deviation <= 10 cm, endpoint <= 20 cm,
 and final yaw <= 5 degrees. Engineering limits (timing, slew, stopping) are
 reported separately in JSON. Failed or incomplete cases remain in the montage.
 This is ideal-localization controller validation, not a claim about real SLAM.
-`--path-frame odom` retains the earlier IMU-assisted demo experiment.
+`--path-frame odom` uses raw wheel odometry without external localization,
+for comparison with the map-path experiment. MPPI does not estimate odometry;
+the chassis/localization layer owns `/odom` and its TF.

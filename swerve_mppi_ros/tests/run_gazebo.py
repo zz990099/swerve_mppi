@@ -34,8 +34,7 @@ def run_case(chassis_root, logs, scenario, seed=None, record=False, minimum_leng
     logs.mkdir(parents=True, exist_ok=True)
     launch_options = []
     if path_frame == 'map':
-        launch_options.extend(['use_imu_odometry:=false',
-                               'publish_ground_truth_map_tf:=true',
+        launch_options.extend(['publish_ground_truth_map_tf:=true',
                                'x:=2.0', 'y:=-1.0', 'yaw:=0.4'])
     probe_options = ['--path-frame', path_frame]
     if seed is not None or max_speed is not None:

@@ -42,7 +42,7 @@ def main():
         (directory/'round.json').write_text(json.dumps(dict(round=number, seed=seed,
             commit=commit, path_frame=args.path_frame, local_costmap_frame='odom',
             localization_source='ideal Gazebo truth map->odom' if args.path_frame == 'map' else 'none',
-            odometry_source='raw wheel odometry' if args.path_frame == 'map' else 'wheel translation + ideal Gazebo IMU orientation', minimum_path_length_m=args.min_path_length, max_speed_m_s=args.max_speed, cases=list(args.cases)), indent=2)+'\n')
+            odometry_source='raw wheel odometry', minimum_path_length_m=args.min_path_length, max_speed_m_s=args.max_speed, cases=list(args.cases)), indent=2)+'\n')
         try:
             for name in args.cases:
                 print(f'ROUND {number} SEED {seed} CASE {name}', flush=True)
