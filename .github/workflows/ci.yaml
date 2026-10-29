@@ -75,11 +75,7 @@ jobs:
           source install/local_setup.bash
           colcon test --packages-select swerve_mppi_ros --return-code-on-test-failure --event-handlers console_direct+
           colcon test-result --all --verbose
-      - name: Physical MPPI path following
-        run: |
-          source /opt/ros/jazzy/setup.bash
-          source install/local_setup.bash
-          python3 swerve_mppi_ros/tests/run_gazebo.py --chassis-root companion-chassis --logs artifacts
+      # The single 32-case physical round is owned by trajectories.yaml.
       - uses: actions/upload-artifact@v4
         if: always()
         with:

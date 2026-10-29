@@ -1,6 +1,6 @@
 # Map-path validation with ideal external localization
 
-Repeated trajectory recordings now default to `--path-frame map`. Each case
+The 32-case benchmark defaults to one round, fixed seed 42 and `--path-frame map`. Each case
 starts a fresh Gazebo world, keeps raw wheel `/odom` and its TF, and enables
 the chassis repository's optional
 `publish_ground_truth_map_tf` node. No controller, critic, actuator, or wheel
@@ -15,7 +15,7 @@ The ideal external localization TF replaces SLAM's pose observation only.
 ```bash
 python3 swerve_mppi_ros/tests/run_trajectory_rounds.py \
   --chassis-root companion-chassis --output artifacts \
-  --rounds 3 --min-path-length 12 --max-speed 1.0 --path-frame map
+  --rounds 1 --seed-base 42 --min-path-length 12 --max-speed 1.0 --path-frame map
 ```
 
 The benchmark requests a nonzero spawn pose `(2, -1, 0.4 rad)` to exercise

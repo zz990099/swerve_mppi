@@ -21,7 +21,7 @@ from diagnostic_msgs.msg import DiagnosticArray
 from swerve_chassis_msgs.msg import ChassisState
 from rclpy.qos import qos_profile_sensor_data
 
-from trajectory_scenarios import PATHS, scaled_path
+from trajectory_scenarios import PATHS, ordered_checkpoints, scaled_path
 from trajectory_recording import Recording, stamp
 
 
@@ -194,14 +194,19 @@ def main():
                 wait(lambda: execution[0] is not None and max(map(abs,execution[0].wheel_speeds))<.05,5)
                 print('PASS cancellation stops measured wheels',flush=True)
                 continue
-            # Ordered corner checks use original vertices, not the densified samples.
-            original = PATHS[name]
-            original_length = sum(math.hypot(q[0]-p[0], q[1]-p[1]) for p, q in zip(original, original[1:]))
-            scale = max(1., args.min_path_length/max(original_length, 1e-9))
-            checkpoints = [(bx+math.cos(a)*x*scale-math.sin(a)*y*scale,
-                            by+math.sin(a)*x*scale+math.cos(a)*y*scale)
-                           for x, y, _ in original[1:-1]] if name in ('out_and_back', 'closed_loop') else []
+            # Evaluate route order with independent truth, including loops and
+            # self intersections whose endpoint alone cannot prove completion.
+            waypoints = []
+            for item in message.poses:
+                x, y = item.pose.position.x-origin[0], item.pose.position.y-origin[1]
+                waypoints.append((origin[2]+math.cos(rotation)*x-math.sin(rotation)*y,
+                                  origin[3]+math.sin(rotation)*x+math.cos(rotation)*y))
+            checkpoints = ordered_checkpoints(waypoints)
             visited = 0
+            checkpoint_stamp = -math.inf
+            if recording is not None:
+                recording.metadata.update(ordered_checkpoints_total=len(checkpoints),
+                                          ordered_checkpoints_visited=0)
             tracking_errors=[]
             stopped_samples=0
             total_samples=0
@@ -209,7 +214,7 @@ def main():
             last_report=start
 
             def finished():
-                nonlocal visited, stopped_samples, total_samples, last_truth_stamp, last_report
+                nonlocal visited, checkpoint_stamp, stopped_samples, total_samples, last_truth_stamp, last_report
                 if time.monotonic()-last_report > 5:
                     last_report=time.monotonic()
                     p=odom[0].pose.pose.position
@@ -219,12 +224,6 @@ def main():
                 if stamp!=last_truth_stamp:
                     last_truth_stamp=stamp
                     p=observation.pose.pose.position
-                    # Map paths are already in the fixed truth reference; legacy odom paths use startup alignment.
-                    waypoints=[]
-                    for item in message.poses:
-                        x,y=item.pose.position.x-origin[0],item.pose.position.y-origin[1]
-                        waypoints.append((origin[2]+math.cos(rotation)*x-math.sin(rotation)*y,
-                                          origin[3]+math.sin(rotation)*x+math.cos(rotation)*y))
                     errors=[]
                     for (ax,ay),(bx,by) in zip(waypoints,waypoints[1:]):
                         dx,dy=bx-ax,by-ay
@@ -234,12 +233,18 @@ def main():
                     if execution[0] is not None:
                         total_samples+=1
                         stopped_samples+=max(map(abs,execution[0].wheel_speeds))<0.05
-                if visited < len(checkpoints):
-                    p = (truth.latest.pose.pose.position if args.path_frame == 'map'
-                         else odom[0].pose.pose.position)
-                    qx, qy = checkpoints[visited]
-                    if math.hypot(p.x-qx, p.y-qy) < .2:
-                        visited += 1
+                for observed in truth.history:
+                    observed_time = (observed.header.stamp.sec + observed.header.stamp.nanosec*1e-9)
+                    if observed_time <= checkpoint_stamp:
+                        continue
+                    checkpoint_stamp = observed_time
+                    if visited < len(checkpoints):
+                        p = observed.pose.pose.position
+                        qx, qy = checkpoints[visited]
+                        if math.hypot(p.x-qx, p.y-qy) < .2:
+                            visited += 1
+                if recording is not None:
+                    recording.metadata['ordered_checkpoints_visited'] = visited
                 return result.done()
 
             wait(finished, max(75., 30+8*args.min_path_length))
@@ -247,6 +252,8 @@ def main():
             if recording is not None:
                 recording.metadata['nav2_goal_success'] = (outcome.status == GoalStatus.STATUS_SUCCEEDED
                     and outcome.result.error_code == 0)
+                recording.metadata.update(ordered_checkpoints_total=len(checkpoints),
+                                          ordered_checkpoints_visited=visited)
             assert outcome.status == GoalStatus.STATUS_SUCCEEDED and outcome.result.error_code == 0, outcome
             assert visited == len(checkpoints), \
                 f'{name} completed before ordered checkpoints: {visited}/{len(checkpoints)}'

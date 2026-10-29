@@ -18,7 +18,7 @@ def main():
     parser.add_argument('--min-path-length', type=float, default=0.)
     parser.add_argument('--max-speed', type=float)
     parser.add_argument('--path-frame', choices=('map', 'odom'), default='map')
-    parser.add_argument('--rounds', type=int, default=3)
+    parser.add_argument('--rounds', type=int, default=1)
     parser.add_argument('--start-round', type=int, default=1)
     parser.add_argument('--seed-base', type=int, default=42)
     parser.add_argument('--commit', default=os.environ.get('GITHUB_SHA'))

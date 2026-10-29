@@ -36,20 +36,22 @@ Run `python tools/format.py --check` with the pinned Rolling ament tools. See CI
 for exact standalone dependency installation and colcon commands. Version 1.0
 removes the Python executor comparison because that executor no longer exists.
 
-## Repeated physical recordings
+## Physical trajectory recordings (32 cases, one round)
 
 With the workspace built and sourced, run:
 
 ```bash
 python3 swerve_mppi_ros/tests/run_trajectory_rounds.py \
-  --chassis-root /path/to/swerve_gazebo_sim --output artifacts --rounds 3
+  --chassis-root /path/to/swerve_gazebo_sim --output artifacts --rounds 1 \
+  --seed-base 42 --min-path-length 12 --max-speed 1.0 --path-frame map
 ```
 
-Install Python matplotlib, PyYAML and psutil. Each round uses seed `42 + round - 1`
-and independently launches twelve fresh Gazebo/Nav2 cases: forward, smooth S,
-smooth Bezier curve, left/right perpendicular starts, reverse straight/curve,
-combined translation/rotation, spin, final heading, out-and-back and square loop.
-Use `--cases` to select a subset and `--seed-base` to change the seed series.
+Install Python matplotlib, PyYAML and psutil. The default is one round with
+fixed seed 42. It independently launches 32 fresh Gazebo/Nav2 cases, including
+20 added diagonal, corner, zigzag, U-turn, circular, figure-eight, slalom,
+spiral, cloverleaf and body-rotation trajectories. See
+[TRAJECTORY_CASES.md](TRAJECTORY_CASES.md) for the full ordered list.
+Use `--cases` to select a subset and `--seed-base` to change the fixed seed.
 An existing round directory is rejected rather than overwritten.
 
 Every case streams independent Gazebo observations and wheel odometry to
@@ -59,16 +61,23 @@ body frame; this makes perpendicular/reverse starts explicit. Body-yaw arrows
 show orientation independently of travel direction. `result.json` retains the
 reference, seed, status, errors and compute percentiles. Interrupted/failed cases
 retain partial data and remain marked FAIL in the montage. A round produces one
-`round_NN.png` and a `summary.json`; no simulated/reconstructed track is substituted
+`round_NN.png`, four eight-case detail pages and a `summary.json`; no simulated/reconstructed track is substituted
 for missing observations. Re-render without ROS using:
 
 ```bash
 python3 swerve_mppi_ros/tests/plot_trajectories.py artifacts/round_01
 ```
 
-The recordings workflow runs three independent rounds in parallel and uploads
-the PNG, CSV, JSON and process logs for each round. These are repeated simulated
-physics tests, not hardware trials or a statistical reliability estimate.
+The recordings workflow runs one serial round of all 32 cases with seed 42;
+there is no round/seed matrix. It uploads the PNGs, CSV, JSON and process logs.
+Core and ROS interface checks remain in the other workflow, which no longer
+repeats the old eleven-case physical run. These are simulated physics tests,
+not hardware trials or a statistical reliability estimate.
+
+All translational routes have 12 m reference length in CI. Interior checkpoints
+at 0.75 m arc-length spacing must be visited in order using independent truth
+(within 0.20 m), so a closed or self-crossing path cannot pass simply by ending
+near its start. Action success without ordered route completion is a failure.
 
 ## Tracking quality gates (fixed before the new physical comparison)
 

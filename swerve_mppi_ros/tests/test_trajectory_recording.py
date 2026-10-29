@@ -8,7 +8,7 @@ from types import SimpleNamespace as NS
 import unittest
 
 from trajectory_recording import Recording, local_pose, path_error
-from trajectory_scenarios import BENCHMARK_CASES, PATHS, scaled_path
+from trajectory_scenarios import BENCHMARK_CASES, PATHS, ordered_checkpoints, scaled_path
 from tracking_quality import evaluate
 from trajectory_speed import observed_speeds
 
@@ -129,13 +129,33 @@ class RecordingTests(unittest.TestCase):
         self.assertTrue(any('path_peak_m' in value for value in evaluate(metadata)[1]))
 
     def test_required_initial_directions_and_dense_curves(self):
-        self.assertEqual(len(BENCHMARK_CASES), 12)
+        self.assertEqual(len(BENCHMARK_CASES), 32)
         self.assertEqual(PATHS['crab'][-1], (0, .8, 0))
         self.assertEqual(PATHS['reverse'][-1], (-.8, 0, 0))
         self.assertGreater(len(PATHS['smooth_s']), 30)
         ys = [p[1] for p in PATHS['smooth_s']]
         self.assertGreater(max(ys), .2)
         self.assertLess(min(ys), -.2)
+
+    def test_complex_paths_preserve_route_order_and_rotations(self):
+        self.assertEqual(len(set(BENCHMARK_CASES)), 32)
+        for name in BENCHMARK_CASES:
+            points = scaled_path(name, 12.)
+            self.assertTrue(all(math.isfinite(v) for p in points for v in p))
+            self.assertAlmostEqual(points[0][0], 0.)
+            self.assertAlmostEqual(points[0][1], 0.)
+            checkpoints = ordered_checkpoints(points)
+            self.assertEqual(len(checkpoints), 0 if name == 'spin' else 15)
+        for name in ('circle_cw', 'circle_ccw', 'figure_eight', 'cloverleaf', 'rounded_rectangle'):
+            points = scaled_path(name, 12.)
+            self.assertLess(math.hypot(points[-1][0], points[-1][1]), 1e-8)
+            self.assertTrue(any(math.hypot(x, y) > .5 for x, y in ordered_checkpoints(points)))
+        self.assertAlmostEqual(PATHS['circle_cw'][-1][2], -2*math.pi)
+        self.assertAlmostEqual(PATHS['circle_ccw'][-1][2], 2*math.pi)
+        self.assertAlmostEqual(PATHS['heading_sweep'][-1][2], math.pi)
+        out_and_back = ordered_checkpoints([(0, 0), (6, 0), (0, 0)])
+        self.assertEqual(out_and_back[:2], [(.75, 0.), (1.5, 0.)])
+        self.assertEqual(out_and_back[-1], (.75, 0.))
 
 
 if __name__ == '__main__':

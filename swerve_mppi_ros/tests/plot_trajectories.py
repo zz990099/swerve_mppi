@@ -21,15 +21,16 @@ from trajectory_scenarios import TITLES
 from trajectory_speed import observed_speeds
 
 
-def plot_round(directory, output=None):
+def plot_round(directory, output=None, case_names=None):
     directory = Path(directory)
     manifest = json.loads((directory/'round.json').read_text())
-    names = manifest['cases']
+    names = manifest['cases'] if case_names is None else case_names
     columns = 4
     rows = math.ceil(len(names)/columns)
     plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 10,
                          'axes.spines.top': False, 'axes.spines.right': False})
-    fig, axes = plt.subplots(rows, columns, figsize=(19.2, rows*4.6), squeeze=False)
+    height = rows*4.6+1.5
+    fig, axes = plt.subplots(rows, columns, figsize=(19.2, height), squeeze=False)
     summaries = []
     speed_norm = Normalize(0, 1.1)
     for ax, name in zip(axes.flat, names):
@@ -83,10 +84,11 @@ def plot_round(directory, output=None):
                xlabel='Initial-body x [m]', ylabel='Initial-body y [m]')
         ax.set_aspect('equal', adjustable='box')
         ax.grid(alpha=.18)
-        passed = data.get('nav2_goal_success', data['goal_success']) and all(
+        passed = data['goal_success'] and data.get('nav2_goal_success', True) and all(
             data.get(k, float('inf')) <= bound for k, bound in TRACKING_LIMITS.items())
         data['tracking_passed'] = bool(passed)
-        ax.set_title(TITLES.get(name, name), loc='left', weight='bold', fontsize=10)
+        number = manifest['cases'].index(name)+1
+        ax.set_title(f'{number:02d}. {TITLES.get(name, name)}', loc='left', weight='bold', fontsize=10)
         ax.text(.98, .98, 'TRACK OK' if passed else 'FAIL', transform=ax.transAxes,
                 ha='right', va='top', color='#15803d' if passed else '#c03221', weight='bold',
                 bbox=dict(facecolor='white', alpha=.9, edgecolor='none'))
@@ -106,18 +108,18 @@ def plot_round(directory, output=None):
     fig.suptitle(f"MPPI / Gazebo physical trajectories — Round {manifest['round']:02d}\n"
                  f"Path: {manifest.get('path_frame', 'odom')} / control: odom | Speed limit {manifest.get('max_speed_m_s') or 0.8:g} m/s | Seed {manifest['seed']}  |  {passed}/{len(names)} tracking checks passed  |  "
                  f"ROS 2 Jazzy + Gazebo Harmonic  |  commit {manifest['commit'][:8]}",
-                 fontsize=17, weight='bold', y=.995)
+                 fontsize=17, weight='bold', y=1-.08/height)
     handles = [Line2D([0], [0], color='#2563b9', linestyle='--', label='Reference path / goal ★'),
                Line2D([0], [0], color='#b63679', label='Gazebo truth: colour = observed speed'),
                Line2D([0], [0], color='#64748b', linestyle=':', label='Wheel odometry'),
                Line2D([0], [0], color='#111827', marker='o', label='Start / initial body +x')]
-    fig.legend(handles=handles, loc='upper center', bbox_to_anchor=(.5, .945),
+    fig.legend(handles=handles, loc='upper center', bbox_to_anchor=(.5, 1-.62/height),
                ncol=4, frameon=False, fontsize=10)
-    fig.tight_layout(rect=(0, .105, 1, .925), h_pad=2.3, w_pad=2.0)
-    color_axis = fig.add_axes([.32, .070, .36, .012])
+    fig.tight_layout(rect=(0, 1.05/height, 1, 1-1.10/height), h_pad=2.3, w_pad=2.0)
+    color_axis = fig.add_axes([.32, .66/height, .36, .12/height])
     bar = fig.colorbar(ScalarMappable(norm=speed_norm, cmap='plasma'), cax=color_axis, orientation='horizontal', extend='max')
     bar.set_label('Truth-derived linear speed [m/s], centred 0.2 s window', fontsize=9)
-    fig.text(.5, .008, 'Fresh simulation per case; axes aligned with initial body; arrows show body yaw. '
+    fig.text(.5, .10/height, 'Fresh simulation per case; axes aligned with initial body; arrows show body yaw. '
              'Failed cases retain partial recordings. Ideal truth localization when map paths are enabled.\n'
              'TRACK OK: completed + path peak <= 10 cm, endpoint <= 20 cm, final yaw <= 5 deg. Other engineering checks remain in JSON. '
              'See result.json for every limit and failure.',
@@ -128,7 +130,13 @@ def plot_round(directory, output=None):
     fig.savefig(temporary, format='png', dpi=160, facecolor='white')
     temporary.replace(output)
     plt.close(fig)
-    (directory/'summary.json').write_text(json.dumps(dict(**manifest, results=summaries), indent=2)+'\n')
+    if case_names is None:
+        (directory/'summary.json').write_text(json.dumps(dict(**manifest, results=summaries), indent=2)+'\n')
+        # Retain the single full-round montage and provide readable detail pages.
+        if len(names) > 12:
+            for start in range(0, len(names), 8):
+                page = directory/f"round_{manifest['round']:02d}_cases_{start+1:02d}_{min(start+8, len(names)):02d}.png"
+                plot_round(directory, page, names[start:start+8])
     return output
 
 
