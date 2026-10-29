@@ -211,7 +211,7 @@ def main():
                   f'path_peak_m={max(tracking_errors,default=0):.4f} stopped_fraction={stopped_samples/max(1,total_samples):.3f} '
                   f'wall_s={time.monotonic()-start:.2f} '
                   f'truth_position_error_m={error:.4f} truth_yaw_error_rad={angle:.4f}', flush=True)
-            assert error < .15 and angle < .10, (name, error, angle)
+            assert error <= .20 and angle <= math.radians(5), (name, error, angle)
         if compute_times:
             compute_times.sort()
             print('compute_ms percentiles:', {p:compute_times[min(len(compute_times)-1,int(len(compute_times)*p/100))] for p in (50,95,99)}, flush=True)

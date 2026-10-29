@@ -10,6 +10,7 @@ import unittest
 from trajectory_recording import Recording, local_pose, path_error
 from trajectory_scenarios import BENCHMARK_CASES, PATHS, scaled_path
 from tracking_quality import evaluate
+from trajectory_speed import observed_speeds
 
 
 def pose(x, y, angle):
@@ -21,6 +22,28 @@ def observation(x, y, angle, seconds):
 
 
 class RecordingTests(unittest.TestCase):
+    def test_observed_average_includes_stops_and_return_distance(self):
+        rows = [dict(sim_time_s=t, truth_x_m=x, truth_y_m=0) for t, x in [(0,0),(1,0),(2,1),(3,0)]]
+        speeds, average, length, duration = observed_speeds(rows)
+        self.assertAlmostEqual(length, 2.)
+        self.assertAlmostEqual(duration, 3.)
+        self.assertAlmostEqual(average, 2/3)
+        self.assertEqual(speeds[0], 0.)
+        with self.assertRaises(ValueError):
+            observed_speeds([rows[0], rows[0]])
+
+    def test_user_tracking_tolerances(self):
+        metadata = dict(scenario='straight', reference=[(0,0,0),(12,0,0)], samples=100,
+                        path_rms_m=.08, path_peak_m=.10, heading_rms_rad=.08,
+                        heading_peak_rad=.15, final_position_error_m=.20,
+                        final_yaw_error_rad=math.radians(5), stopped_fraction=.2, wall_duration_s=20.,
+                        max_request_linear_rate=.9, max_request_angular_rate=1.3, compute_p99_ms=20.)
+        self.assertEqual(evaluate(metadata)[1], [])
+        for key, value in [('path_peak_m', .1001), ('final_position_error_m', .2001),
+                           ('final_yaw_error_rad', math.radians(5.01))]:
+            bad = dict(metadata, **{key:value})
+            self.assertTrue(any(key in failure for failure in evaluate(bad)[1]))
+
     def test_long_paths_preserve_heading_and_ordered_vertices(self):
         for name in BENCHMARK_CASES:
             points = scaled_path(name, 12.)

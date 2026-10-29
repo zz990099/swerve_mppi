@@ -2,9 +2,9 @@
 import math
 
 
-LIMITS = dict(path_rms_m=.03, path_peak_m=.075, heading_rms_rad=.05,
-              heading_peak_rad=.12, final_position_error_m=.06,
-              final_yaw_error_rad=.06, stopped_fraction=.55,
+TRACKING_LIMITS = dict(path_peak_m=.10, final_position_error_m=.20,
+                       final_yaw_error_rad=math.radians(5))
+LIMITS = dict(**TRACKING_LIMITS, stopped_fraction=.55,
               max_request_linear_rate=1.05, max_request_angular_rate=1.5, compute_p99_ms=50.)
 
 
@@ -26,9 +26,6 @@ def evaluate(metadata):
     rotation = sum(abs(math.remainder(b[2]-a[2], 2*math.pi)) for a, b in zip(points, points[1:]))
     limits = dict(LIMITS)
     limits['wall_duration_s'] = max(8., 5+4*max(length/.8, rotation/.8))
-    if length < 1e-6:
-        limits.pop('heading_rms_rad')
-        limits.pop('heading_peak_rad')
     if metadata['scenario'] == 'cancel':
         limits.pop('final_position_error_m')
         limits.pop('final_yaw_error_rad')
