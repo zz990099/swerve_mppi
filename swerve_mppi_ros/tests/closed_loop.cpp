@@ -53,9 +53,11 @@ int main()
       for (int step = 0; step < 800; ++step) {
         Input input;
         input.state = s;
-        input.path = path.local(s.pose);
-        input.goal = path.goal();
-        input.goal_active = path.goal_active();
+        const auto previous_section = path.section();
+        input.path = path.local(s.pose, 3.0, s.velocity);
+        if (path.section() != previous_section) controller.reset();
+        input.goal = path.tracking_goal();
+        input.goal_active = path.tracking_goal_active();
         auto result = controller.compute(input);
         times.push_back(result.compute_ms);
         if (result.status != Status::Ok) throw std::runtime_error("no valid closed-loop command");

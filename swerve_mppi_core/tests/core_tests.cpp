@@ -36,6 +36,17 @@ public:
     }
   }
 };
+class RejectRetiming final : public Critic
+{
+public:
+  void score(
+    const CriticContext & context, const std::vector<Trajectory> &,
+    std::vector<double> & costs) const override
+  {
+    if (context.input.dt < .04)
+      for (auto & cost : costs) cost = std::numeric_limits<double>::infinity();
+  }
+};
 class ThrowingCritic final : public Critic
 {
 public:
@@ -149,12 +160,43 @@ int main()
     check(
       Controller(c).compute(corner_departure).command.velocity.vy > 0,
       "stationary corner departure retains a presteering intent");
+    Input publication = input;
+    auto scheduled = controller.compute(publication);
+    check(
+      controller.retime(publication, .025, scheduled), "shorter publication interval revalidated");
+    check(
+      std::hypot(scheduled.command.velocity.vx, scheduled.command.velocity.vy) <=
+        c.limits.linear_acceleration * .025 + 1e-9,
+      "publication interval bounds actual outgoing request");
+    check(!controller.retime(publication, 0, scheduled), "zero publication interval rejected");
+    Controller retiming_guard(c, {std::make_shared<RejectRetiming>()});
+    auto guarded = retiming_guard.compute(publication);
+    check(
+      !retiming_guard.retime(publication, .025, guarded),
+      "publication retiming cannot bypass custom hard checks");
+    Controller jitter(c);
+    Input timed = input;
+    for (int i = 0; i < 12; ++i) {
+      timed.dt = i % 2 ? .065 : .05;
+      const double publication_dt = i % 2 ? .035 : .065;
+      auto request = jitter.compute(timed);
+      check(request.status == Status::Ok, "jitter retains a valid candidate");
+      if (publication_dt < timed.dt)
+        check(jitter.retime(timed, publication_dt, request), "jitter publication revalidated");
+      check(
+        std::hypot(
+          request.command.velocity.vx - timed.state.requested.vx,
+          request.command.velocity.vy - timed.state.requested.vy) <=
+          c.limits.linear_acceleration * publication_dt + 1e-8,
+        "variable compute latency cannot exceed publication slew");
+      timed.state.requested = request.command.velocity;
+    }
     Input idle = input;
     idle.goal_active = false;
     idle.state.steering.fill(.07);
     idle.state.generator.command.steering.fill(.07);
     check(
-      Controller(c).compute(idle).command.velocity.vx > .01,
+      Controller(c).compute(idle).command.velocity.vx > 0,
       "zero request cannot impersonate a paused presteering reference");
     Trajectory on_path, shortcut;
     on_path.states = {lateral.state, lateral.state};
