@@ -73,7 +73,9 @@ def plot_round(directory, output=None):
                 ha='right', va='top', color='#15803d' if passed else '#c03221', weight='bold',
                 bbox=dict(facecolor='white', alpha=.9, edgecolor='none'))
         if samples:
-            caption = (f"RMS {data['path_rms_m']*100:.1f} cm | final {data['final_position_error_m']*100:.1f} cm\n"
+            length = sum(math.hypot(b[0]-a[0], b[1]-a[1]) for a, b in zip(points, points[1:]))
+            caption = (f"L {length:.1f} m | peak {data['path_peak_m']*100:.1f} cm\n"
+                       f"RMS {data['path_rms_m']*100:.1f} cm | final {data['final_position_error_m']*100:.1f} cm\n"
                        f"yaw {math.degrees(data['final_yaw_error_rad']):.1f} deg | "
                        f"{data['wall_duration_s']:.1f} s | {len(samples)} observations")
             ax.text(.02, .02, caption, transform=ax.transAxes, fontsize=8,
@@ -83,7 +85,7 @@ def plot_round(directory, output=None):
         ax.set_visible(False)
     passed = sum(item.get('status') == 'passed' for item in summaries)
     fig.suptitle(f"MPPI / Gazebo physical trajectories — Round {manifest['round']:02d}\n"
-                 f"Seed {manifest['seed']}  |  {passed}/{len(names)} tracking checks passed  |  "
+                 f"Speed limit {manifest.get('max_speed_m_s') or 0.8:g} m/s | Seed {manifest['seed']}  |  {passed}/{len(names)} tracking checks passed  |  "
                  f"ROS 2 Jazzy + Gazebo Harmonic  |  commit {manifest['commit'][:8]}",
                  fontsize=17, weight='bold', y=.995)
     handles = [Line2D([0], [0], color='#2563b9', linestyle='--', label='Reference path / goal ★'),

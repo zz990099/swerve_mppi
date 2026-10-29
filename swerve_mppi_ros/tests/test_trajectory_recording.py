@@ -8,7 +8,7 @@ from types import SimpleNamespace as NS
 import unittest
 
 from trajectory_recording import Recording, local_pose, path_error
-from trajectory_scenarios import BENCHMARK_CASES, PATHS
+from trajectory_scenarios import BENCHMARK_CASES, PATHS, scaled_path
 from tracking_quality import evaluate
 
 
@@ -21,6 +21,21 @@ def observation(x, y, angle, seconds):
 
 
 class RecordingTests(unittest.TestCase):
+    def test_long_paths_preserve_heading_and_ordered_vertices(self):
+        for name in BENCHMARK_CASES:
+            points = scaled_path(name, 12.)
+            length = sum(math.hypot(b[0]-a[0], b[1]-a[1]) for a, b in zip(points, points[1:]))
+            if name == 'spin':
+                self.assertEqual(points, PATHS[name])
+                continue
+            self.assertAlmostEqual(length, 12.)
+            self.assertAlmostEqual(points[-1][2], PATHS[name][-1][2])
+            self.assertLessEqual(max(math.hypot(b[0]-a[0], b[1]-a[1]) for a, b in zip(points, points[1:])), .050001)
+        loop = scaled_path('closed_loop', 12.)
+        for vertex in [(3., 0., 0.), (3., 3., 0.), (0., 3., 0.)]:
+            self.assertIn(vertex, loop)
+        self.assertIn((6., 0., 0.), scaled_path('out_and_back', 12.))
+
     def test_execution_stream_and_startup_wait_are_distinct_from_tracking_stops(self):
         with TemporaryDirectory() as temporary:
             record = Recording(temporary, 'straight', [(0, 0, 0), (1, 0, 0)], 42,

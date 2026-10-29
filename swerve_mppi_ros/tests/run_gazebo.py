@@ -30,17 +30,28 @@ def stop(process):
         process.wait(timeout=5)
 
 
-def run_case(chassis_root, logs, scenario, seed=None, record=False):
+def run_case(chassis_root, logs, scenario, seed=None, record=False, minimum_length=0., max_speed=None):
     logs.mkdir(parents=True, exist_ok=True)
     launch_options = []
     probe_options = []
-    if seed is not None:
+    if seed is not None or max_speed is not None:
         config = yaml.safe_load((Path(__file__).parents[1]/'config'/'controller.yaml').read_text())
-        config['controller_server']['ros__parameters']['FollowPath']['seed'] = seed
+        if seed is not None:
+            config['controller_server']['ros__parameters']['FollowPath']['seed'] = seed
+        if max_speed is not None:
+            follow = config['controller_server']['ros__parameters']['FollowPath']
+            follow.update(max_speed=max_speed, physical_linear_speed=max_speed)
+            chassis = yaml.safe_load((chassis_root/'swerve_gazebo_sim/config/swerve.yaml').read_text())
+            chassis['control']['max_linear_speed'] = max_speed
+            chassis_path = (logs/'chassis.yaml').resolve()
+            chassis_path.write_text(yaml.safe_dump(chassis))
+            launch_options.append(f'chassis_config:={chassis_path}')
         parameters = (logs/'parameters.yaml').resolve()
         parameters.write_text(yaml.safe_dump(config))
         launch_options.append(f'parameters:={parameters}')
-        probe_options.extend(['--seed', str(seed)])
+        if seed is not None:
+            probe_options.extend(['--seed', str(seed)])
+    probe_options.extend(['--min-path-length', str(minimum_length)])
     if record:
         probe_options.extend(['--output', str(logs.resolve())])
     environment = dict(os.environ, GZ_PARTITION='mppi_'+uuid.uuid4().hex)

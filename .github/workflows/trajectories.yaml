@@ -52,7 +52,7 @@ jobs:
         run: |
           source /opt/ros/jazzy/setup.bash
           source install/local_setup.bash
-          python3 swerve_mppi_ros/tests/run_trajectory_rounds.py --chassis-root companion-chassis --output artifacts --rounds 1 --start-round ${{ matrix.round }}
+          python3 swerve_mppi_ros/tests/run_trajectory_rounds.py --chassis-root companion-chassis --output artifacts --rounds 1 --start-round ${{ matrix.round }} --min-path-length 12 --max-speed 1.0
       - uses: actions/upload-artifact@v4
         if: always()
         with:

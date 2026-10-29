@@ -18,7 +18,7 @@ from diagnostic_msgs.msg import DiagnosticArray
 from swerve_chassis_msgs.msg import ChassisState
 from rclpy.qos import qos_profile_sensor_data
 
-from trajectory_scenarios import PATHS
+from trajectory_scenarios import PATHS, scaled_path
 from trajectory_recording import Recording, stamp
 
 
@@ -35,6 +35,7 @@ def main():
     parser.add_argument('--chassis-root', type=Path, required=True)
     parser.add_argument('--scenario', choices=tuple(PATHS))
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--min-path-length', type=float, default=0.)
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
     if args.output and not args.scenario:
@@ -106,9 +107,10 @@ def main():
         rotation = wrap(yaw(initial_truth.orientation)-yaw(initial.orientation))
         origin = (initial.position.x, initial.position.y,
                   initial_truth.position.x, initial_truth.position.y)
-        for name, points in PATHS.items():
+        for name in PATHS:
             if args.scenario and name != args.scenario:
                 continue
+            points = scaled_path(name, args.min_path_length)
             print(f"START {name}", flush=True)
             base = odom[0].pose.pose
             a, bx, by = yaw(base.orientation), base.position.x, base.position.y
@@ -146,7 +148,13 @@ def main():
                 wait(lambda: execution[0] is not None and max(map(abs,execution[0].wheel_speeds))<.05,5)
                 print('PASS cancellation stops measured wheels',flush=True)
                 continue
-            checkpoints = message.poses[1:-1] if name in ('out_and_back', 'closed_loop') else []
+            # Ordered corner checks use original vertices, not the densified samples.
+            original = PATHS[name]
+            original_length = sum(math.hypot(q[0]-p[0], q[1]-p[1]) for p, q in zip(original, original[1:]))
+            scale = max(1., args.min_path_length/max(original_length, 1e-9))
+            checkpoints = [(bx+math.cos(a)*x*scale-math.sin(a)*y*scale,
+                            by+math.sin(a)*x*scale+math.cos(a)*y*scale)
+                           for x, y, _ in original[1:-1]] if name in ('out_and_back', 'closed_loop') else []
             visited = 0
             tracking_errors=[]
             stopped_samples=0
@@ -182,12 +190,12 @@ def main():
                         stopped_samples+=max(map(abs,execution[0].wheel_speeds))<0.05
                 if visited < len(checkpoints):
                     p = odom[0].pose.pose.position
-                    q = checkpoints[visited].pose.position
-                    if math.hypot(p.x-q.x, p.y-q.y) < .2:
+                    qx, qy = checkpoints[visited]
+                    if math.hypot(p.x-qx, p.y-qy) < .2:
                         visited += 1
                 return result.done()
 
-            wait(finished, 75)
+            wait(finished, max(75., 30+8*args.min_path_length))
             outcome = result.result()
             assert outcome.status == GoalStatus.STATUS_SUCCEEDED and outcome.result.error_code == 0, outcome
             assert visited == len(checkpoints), \

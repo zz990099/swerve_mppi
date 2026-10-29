@@ -40,3 +40,25 @@ TITLES = {
     'closed_loop': 'Ordered square loop',
 }
 BENCHMARK_CASES = tuple(TITLES)
+
+
+def scaled_path(name, minimum_length=0.):
+    """Scale translation only; retain body yaw and densify to <= 5 cm spacing."""
+    if not math.isfinite(minimum_length) or minimum_length < 0:
+        raise ValueError('minimum length must be finite and nonnegative')
+    points = PATHS[name]
+    if minimum_length == 0:
+        return list(points)
+    length = sum(math.hypot(b[0]-a[0], b[1]-a[1]) for a, b in zip(points, points[1:]))
+    if length < 1e-9:
+        return list(points)
+    scale = max(1., minimum_length/length)
+    scaled = [(x*scale, y*scale, yaw) for x, y, yaw in points]
+    result = [scaled[0]]
+    for a, b in zip(scaled, scaled[1:]):
+        count = max(1, math.ceil(math.hypot(b[0]-a[0], b[1]-a[1])/.05))
+        for i in range(1, count+1):
+            t = i/count
+            result.append((a[0]+t*(b[0]-a[0]), a[1]+t*(b[1]-a[1]),
+                           a[2]+t*math.remainder(b[2]-a[2], 2*math.pi)))
+    return result
