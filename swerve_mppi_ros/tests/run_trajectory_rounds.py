@@ -17,6 +17,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--min-path-length', type=float, default=0.)
     parser.add_argument('--max-speed', type=float)
+    parser.add_argument('--path-frame', choices=('map', 'odom'), default='map')
     parser.add_argument('--rounds', type=int, default=3)
     parser.add_argument('--start-round', type=int, default=1)
     parser.add_argument('--seed-base', type=int, default=42)
@@ -39,13 +40,15 @@ def main():
         directory.mkdir(parents=True, exist_ok=False)
         seed = args.seed_base+number-1
         (directory/'round.json').write_text(json.dumps(dict(round=number, seed=seed,
-            commit=commit, odometry_source='wheel translation + ideal Gazebo IMU orientation (no truth input)', minimum_path_length_m=args.min_path_length, max_speed_m_s=args.max_speed, cases=list(args.cases)), indent=2)+'\n')
+            commit=commit, path_frame=args.path_frame, local_costmap_frame='odom',
+            localization_source='ideal Gazebo truth map->odom' if args.path_frame == 'map' else 'none',
+            odometry_source='raw wheel odometry' if args.path_frame == 'map' else 'wheel translation + ideal Gazebo IMU orientation', minimum_path_length_m=args.min_path_length, max_speed_m_s=args.max_speed, cases=list(args.cases)), indent=2)+'\n')
         try:
             for name in args.cases:
                 print(f'ROUND {number} SEED {seed} CASE {name}', flush=True)
                 try:
                     run_case(args.chassis_root.resolve(), directory/name, name,
-                             seed=seed, record=True, minimum_length=args.min_path_length, max_speed=args.max_speed)
+                             seed=seed, record=True, minimum_length=args.min_path_length, max_speed=args.max_speed, path_frame=args.path_frame)
                 except (RuntimeError, TimeoutError) as error:
                     failures.append((number, name, str(error)))
                     print(f'FAIL {number}/{name}: {error}', flush=True)

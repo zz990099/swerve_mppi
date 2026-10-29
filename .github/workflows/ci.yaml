@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zz990099/swerve_gazebo_sim
-          ref: 41f1d73bd04d11f3eddc16f1a39b492db5fd5945
+          ref: 8f986bda64d5b48af012d37cf924328e0b127468
           path: companion-chassis
       - uses: actions/setup-python@v5
         with:
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zz990099/swerve_gazebo_sim
-          ref: 41f1d73bd04d11f3eddc16f1a39b492db5fd5945
+          ref: 8f986bda64d5b48af012d37cf924328e0b127468
           path: companion-chassis
       - name: Install Jazzy and Harmonic dependencies
         run: |

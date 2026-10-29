@@ -104,7 +104,7 @@ def plot_round(directory, output=None):
         ax.set_visible(False)
     passed = sum(item.get('tracking_passed', False) for item in summaries)
     fig.suptitle(f"MPPI / Gazebo physical trajectories — Round {manifest['round']:02d}\n"
-                 f"Speed limit {manifest.get('max_speed_m_s') or 0.8:g} m/s | Seed {manifest['seed']}  |  {passed}/{len(names)} tracking checks passed  |  "
+                 f"Path: {manifest.get('path_frame', 'odom')} / control: odom | Speed limit {manifest.get('max_speed_m_s') or 0.8:g} m/s | Seed {manifest['seed']}  |  {passed}/{len(names)} tracking checks passed  |  "
                  f"ROS 2 Jazzy + Gazebo Harmonic  |  commit {manifest['commit'][:8]}",
                  fontsize=17, weight='bold', y=.995)
     handles = [Line2D([0], [0], color='#2563b9', linestyle='--', label='Reference path / goal ★'),
@@ -118,7 +118,7 @@ def plot_round(directory, output=None):
     bar = fig.colorbar(ScalarMappable(norm=speed_norm, cmap='plasma'), cax=color_axis, orientation='horizontal', extend='max')
     bar.set_label('Truth-derived linear speed [m/s], centred 0.2 s window', fontsize=9)
     fig.text(.5, .008, 'Fresh simulation per case; axes aligned with initial body; arrows show body yaw. '
-             'Failed cases retain partial recordings.\n'
+             'Failed cases retain partial recordings. Ideal truth localization when map paths are enabled.\n'
              'TRACK OK: completed + path peak <= 10 cm, endpoint <= 20 cm, final yaw <= 5 deg. Other engineering checks remain in JSON. '
              'See result.json for every limit and failure.',
              ha='center', fontsize=9, color='#475569')

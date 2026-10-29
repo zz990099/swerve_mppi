@@ -80,6 +80,9 @@ class Recording:
                               'chassis_stamp_s', 'feedback_stamp_s', 'command_stamp_s', 'execution', 'fault', 'generator_valid'] +
                              [f'{field}_{wheel}' for field in ('steering_rad', 'wheel_rad_s',
                               'target_steering_rad', 'target_wheel_rad_s') for wheel in ('fl','fr','rl','rr')])
+        self.tf_file = (self.directory/'map_to_odom.csv').open('w', newline='', buffering=1)
+        self.tf_writer = csv.writer(self.tf_file)
+        self.tf_writer.writerow(['stamp_s', 'x_m', 'y_m', 'yaw_rad'])
         self.imu_file = (self.directory/'imu.csv').open('w', newline='', buffering=1)
         self.imu_writer = csv.writer(self.imu_file)
         self.imu_writer.writerow(['stamp_s', 'yaw_rad', 'angular_z_rad_s'])
@@ -102,6 +105,15 @@ class Recording:
         self.diagnostic_writer = csv.writer(self.diagnostic_file)
         self.diagnostic_writer.writerow(['stamp_s']+list(DIAGNOSTICS))
         self._write_metadata()
+
+    def transforms(self, message):
+        for item in message.transforms:
+            if item.header.frame_id != 'map' or item.child_frame_id != 'odom':
+                continue
+            q = item.transform.rotation
+            angle = math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
+            self.tf_writer.writerow([stamp(item), item.transform.translation.x,
+                                    item.transform.translation.y, angle])
 
     def imu(self, message):
         q = message.orientation
@@ -194,6 +206,7 @@ class Recording:
                                   requested.angular.z if requested else None] + extra)
 
     def close(self, success, reason, compute_times):
+        self.tf_file.close()
         self.imu_file.close()
         self.wheel_odom_file.close()
         self.file.close()

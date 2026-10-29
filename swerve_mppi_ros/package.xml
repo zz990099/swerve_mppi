@@ -9,7 +9,9 @@
   <exec_depend>swerve_gazebo_sim</exec_depend><exec_depend>sensor_msgs</exec_depend>
  <depend>rclcpp</depend><depend>rclcpp_lifecycle</depend><depend>nav2_core</depend><depend>nav2_costmap_2d</depend><depend>pluginlib</depend><depend>std_msgs</depend><depend>geometry_msgs</depend>
  <depend>nav_msgs</depend><depend>diagnostic_msgs</depend>
- <depend>tf2_ros</depend><depend>tf2_geometry_msgs</depend>
+ <depend>tf2_ros</depend>
+  <exec_depend>tf2_msgs</exec_depend>
+ <depend>tf2_geometry_msgs</depend>
  <exec_depend>nav2_controller</exec_depend><exec_depend>nav2_lifecycle_manager</exec_depend><exec_depend>nav2_msgs</exec_depend><exec_depend>lifecycle_msgs</exec_depend><exec_depend>action_msgs</exec_depend><exec_depend>rclpy</exec_depend><exec_depend>launch_ros</exec_depend>
  <test_depend>ament_cmake_gtest</test_depend>
  <export><build_type>ament_cmake</build_type></export>

@@ -30,10 +30,14 @@ def stop(process):
         process.wait(timeout=5)
 
 
-def run_case(chassis_root, logs, scenario, seed=None, record=False, minimum_length=0., max_speed=None):
+def run_case(chassis_root, logs, scenario, seed=None, record=False, minimum_length=0., max_speed=None, path_frame='odom'):
     logs.mkdir(parents=True, exist_ok=True)
     launch_options = []
-    probe_options = []
+    if path_frame == 'map':
+        launch_options.extend(['use_imu_odometry:=false',
+                               'publish_ground_truth_map_tf:=true',
+                               'x:=2.0', 'y:=-1.0', 'yaw:=0.4'])
+    probe_options = ['--path-frame', path_frame]
     if seed is not None or max_speed is not None:
         config = yaml.safe_load((Path(__file__).parents[1]/'config'/'controller.yaml').read_text())
         if seed is not None:

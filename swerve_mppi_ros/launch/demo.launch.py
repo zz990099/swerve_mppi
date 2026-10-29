@@ -13,6 +13,10 @@ def generate_launch_description():
         DeclareLaunchArgument('chassis_config', default_value=PathJoinSubstitution([
             FindPackageShare('swerve_gazebo_sim'), 'config', 'swerve.yaml'])),
         DeclareLaunchArgument('use_imu_odometry', default_value='true'),
+        DeclareLaunchArgument('publish_ground_truth_map_tf', default_value='false'),
+        DeclareLaunchArgument('x', default_value='0'),
+        DeclareLaunchArgument('y', default_value='0'),
+        DeclareLaunchArgument('yaw', default_value='0'),
         DeclareLaunchArgument('headless', default_value='false'),
         DeclareLaunchArgument('publish_ground_truth', default_value='false'),
         DeclareLaunchArgument('parameters', default_value=PathJoinSubstitution([
@@ -23,7 +27,10 @@ def generate_launch_description():
                               'headless': LaunchConfiguration('headless'),
                               'odom_topic': PythonExpression(["'wheel/odom' if '", LaunchConfiguration('use_imu_odometry'), "' == 'true' else 'odom'"]),
                               'publish_odom_tf': PythonExpression(["'false' if '", LaunchConfiguration('use_imu_odometry'), "' == 'true' else 'true'"]),
-                              'publish_ground_truth': LaunchConfiguration('publish_ground_truth')}.items()),
+                              'publish_ground_truth': LaunchConfiguration('publish_ground_truth'),
+                              'publish_ground_truth_map_tf': LaunchConfiguration('publish_ground_truth_map_tf'),
+                              'x': LaunchConfiguration('x'), 'y': LaunchConfiguration('y'),
+                              'yaw': LaunchConfiguration('yaw')}.items()),
         Node(package='ros_gz_bridge', executable='parameter_bridge',
              name='imu_bridge', arguments=['/imu/data@sensor_msgs/msg/Imu[gz.msgs.IMU'],
              parameters=[{'use_sim_time': True}], condition=IfCondition(LaunchConfiguration('use_imu_odometry'))),

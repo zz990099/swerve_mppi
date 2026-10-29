@@ -1,4 +1,4 @@
-"""Physical path-following acceptance; truth is an observer, never controller input."""
+"""Physical path following; optional ideal truth localization via map -> odom."""
 import argparse
 import math
 import sys
@@ -9,6 +9,9 @@ import rclpy
 from rclpy.parameter import Parameter
 from rclpy.action import ActionClient
 from sensor_msgs.msg import Imu
+from tf2_msgs.msg import TFMessage
+from tf2_ros import Buffer, TransformListener
+from rclpy.time import Time
 from nav_msgs.msg import Odometry, Path as PathMessage
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav2_msgs.action import FollowPath
@@ -38,6 +41,7 @@ def main():
     parser.add_argument('--output', type=Path)
     parser.add_argument('--min-path-length', type=float, default=0.)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--path-frame', choices=('map', 'odom'), default='odom')
     args = parser.parse_args()
     if args.output and not args.scenario:
         parser.error('--output requires one --scenario')
@@ -50,6 +54,8 @@ def main():
     rclpy.init()
     node = rclpy.create_node('tracking_acceptance', parameter_overrides=[
         Parameter('use_sim_time', value=True)])
+    tf_buffer = Buffer()
+    tf_listener = TransformListener(tf_buffer, node)
     odom = [None]
     execution = [None]
     compute_times = []
@@ -60,7 +66,7 @@ def main():
     node.create_subscription(ChassisState, '/chassis_controller/state', chassis_state, qos_profile_sensor_data)
     if args.output:
         node.create_subscription(Imu, '/imu/data', lambda m: recording.imu(m) if recording else None, qos_profile_sensor_data)
-        node.create_subscription(Odometry, '/wheel/odom', lambda m: recording.wheel_odometry(m) if recording else None, 10)
+        node.create_subscription(Odometry, '/odom' if args.path_frame == 'map' else '/wheel/odom', lambda m: recording.wheel_odometry(m) if recording else None, 10)
         node.create_subscription(TwistStamped, '/cmd_vel',
             lambda m: recording.command(m, node.get_clock().now().nanoseconds*1e-9)
             if recording is not None else None, 10)
@@ -75,6 +81,9 @@ def main():
     if args.output:
         node.create_subscription(PathMessage, '/FollowPath/prediction',
                                  lambda m: recording.prediction(m) if recording is not None else None, 10)
+    if args.output and args.path_frame == 'map':
+        node.create_subscription(TFMessage, '/tf',
+            lambda m: recording.transforms(m) if recording else None, 100)
     client = ActionClient(node, FollowPath, '/follow_path')
     lifecycle = node.create_client(GetState, '/controller_server/get_state')
     pending_state = [None]
@@ -104,7 +113,8 @@ def main():
 
     try:
         wait(lambda: odom[0] is not None and truth.latest is not None and
-             active(), 90)
+             active() and (args.path_frame == 'odom' or
+                           tf_buffer.can_transform('map', 'base_footprint', Time())), 90)
         # Lifecycle activation alone does not mean DDS actuator feedback has
         # arrived. Establish stopped healthy feedback before measuring a case.
         # These zero commands are sent only before any FollowPath goal.
@@ -134,18 +144,20 @@ def main():
         node.destroy_publisher(recovery)
         initial = odom[0].pose.pose
         initial_truth = truth.latest.pose.pose
-        rotation = wrap(yaw(initial_truth.orientation)-yaw(initial.orientation))
-        origin = (initial.position.x, initial.position.y,
-                  initial_truth.position.x, initial_truth.position.y)
+        rotation = (0. if args.path_frame == 'map' else
+                    wrap(yaw(initial_truth.orientation)-yaw(initial.orientation)))
+        origin = ((0., 0., 0., 0.) if args.path_frame == 'map' else
+                  (initial.position.x, initial.position.y,
+                   initial_truth.position.x, initial_truth.position.y))
         for name in PATHS:
             if args.scenario and name != args.scenario:
                 continue
             points = scaled_path(name, args.min_path_length)
             print(f"START {name}", flush=True)
-            base = odom[0].pose.pose
+            base = truth.latest.pose.pose if args.path_frame == 'map' else odom[0].pose.pose
             a, bx, by = yaw(base.orientation), base.position.x, base.position.y
             message = PathMessage()
-            message.header.frame_id = 'odom'
+            message.header.frame_id = args.path_frame
             message.header.stamp = node.get_clock().now().to_msg()
             for x, y, heading in points:
                 p = PoseStamped()
@@ -156,8 +168,14 @@ def main():
                 p.pose.orientation.w = math.cos((a+heading)/2)
                 message.poses.append(p)
             if args.output:
-                recording = Recording(args.output, name, points, args.seed, base,
-                                      truth.latest.pose.pose, stamp(truth.latest))
+                recording = Recording(args.output, name, points, args.seed, odom[0].pose.pose,
+                                      base if args.path_frame == 'map' else truth.latest.pose.pose, stamp(truth.latest))
+                recording.metadata.update(path_frame=args.path_frame,
+                    map_reference=[(p.pose.position.x, p.pose.position.y, yaw(p.pose.orientation))
+                                   for p in message.poses] if args.path_frame == 'map' else None,
+                    localization_source='ideal truth map->odom' if args.path_frame == 'map' else 'none',
+                    odometry_source='raw wheel' if args.path_frame == 'map' else 'IMU-assisted wheel')
+                recording._write_metadata()
             goal = FollowPath.Goal()
             goal.path = message
             goal.controller_id = 'FollowPath'
@@ -203,7 +221,7 @@ def main():
                 if stamp!=last_truth_stamp:
                     last_truth_stamp=stamp
                     p=observation.pose.pose.position
-                    # Fixed startup transform maps odometry path into independent truth.
+                    # Map paths are already in the fixed truth reference; legacy odom paths use startup alignment.
                     waypoints=[]
                     for item in message.poses:
                         x,y=item.pose.position.x-origin[0],item.pose.position.y-origin[1]
@@ -219,7 +237,8 @@ def main():
                         total_samples+=1
                         stopped_samples+=max(map(abs,execution[0].wheel_speeds))<0.05
                 if visited < len(checkpoints):
-                    p = odom[0].pose.pose.position
+                    p = (truth.latest.pose.pose.position if args.path_frame == 'map'
+                         else odom[0].pose.pose.position)
                     qx, qy = checkpoints[visited]
                     if math.hypot(p.x-qx, p.y-qy) < .2:
                         visited += 1
@@ -227,6 +246,9 @@ def main():
 
             wait(finished, max(75., 30+8*args.min_path_length))
             outcome = result.result()
+            if recording is not None:
+                recording.metadata['nav2_goal_success'] = (outcome.status == GoalStatus.STATUS_SUCCEEDED
+                    and outcome.result.error_code == 0)
             assert outcome.status == GoalStatus.STATUS_SUCCEEDED and outcome.result.error_code == 0, outcome
             assert visited == len(checkpoints), \
                 f'{name} completed before ordered checkpoints: {visited}/{len(checkpoints)}'
@@ -254,6 +276,7 @@ def main():
         if recording is not None:
             recording.close(success, failure_reason, compute_times)
         truth.close()
+        tf_listener.unregister()
         client.destroy()
         node.destroy_node()
         rclpy.shutdown()
