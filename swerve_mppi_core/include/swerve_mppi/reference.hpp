@@ -34,6 +34,7 @@ public:
       s_.end());
     count = s_.size() - 1;
     speed_.resize(count + 1);
+    reasons_.assign(count + 1, 1);
     std::vector<swerve_chassis_core::Joints> wheels(count + 1);
     std::array<double, 4> previous{};
     for (std::size_t i = 0; i <= count; ++i) {
@@ -44,11 +45,23 @@ public:
       double cap = path_.speed_limit(
         s, config_.max_speed, config_.limits.linear_acceleration, config_.approach_gain,
         config_.limits.steering_rate);
-      cap = std::min(cap, config_.max_yaw_rate / std::max(1e-9, std::abs(u.wz)));
-      for (double v : wheels[i].speed)
-        cap = std::min(cap, config_.limits.wheel_speed / std::max(1e-9, std::abs(v)));
+      const double yaw_cap = config_.max_yaw_rate / std::max(1e-9, std::abs(u.wz));
+      if (yaw_cap < cap) {
+        cap = yaw_cap;
+        reasons_[i] = 2;
+      }
+      for (double v : wheels[i].speed) {
+        const double wheel_cap = config_.limits.wheel_speed / std::max(1e-9, std::abs(v));
+        if (wheel_cap < cap) {
+          cap = wheel_cap;
+          reasons_[i] = 4;
+        }
+      }
       for (double corner : corners_)
-        if (std::abs(s - corner) < 1e-8) cap = 0;
+        if (std::abs(s - corner) < 1e-8) {
+          cap = 0;
+          reasons_[i] = 8;
+        }
       speed_[i] = cap;
     }
     // Both target rate and expected servo tracking error constrain arc speed.
@@ -67,27 +80,47 @@ public:
       double cap = config_.max_speed;
       for (std::size_t w = 0; w < 4; ++w) {
         const double delta = std::abs(wheels[i].steering[w] - wheels[i - 1].steering[w]);
+        // A representation change requires braking and measured reorientation,
+        // handled by condition()/Generator and the controller's latched intent.
+        // A permanent zero-speed interval here has no restart condition.
         cap = std::min(
-          cap,
-          delta > swerve_chassis_core::pi / 2 ? 0. : steering_rate * ds / std::max(1e-9, delta));
+          cap, delta > swerve_chassis_core::pi / 2 ? config_.max_speed
+                                                   : steering_rate * ds / std::max(1e-9, delta));
+        if (
+          delta > swerve_chassis_core::pi / 2 &&
+          (branches_.empty() || std::abs(branches_.back() - s_[i - 1]) > 1e-8))
+          branches_.push_back(s_[i - 1]);
         const double dq = std::abs(wheels[i].speed[w] - wheels[i - 1].speed[w]) / ds;
         // q(s)*s_dot is wheel angular speed. This bounds its geometric
         // acceleration term q'(s)*s_dot^2; request slew also bounds s_ddot.
         cap = std::min(cap, std::sqrt(.5 * config_.limits.wheel_acceleration / std::max(1e-9, dq)));
       }
-      speed_[i] = std::min(speed_[i], cap);
-      speed_[i - 1] = std::min(speed_[i - 1], cap);
+      if (cap < speed_[i]) {
+        speed_[i] = cap;
+        reasons_[i] = 16;
+      }
+      if (cap < speed_[i - 1]) {
+        speed_[i - 1] = cap;
+        reasons_[i - 1] = 16;
+      }
     }
-    for (std::size_t i = count; i > 0; --i)
-      speed_[i - 1] = std::min(
-        speed_[i - 1], std::sqrt(
-                         speed_[i] * speed_[i] +
-                         2 * .7 * config_.limits.linear_acceleration * (s_[i] - s_[i - 1])));
-    for (std::size_t i = 1; i <= count; ++i)
-      speed_[i] = std::min(
-        speed_[i], std::sqrt(
-                     speed_[i - 1] * speed_[i - 1] +
-                     2 * .7 * config_.limits.linear_acceleration * (s_[i] - s_[i - 1])));
+    for (std::size_t i = count; i > 0; --i) {
+      const double cap = std::sqrt(
+        speed_[i] * speed_[i] + 2 * .7 * config_.limits.linear_acceleration * (s_[i] - s_[i - 1]));
+      if (cap < speed_[i - 1]) {
+        speed_[i - 1] = cap;
+        reasons_[i - 1] = reasons_[i] | 64;
+      }
+    }
+    for (std::size_t i = 1; i <= count; ++i) {
+      const double cap = std::sqrt(
+        speed_[i - 1] * speed_[i - 1] +
+        2 * .7 * config_.limits.linear_acceleration * (s_[i] - s_[i - 1]));
+      if (cap < speed_[i]) {
+        speed_[i] = cap;
+        reasons_[i] = reasons_[i - 1] | 64;
+      }
+    }
   }
   ReferenceProfile(const ReferenceProfile &) = delete;
   ReferenceProfile & operator=(const ReferenceProfile &) = delete;
@@ -100,6 +133,22 @@ public:
     if (i >= s_.size()) return speed_.back();
     const double t = (arc - s_[i - 1]) / (s_[i] - s_[i - 1]);
     return speed_[i - 1] + t * (speed_[i] - speed_[i - 1]);
+  }
+  // Bit mask: geometry/end=1, yaw=2, wheel speed=4, corner=8,
+  // actuator rate=16, acceleration envelope=64. Interpolation combines neighboring active limits.
+  std::uint32_t limiting_reason(double arc) const
+  {
+    auto it = std::upper_bound(s_.begin(), s_.end(), arc);
+    const auto i = static_cast<std::size_t>(it - s_.begin());
+    if (!i) return reasons_.front();
+    if (i >= s_.size()) return reasons_.back();
+    return reasons_[i - 1] | reasons_[i];
+  }
+  double next_branch(double arc) const
+  {
+    for (double branch : branches_)
+      if (branch >= arc - .025) return std::max(0., branch - arc);
+    return -1;
   }
   Velocity unit(double arc, double body_yaw) const
   {
@@ -123,6 +172,7 @@ private:
   std::vector<Pose> points_;
   PathView path_;
   Config config_;
-  std::vector<double> s_, speed_, corners_;
+  std::vector<double> s_, speed_, corners_, branches_;
+  std::vector<std::uint32_t> reasons_;
 };
 }  // namespace swerve_mppi

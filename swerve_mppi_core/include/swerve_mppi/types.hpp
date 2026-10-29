@@ -71,6 +71,16 @@ struct Diagnostics
   std::size_t invalid_state = 0, invalid_control = 0, actuator_residual = 0;
   std::size_t generator_error = 0, critic_rejected = 0, collision_rejected = 0, critic_errors = 0;
 };
+struct TrackingCost
+{
+  double path = 0, heading = 0, velocity = 0, alignment = 0, effort = 0, progress = 0, goal = 0;
+};
+struct CandidateDiagnostic
+{
+  double total = 0;
+  bool valid = false;
+  TrackingCost tracking;
+};
 struct Result
 {
   Command command;
@@ -81,7 +91,13 @@ struct Result
   bool braking_selected = false;
   bool presteering = false;
   double reference_speed = 0;
+  double noise_scale = 0, branch_distance = -1;
+  std::uint32_t reference_limit = 0;
+  bool reorientation_active = false;
+  // mean, fresh, brake, recovery and selected. Total also includes custom critics.
+  std::array<CandidateDiagnostic, 5> candidates{};
   std::vector<Pose> prediction;
+  std::vector<Velocity> controls;
 };
 struct Trajectory
 {

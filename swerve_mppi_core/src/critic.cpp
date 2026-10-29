@@ -26,6 +26,7 @@ public:
     const CriticContext & c, const std::vector<Trajectory> & batch,
     std::vector<double> & costs) const override
   {
+    if (c.breakdown) c.breakdown->assign(batch.size(), {});
     PathView path(c.input.path);
     std::unique_ptr<ReferenceProfile> local_reference;
     if (!c.reference) local_reference = std::make_unique<ReferenceProfile>(c.input.path, c.config);
@@ -36,12 +37,16 @@ public:
     for (std::size_t k = 0; k < batch.size(); ++k) {
       const auto & t = batch[k];
       if (!t.valid || t.states.empty()) continue;
+      TrackingCost detail;
       double duration = c.config.model_dt * t.controls.size(), progress = start.arc;
       double norm = 1. / std::max<std::size_t>(1, t.controls.size());
-      costs[k] += (w_.steering_change * t.actuator_cost + w_.consistency * t.residual_cost) /
-                  std::max(.1, duration);
+      detail.effort += (w_.steering_change * t.actuator_cost + w_.consistency * t.residual_cost) /
+                       std::max(.1, duration);
       auto previous = c.input.state.requested;
       PathMatch m = start;
+      bool initial_alignment_done = false;
+      for (double v : c.input.state.wheel_speeds)
+        initial_alignment_done |= std::abs(v) >= c.config.limits.stopped_speed;
       for (std::size_t i = 1; i < t.states.size(); ++i) {
         const auto & s = t.states[i];
         m = path.match_ordered(
@@ -64,17 +69,25 @@ public:
         double alignment_error = 0;
         bool stopped = true;
         for (double v : s.wheel_speeds) stopped &= std::abs(v) < c.config.limits.stopped_speed;
+        if (!stopped) initial_alignment_done = true;
         if (stopped && target_speed > .01) {
           const auto request = swerve_chassis_core::inverse(
             c.config.geometry, {u.vx, u.vy, u.wz}, s.generator.command.steering);
           bool reorienting = false;
           for (double v : request.speed)
             reorienting |= std::abs(v) > 2 * c.config.limits.stopped_speed;
+          const auto alignment_intent =
+            !initial_alignment_done && c.initial_intent ? *c.initial_intent : unit;
           const auto intent = swerve_chassis_core::inverse(
-            c.config.geometry, {unit.vx, unit.vy, unit.wz}, s.generator.command.steering);
+            c.config.geometry, {alignment_intent.vx, alignment_intent.vy, alignment_intent.wz},
+            s.generator.command.steering);
           for (std::size_t w = 0; w < 4; ++w) {
             const double error = intent.steering[w] - s.steering[w];
-            alignment_error += std::pow(error / .5, 2) / 4;
+            // Charge the measured initial reorientation until driving starts.
+            // A later stop in this rollout belongs to a future branch event;
+            // charging that angle at every remaining step rewards parking
+            // before the event. Its physical motion still incurs actuator cost.
+            if (!initial_alignment_done) alignment_error += std::pow(std::sin(error) / .5, 2) / 4;
             if (reorienting && std::abs(error) > c.config.limits.tracking_tolerance)
               target_speed = 0;  // Reference time pauses during necessary reorientation.
           }
@@ -88,36 +101,40 @@ public:
               (c.config.limits.linear_acceleration * dt),
             2) +
           std::pow((u.wz - previous.wz) / (c.config.limits.angular_acceleration * dt), 2);
-        costs[k] +=
-          norm * (4 * slack + std::pow(excess_speed / .1, 2) +
-                  w_.reference_velocity * velocity_error * velocity_error +
-                  w_.presteering_alignment * alignment_error +
-                  w_.path_distance * std::pow(m.error / c.config.position_scale, 2) +
-                  w_.path_heading * std::pow(heading / c.config.heading_scale, 2) +
-                  w_.effort * (u.vx * u.vx + u.vy * u.vy + u.wz * u.wz) + w_.smoothness * smooth);
+        detail.path +=
+          norm * (4 * slack + w_.path_distance * std::pow(m.error / c.config.position_scale, 2));
+        detail.heading += norm * w_.path_heading * std::pow(heading / c.config.heading_scale, 2);
+        detail.velocity += norm * (std::pow(excess_speed / .1, 2) +
+                                   w_.reference_velocity * velocity_error * velocity_error);
+        detail.alignment += norm * w_.presteering_alignment * alignment_error;
+        detail.effort +=
+          norm * (w_.effort * (u.vx * u.vx + u.vy * u.vy + u.wz * u.wz) + w_.smoothness * smooth);
         previous = u;
       }
       double reference_distance =
         std::max(.1, std::min(path.length() - start.arc, c.config.max_speed * duration));
-      costs[k] -= w_.progress * (progress - start.arc) / reference_distance;
+      detail.progress -= w_.progress * (progress - start.arc) / reference_distance;
       if (
         checkpoint < path.length() - 1e-5 && checkpoint - start.arc < c.config.approach_distance) {
         // Reaching a mandatory corner is a task objective, even when the full
         // goal is still far away. Otherwise a short horizon can prefer parking
         // just before the corner to avoid paying the future steering cost.
-        costs[k] += w_.goal_position *
-                    std::pow(std::max(0., checkpoint - progress) / c.config.position_scale, 2);
+        detail.goal += w_.goal_position *
+                       std::pow(std::max(0., checkpoint - progress) / c.config.position_scale, 2);
       }
       if (terminal) {
         // Remaining ordered distance replaces direct attraction through a curve/corner.
         double remaining = path.length() - progress;
-        costs[k] += w_.goal_position * std::pow(remaining / c.config.approach_distance, 2);
+        detail.goal += w_.goal_position * std::pow(remaining / c.config.approach_distance, 2);
         if (remaining < .02)
-          costs[k] +=
+          detail.goal +=
             w_.goal_heading *
             std::pow(
               wrap_angle(t.states.back().pose.yaw - c.input.goal.yaw) / c.config.heading_scale, 2);
       }
+      costs[k] += detail.path + detail.heading + detail.velocity + detail.alignment +
+                  detail.effort + detail.progress + detail.goal;
+      if (c.breakdown) (*c.breakdown)[k] = detail;
     }
   }
 
