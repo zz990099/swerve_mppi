@@ -367,6 +367,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     input.state.pose = pose(r.transform(current, r.global_frame).pose);
     (void)velocity(speed);  // Validate Nav2 velocity; wheel feedback anchors actuator prediction.
     input.dt = dt;
+    const auto previous_section = r.path.section();
     const auto local =
       r.path.local(pose(r.transform(current, r.plan_frame).pose), 3.0, input.state.velocity);
     if (r.path.section() != previous_section) r.controller->reset();

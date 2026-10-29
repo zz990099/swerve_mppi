@@ -73,13 +73,10 @@ std::vector<Velocity> Controller::seed(
       stopped && speed > .01 && m.error < .02 &&
       std::abs(wrap_angle(m.pose.yaw - s.pose.yaw)) < .06) {
       const auto nominal = reference.unit(progress, m.pose.yaw);
-      const auto wheels = swerve_chassis_core::inverse(
-        config_.geometry, {nominal.vx, nominal.vy, nominal.wz}, s.generator.command.steering);
-      bool aligning = false;
-      for (std::size_t w = 0; w < 4; ++w)
-        aligning |=
-          std::abs(wheels.steering[w] - s.steering[w]) > config_.limits.tracking_tolerance;
-      if (aligning) desired = {speed * nominal.vx, speed * nominal.vy, speed * nominal.wz};
+      // Retain the nominal direction through the instant driving starts too.
+      // Millimetre position correction at +/-pi/2 can otherwise request the
+      // opposite steering representation immediately after alignment.
+      desired = {speed * nominal.vx, speed * nominal.vy, speed * nominal.wz};
     }
     if (!stopped) initial_intent = false;
     if (intent && stopped && initial_intent) {
@@ -168,7 +165,9 @@ Result Controller::compute(const Input & input)
     if (wheels_stopped && !reorientation_) {
       const auto match = PathView(input.path).match(input.state.pose);
       const double speed = reference->speed(match.arc);
-      auto unit = reference->unit(match.arc, input.state.pose.yaw);
+      const bool nominal_start =
+        match.error < .02 && std::abs(wrap_angle(match.pose.yaw - input.state.pose.yaw)) < .06;
+      auto unit = reference->unit(match.arc, nominal_start ? match.pose.yaw : input.state.pose.yaw);
       const double branch = reference->next_branch(match.arc);
       if (branch >= 0 && branch < .10 && match.error < config_.path_corridor) {
         // Stop before a representation boundary, then select its outgoing
