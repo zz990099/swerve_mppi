@@ -22,6 +22,22 @@ def observation(x, y, angle, seconds):
 
 
 class RecordingTests(unittest.TestCase):
+    def test_decimal_diagnostic_phase_preserves_heading_samples(self):
+        with TemporaryDirectory() as temporary:
+            record = Recording(temporary, 'straight', [(0, 0, 2), (1, 0, 0)], 42,
+                               pose(0, 0, 0), pose(0, 0, 0), 2)
+            diagnostic = NS(header=NS(stamp=NS(sec=2, nanosec=0)), status=[NS(values=[
+                NS(key='compute_ms', value='1.000000'),
+                NS(key='goal_heading_weight', value='0.000000'),
+                NS(key='branch_phase', value='0.000000')])])
+            record.diagnostic(diagnostic)
+            sample = observation(.2, 0, 0, 2)
+            record.observe([sample], sample, None)
+            record.close(False, 'diagnostic contract', [])
+            self.assertEqual(record.heading_phases, [(2., 0., 0)])
+            self.assertEqual(record.metadata['heading_samples'], 1)
+            self.assertAlmostEqual(record.metadata['heading_rms_rad'], 0.)
+
     def test_observed_average_includes_stops_and_return_distance(self):
         rows = [dict(sim_time_s=t, truth_x_m=x, truth_y_m=0) for t, x in [(0,0),(1,0),(2,1),(3,0)]]
         speeds, average, length, duration = observed_speeds(rows)

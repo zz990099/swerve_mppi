@@ -131,7 +131,7 @@ class Recording:
                 continue
             self.diagnostic_writer.writerow([stamp(message)]+[values.get(key,'') for key in DIAGNOSTICS])
             if 'goal_heading_weight' in values:
-                self.heading_phases.append((stamp(message), float(values['goal_heading_weight']), int(values.get('branch_phase', 0))))
+                self.heading_phases.append((stamp(message), float(values['goal_heading_weight']), int(float(values.get('branch_phase', 0)))))
             if 'effective_samples' in values:
                 self.effective_samples.append(float(values['effective_samples']))
 
