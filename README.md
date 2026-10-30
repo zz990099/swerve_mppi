@@ -39,3 +39,8 @@ wheel-rim m/s to joint rad/s. Existing external callers must supply a valid
 execution snapshot, measured joints and matching physical configuration.
 
 [Architecture](ARCHITECTURE.md) · [ROS contract](docs/ROS.md) · [Validation](docs/VALIDATION.md)
+
+External path intermediate yaw is ignored: travel heading follows ordered XY geometry,
+with an independent final yaw. This policy is experimental; see
+[heading contract](docs/GEOMETRIC_HEADING.md) and
+[recorded limitations](docs/GEOMETRIC_HEADING_VALIDATION.md).

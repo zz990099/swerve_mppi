@@ -51,3 +51,13 @@ Run it with a directory containing `cases.txt` and `references/<name>.csv`.
 
 This implementation is experimental until the complete regression and physical
 results have been assessed. Known failures are retained in the validation report.
+
+Numerical reproduction after building the portable target:
+
+```bash
+python3 swerve_mppi_ros/tests/run_portable_recordings.py \
+  --executable build-support/record_portable --output heading-results
+```
+
+The numerical montage uses functional completion and a 0.10 m position corridor;
+it is not a substitute for the existing full physical quality verdict.
