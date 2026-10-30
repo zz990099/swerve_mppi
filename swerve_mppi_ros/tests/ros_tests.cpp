@@ -202,6 +202,24 @@ TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
   publish_state();
   EXPECT_FALSE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
 }
+TEST_F(Nav2PluginTest, GoalCheckerUsesLiveTransformedEndpoint)
+{
+  publish_state();
+  auto ordered = dynamic_cast<OrderedGoalChecker *>(goal.get());
+  ASSERT_NE(ordered, nullptr);
+  const auto query = pose_message({0, 0, .84});
+  const auto historical_target = pose_message({0, 0, .9});
+  ordered->setReady(true, Pose{0, 0, .84});
+  EXPECT_FALSE(goal->isGoalReached(query, historical_target, geometry_msgs::msg::Twist{}));
+  std::this_thread::sleep_for(60ms);
+  EXPECT_TRUE(goal->isGoalReached(query, historical_target, geometry_msgs::msg::Twist{}));
+  ordered->setReady(true, Pose{0, 0, 1.});
+  EXPECT_FALSE(goal->isGoalReached(query, historical_target, geometry_msgs::msg::Twist{}));
+  ordered->setReady(true, Pose{0, 0, .84});
+  std::this_thread::sleep_for(550ms);
+  publish_state();
+  EXPECT_FALSE(goal->isGoalReached(query, historical_target, geometry_msgs::msg::Twist{}));
+}
 TEST_F(Nav2PluginTest, CostmapTfAndInvalidInputs)
 {
   EXPECT_THROW(controller->setPlan(path({})), nav2_core::InvalidPath);

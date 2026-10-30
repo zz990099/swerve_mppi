@@ -117,3 +117,10 @@ At a tightly settled terminal pose, the controller validates a slew-limited
 zero-request hold without exploratory noise. Ordered goal readiness additionally
 requires a zero outgoing request, so Nav2's final zero publication cannot truncate
 a still nonzero requested yaw rate while measured wheels happen to be stopped.
+
+The ordered goal checker also receives the live final endpoint transformed into
+the costmap frame by the controller. Jazzy transforms its retained end pose at
+the path's original timestamp; a changing map-to-odom localization correction
+can otherwise leave the completion target different from the tracking target.
+The live endpoint expires with the same state timeout and does not alter pose,
+velocity or settling tolerances.
