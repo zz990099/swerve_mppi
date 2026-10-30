@@ -59,6 +59,9 @@ public:
     }
     return best;
   }
+  // The caller crops at measured ordered progress. Initialize only within
+  // its adjacent preview, bounded by mandatory corners, never a later loop.
+  PathMatch start_match(Pose pose) const { return match_ordered(pose, 0, std::min(length(), .3)); }
   double turn(std::size_t i) const
   {
     if (!i || i + 1 >= p_.size()) return 0;

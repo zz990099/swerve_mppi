@@ -208,12 +208,15 @@ struct Nav2Controller::Runtime
     add("reorientation_active", result.reorientation_active);
     add("reference_limit", result.reference_limit);
     add("branch_distance", result.branch_distance);
+    add("branch_phase", result.branch_phase);
+    add("completed_transition", result.completed_transition);
     add("route_section", path.section());
     add("route_rotating", path.rotating());
     add("remaining_path_m", path.remaining());
     for (std::size_t i = 0; i < result.candidates.size(); ++i) {
       const std::string prefix =
-        std::array<std::string, 5>{"mean", "fresh", "brake", "recovery", "selected"}[i] + "_";
+        std::array<std::string, 6>{"mean", "fresh", "brake", "slow", "recovery", "selected"}[i] +
+        "_";
       const auto & d = result.candidates[i];
       add(prefix + "valid", d.valid);
       add(prefix + "cost", d.total);
@@ -392,6 +395,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
                    map->getOriginY()};
     }
     auto result = r.controller->compute(input);
+    if (result.completed_transition) r.path.recover(pose(r.transform(current, r.plan_frame).pose));
     if (r.last_output_time > 0 && result.status == Status::Ok) {
       // Nav2 stamps its publication after this callback returns. Reserve one
       // simulation millisecond for that handoff; a later current publication

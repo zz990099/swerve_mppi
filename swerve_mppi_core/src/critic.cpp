@@ -31,13 +31,36 @@ public:
     std::unique_ptr<ReferenceProfile> local_reference;
     if (!c.reference) local_reference = std::make_unique<ReferenceProfile>(c.input.path, c.config);
     const auto & reference = c.reference ? *c.reference : *local_reference;
-    auto start = path.match(c.input.state.pose);
+    auto start = path.start_match(c.input.state.pose);
     const double checkpoint = path.next_corner(start.arc);
     bool terminal = c.input.goal_active && distance(c.input.path.back(), c.input.goal) < .001;
     for (std::size_t k = 0; k < batch.size(); ++k) {
       const auto & t = batch[k];
       if (!t.valid || t.states.empty()) continue;
       TrackingCost detail;
+      if (c.alignment_only && c.initial_intent) {
+        const auto target = swerve_chassis_core::inverse(
+          c.config.geometry, {c.initial_intent->vx, c.initial_intent->vy, c.initial_intent->wz},
+          c.input.state.steering);
+        const double norm = 1. / std::max<std::size_t>(1, t.controls.size());
+        for (std::size_t i = 1; i < t.states.size(); ++i) {
+          const auto & state = t.states[i];
+          detail.path +=
+            norm * w_.path_distance *
+            std::pow(distance(state.pose, c.input.state.pose) / c.config.position_scale, 2);
+          detail.heading +=
+            norm * w_.path_heading *
+            std::pow(
+              wrap_angle(state.pose.yaw - c.input.state.pose.yaw) / c.config.heading_scale, 2);
+          for (std::size_t w = 0; w < 4; ++w)
+            detail.alignment += norm * w_.presteering_alignment *
+                                std::pow((target.steering[w] - state.steering[w]) / .5, 2) / 4;
+        }
+        detail.effort = w_.steering_change * t.actuator_cost + w_.consistency * t.residual_cost;
+        costs[k] += detail.path + detail.heading + detail.alignment + detail.effort;
+        if (c.breakdown) (*c.breakdown)[k] = detail;
+        continue;
+      }
       double duration = c.config.model_dt * t.controls.size(), progress = start.arc;
       double norm = 1. / std::max<std::size_t>(1, t.controls.size());
       detail.effort += (w_.steering_change * t.actuator_cost + w_.consistency * t.residual_cost) /

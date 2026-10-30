@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <swerve_chassis_core/types.hpp>
 #include <vector>
 
@@ -35,6 +36,13 @@ struct GridView
   bool valid() const;
   bool world_to_map(double x, double y, std::size_t & mx, std::size_t & my) const;
 };
+struct MotionReference
+{
+  std::vector<Pose> path;
+  Pose goal;
+  bool goal_active = true;
+  std::optional<Velocity> alignment;
+};
 struct Input
 {
   State state;
@@ -43,6 +51,8 @@ struct Input
   GridView map;
   double dt = 0.05;
   bool goal_active = true;  // Caller enables terminal attraction on the final ordered segment.
+  std::optional<Velocity>
+    alignment;  // Stopped wheel alignment, still rolled out and collision checked.
 };
 struct Command
 {
@@ -94,8 +104,12 @@ struct Result
   double noise_scale = 0, branch_distance = -1;
   std::uint32_t reference_limit = 0;
   bool reorientation_active = false;
-  // mean, fresh, brake, recovery and selected. Total also includes custom critics.
-  std::array<CandidateDiagnostic, 5> candidates{};
+  bool completed_transition = false;
+  int branch_phase =
+    0;  // 0 tracking, 1 body alignment, 2 wheel alignment, 3 departure, 4 heading settle.
+  std::optional<MotionReference> motion_reference;
+  // mean, fresh, brake, slow, recovery and selected. Total also includes custom critics.
+  std::array<CandidateDiagnostic, 6> candidates{};
   std::vector<Pose> prediction;
   std::vector<Velocity> controls;
 };

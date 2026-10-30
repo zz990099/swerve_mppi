@@ -15,6 +15,7 @@ struct CriticContext
   const ReferenceProfile * reference = nullptr;
   std::vector<TrackingCost> * breakdown = nullptr;
   const Velocity * initial_intent = nullptr;
+  bool alignment_only = false;
 };
 class Critic
 {

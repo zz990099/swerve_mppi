@@ -1,4 +1,6 @@
 #pragma once
+#include <optional>
+
 #include "swerve_mppi/path.hpp"
 
 namespace swerve_mppi
@@ -27,8 +29,10 @@ public:
       }
     }
     if (translation.size() > 1 || sections_.empty()) sections_.push_back({translation, false});
-    section_ = progress_ = 0;
+    section_ = 0;
     progress_arc_ = 0;
+    travel_budget_ = .03;
+    previous_pose_.reset();
   }
   bool empty() const { return sections_.empty(); }
   bool goal_active(double terminal_distance = .5) const
@@ -52,8 +56,31 @@ public:
   Pose tracking_goal() const { return sections_[section_].points.back(); }
   bool rotating() const { return !empty() && sections_[section_].rotation; }
   std::size_t section() const { return section_; }
+  // A completed bounded steering maneuver may follow a short chord instead
+  // of every sampled tangent. Rejoin only this section's nearby ordered arc;
+  // never cross an unreached mandatory corner or a rotation section.
+  void recover(const Pose & pose)
+  {
+    if (empty() || rotating()) return;
+    const auto & points = sections_[section_].points;
+    PathView view(points);
+    double hi = std::min(view.length(), progress_arc_ + .35);
+    const double corner = view.next_corner(progress_arc_);
+    if (corner < view.length() - 1e-5 && distance(pose, view.at(corner)) > .015)
+      hi = std::min(hi, std::max(progress_arc_, corner - 1e-4));
+    const auto match = view.match(pose, progress_arc_, hi);
+    if (match.error < .04) {
+      travel_budget_ = std::max(0., travel_budget_ - (match.arc - progress_arc_));
+      progress_arc_ = std::max(progress_arc_, match.arc);
+    }
+  }
   std::vector<Pose> local(const Pose & pose, double length = 3.0, Velocity velocity = {})
   {
+    if (previous_pose_) {
+      const double travel = distance(pose, *previous_pose_);
+      travel_budget_ = std::min(std::max(.35, 1.5 * travel), travel_budget_ + 1.5 * travel);
+    }
+    previous_pose_ = pose;
     // Advance only after measured arrival and stopping. A rotation must attain
     // its yaw before a later translation or rotation becomes visible to MPPI.
     while (section_ + 1 < sections_.size()) {
@@ -64,28 +91,31 @@ public:
       const bool aligned = !current.rotation || std::abs(wrap_angle(pose.yaw - end.yaw)) < .03;
       if (!stopped || !aligned || distance(pose, end) >= .015) break;
       ++section_;
-      progress_ = 0;
       progress_arc_ = 0;
+      travel_budget_ = .03;
     }
     const auto & points = sections_[section_].points;
     if (rotating()) return points;
     PathView view(points);
-    while (progress_ + 1 < points.size()) {
-      const auto & a = points[progress_];
-      const auto & b = points[progress_ + 1];
-      double dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
-      double dot = (pose.x - a.x) * dx + (pose.y - a.y) * dy;
-      double cross = (pose.x - a.x) * dy - (pose.y - a.y) * dx;
-      bool passed = l2 < 1e-12 || (dot >= l2 && cross * cross <= .03 * .03 * l2);
-      bool corner = view.turn(progress_ + 1) >= PathView::stop_angle && distance(pose, b) < .015;
-      if (!passed && !corner) break;
-      progress_arc_ = view.vertex_arc(progress_ + 1);
-      ++progress_;
+    // A missed sampled tangent must not freeze progress on a smooth curve.
+    // The forward search is paid for by measured displacement and cannot pass
+    // an unreached mandatory corner; nearby future loops remain outside it.
+    double corner = view.next_corner(progress_arc_);
+    if (
+      corner < view.length() - 1e-5 && distance(pose, view.at(corner)) < .015 &&
+      std::hypot(velocity.vx, velocity.vy) < .04) {
+      travel_budget_ = std::max(0., travel_budget_ - (corner - progress_arc_));
+      progress_arc_ = corner;
     }
-    double before = view.vertex_arc(progress_);
-    double next = progress_ + 1 < points.size() ? view.vertex_arc(progress_ + 1) : before;
-    auto projected = view.match(pose, before, next);
-    progress_arc_ = std::max(progress_arc_, projected.arc);
+    double hi = std::min(view.length(), progress_arc_ + travel_budget_);
+    corner = view.next_corner(progress_arc_);
+    if (corner < view.length() - 1e-5 && distance(pose, view.at(corner)) > .015)
+      hi = std::min(hi, std::max(progress_arc_, corner - 1e-4));
+    const auto projected = view.match(pose, progress_arc_, hi);
+    if (projected.error < .04) {
+      travel_budget_ = std::max(0., travel_budget_ - (projected.arc - progress_arc_));
+      progress_arc_ = std::max(progress_arc_, projected.arc);
+    }
     double end = std::min(view.length(), progress_arc_ + length);
     std::vector<Pose> out{view.at(progress_arc_)};
     for (std::size_t i = 1; i < points.size(); ++i) {
@@ -103,7 +133,8 @@ private:
     bool rotation = false;
   };
   std::vector<Section> sections_;
-  std::size_t section_ = 0, progress_ = 0;
-  double progress_arc_ = 0;
+  std::size_t section_ = 0;
+  double progress_arc_ = 0, travel_budget_ = .03;
+  std::optional<Pose> previous_pose_;
 };
 }  // namespace swerve_mppi

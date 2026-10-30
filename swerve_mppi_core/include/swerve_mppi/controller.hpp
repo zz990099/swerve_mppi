@@ -16,6 +16,15 @@ public:
   void reset();
 
 private:
+  void clear_optimization();
+  Result compute_tracking(const Input & input);
+  struct BranchEvent
+  {
+    Pose origin, exit;
+    Velocity alignment;
+    int phase = 1;
+  };
+  std::optional<BranchEvent> branch_;
   std::vector<Velocity> seed(
     const Input & input, const ReferenceProfile & reference,
     const std::optional<Velocity> & intent = {}) const;

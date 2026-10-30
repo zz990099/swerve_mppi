@@ -27,7 +27,7 @@ Controller::Controller(Config config, Critics critics)
       }))
     throw std::invalid_argument("at least one non-null critic is required");
 }
-void Controller::reset()
+void Controller::clear_optimization()
 {
   warm_.clear();
   warm_elapsed_ = 0;
@@ -35,13 +35,18 @@ void Controller::reset()
   random_.seed(config_.seed);
   normal_.reset();
 }
+void Controller::reset()
+{
+  clear_optimization();
+  branch_.reset();
+}
 std::vector<Velocity> Controller::seed(
   const Input & input, const ReferenceProfile & reference,
   const std::optional<Velocity> & intent) const
 {
   State s = input.state;
   PathView path(input.path);
-  double progress = path.match(s.pose).arc;
+  double progress = path.start_match(s.pose).arc;
   std::vector<Velocity> out;
   out.reserve(config_.horizon);
   bool initial_intent = true;
@@ -96,7 +101,130 @@ std::vector<Velocity> Controller::seed(
   }
   return out;
 }
-Result Controller::compute(const Input & input)
+Result Controller::compute(const Input & source)
+{
+  const auto begin = std::chrono::steady_clock::now();
+  Input input = source;
+  bool stopped = true;
+  for (double v : source.state.wheel_speeds) stopped &= std::abs(v) < config_.limits.stopped_speed;
+  // Branch events are short, ordered maneuvers in the same continuous twist
+  // space. Their location and exit are held until measured completion.
+  if (
+    !branch_ && stopped && !source.path.empty() && source.path.size() <= 4096 &&
+    model_.valid(source.state) &&
+    std::all_of(source.path.begin(), source.path.end(), [](Pose p) { return finite(p); })) {
+    try {
+      PathView path(source.path);
+      ReferenceProfile reference(source.path, config_);
+      const auto match = path.start_match(source.state.pose);
+      const double boundary = reference.next_branch(match.arc);
+      if (
+        boundary >= 0 && boundary < .10 && match.error < 2 * config_.path_corridor &&
+        reference.speed(match.arc) > .01) {
+        const double departure =
+          std::min(path.length(), match.arc + boundary + std::max(.08, boundary + .04));
+        const Pose exit = path.at(departure);
+        const double dx = exit.x - source.state.pose.x, dy = exit.y - source.state.pose.y;
+        const double length = std::hypot(dx, dy);
+        Velocity intent{
+          std::cos(exit.yaw) * dx + std::sin(exit.yaw) * dy,
+          -std::sin(exit.yaw) * dx + std::cos(exit.yaw) * dy, 0};
+        if (length > 1e-4) {
+          intent.vx /= length;
+          intent.vy /= length;
+        }
+        const auto target = swerve_chassis_core::inverse(
+          config_.geometry, {intent.vx, intent.vy, 0}, source.state.steering);
+        bool crossing = false;
+        for (std::size_t w = 0; w < 4; ++w)
+          crossing |=
+            std::abs(target.steering[w] - source.state.steering[w]) > swerve_chassis_core::pi / 2;
+        bool corridor = true;
+        for (int i = 1; i <= 10; ++i) {
+          const double u = i / 10.;
+          Pose point{source.state.pose.x + u * dx, source.state.pose.y + u * dy, exit.yaw};
+          corridor &=
+            path.match(point, match.arc, departure).error < std::max(.025, match.error + .005);
+        }
+        if (
+          crossing && corridor && length > .02 && path.next_corner(match.arc) >= departure &&
+          std::abs(wrap_angle(exit.yaw - source.state.pose.yaw)) < config_.heading_corridor) {
+          Pose origin = source.state.pose;
+          origin.yaw = exit.yaw;
+          branch_ = BranchEvent{origin, exit, intent, 1};
+          clear_optimization();
+        }
+      }
+    } catch (...) {
+      // Normal input validation and failure diagnostics remain authoritative.
+    }
+  }
+  bool completed = false;
+  if (branch_) {
+    auto & event = *branch_;
+    if (
+      event.phase == 1 && stopped &&
+      std::abs(wrap_angle(source.state.pose.yaw - event.origin.yaw)) < .03) {
+      event.phase = 2;
+      clear_optimization();
+    }
+    if (event.phase == 2 && stopped) {
+      const auto target = swerve_chassis_core::inverse(
+        config_.geometry, {event.alignment.vx, event.alignment.vy, event.alignment.wz},
+        source.state.steering);
+      bool aligned = true;
+      for (std::size_t w = 0; w < 4; ++w)
+        aligned &= std::abs(target.steering[w] - source.state.steering[w]) <
+                   .8 * config_.limits.tracking_tolerance;
+      if (aligned) {
+        event.phase = 3;
+        clear_optimization();
+      }
+    }
+    if (event.phase == 3 && distance(source.state.pose, event.exit) < .04) {
+      event.origin = source.state.pose;
+      event.origin.yaw = event.exit.yaw;
+      event.phase = 4;
+      clear_optimization();
+    }
+    if (
+      event.phase == 4 && stopped &&
+      std::abs(wrap_angle(source.state.pose.yaw - event.exit.yaw)) < .01) {
+      branch_.reset();
+      clear_optimization();
+      completed = true;
+    }
+  }
+  int phase = 0;
+  if (completed) {
+    // Hold this measured checkpoint for the handoff cycle. The caller rejoins
+    // its ordered route before the following compute; no stale crop can pull
+    // the robot back toward an earlier sampled tangent.
+    phase = 4;
+    input.path = {source.state.pose};
+    input.goal = source.state.pose;
+    input.goal_active = true;
+  }
+  if (branch_) {
+    const auto & event = *branch_;
+    phase = event.phase;
+    input.path =
+      phase == 3 ? std::vector<Pose>{event.origin, event.exit} : std::vector<Pose>{event.origin};
+    input.goal = phase == 3 ? event.exit : event.origin;
+    input.goal_active = true;
+    if (phase == 2) input.alignment = event.alignment;
+  }
+  auto result = compute_tracking(input);
+  result.branch_phase = phase;
+  result.completed_transition = completed;
+  if (phase)
+    result.motion_reference =
+      MotionReference{input.path, input.goal, input.goal_active, input.alignment};
+  result.compute_ms =
+    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+  return result;
+}
+Result Controller::compute_tracking(const Input & input)
 {
   const auto begin = std::chrono::steady_clock::now();
   Result result;
@@ -107,8 +235,9 @@ Result Controller::compute(const Input & input)
   };
   if (
     input.path.empty() || input.path.size() > 4096 || !model_.valid(input.state) ||
-    !finite(input.state.velocity) || !finite(input.goal) || !std::isfinite(input.dt) ||
-    input.dt <= 0 || input.dt > 1 ||
+    !finite(input.state.velocity) || !finite(input.goal) ||
+    (input.alignment && !finite(*input.alignment)) || !std::isfinite(input.dt) || input.dt <= 0 ||
+    input.dt > 1 ||
     std::any_of(input.path.begin(), input.path.end(), [](Pose p) { return !finite(p); }) ||
     !std::isfinite(PathView(input.path).length())) {
     result.diagnostics.invalid_input = 1;
@@ -163,7 +292,7 @@ Result Controller::compute(const Input & input)
       }
     }
     if (wheels_stopped && !reorientation_) {
-      const auto match = PathView(input.path).match(input.state.pose);
+      const auto match = PathView(input.path).start_match(input.state.pose);
       const double speed = reference->speed(match.arc);
       const bool nominal_start =
         match.error < .02 && std::abs(wrap_angle(match.pose.yaw - input.state.pose.yaw)) < .06;
@@ -176,6 +305,17 @@ Result Controller::compute(const Input & input)
         unit = reference->unit(departure, PathView(input.path).at(departure).yaw);
       }
       Velocity intent{speed * unit.vx, speed * unit.vy, speed * unit.wz};
+      if (!nominal_start) {
+        // Reorientation must preserve the same recovery direction as the
+        // feedback seed. Latching only the tangent while off the path makes
+        // alignment and cross-track correction request opposite branches.
+        const double ex = config_.cross_gain * (match.pose.x - input.state.pose.x);
+        const double ey = config_.cross_gain * (match.pose.y - input.state.pose.y);
+        intent.vx += std::cos(input.state.pose.yaw) * ex + std::sin(input.state.pose.yaw) * ey;
+        intent.vy += -std::sin(input.state.pose.yaw) * ex + std::cos(input.state.pose.yaw) * ey;
+        intent.wz += 2.5 * wrap_angle(match.pose.yaw - input.state.pose.yaw);
+        intent = model_.project(intent);
+      }
       if (std::hypot(intent.vx, intent.vy) + std::abs(intent.wz) > .01) {
         const auto target = swerve_chassis_core::inverse(
           config_.geometry, {intent.vx, intent.vy, intent.wz}, input.state.steering);
@@ -186,7 +326,9 @@ Result Controller::compute(const Input & input)
             reorientation_ = intent;
       }
     }
-    context.initial_intent = reorientation_ ? &*reorientation_ : nullptr;
+    context.initial_intent =
+      input.alignment ? &*input.alignment : (reorientation_ ? &*reorientation_ : nullptr);
+    context.alignment_only = input.alignment.has_value();
     for (auto & critic : critics_) {
       try {
         critic->prepare(context);
@@ -196,7 +338,18 @@ Result Controller::compute(const Input & input)
       }
     }
     auto fresh = seed(input, *reference, reorientation_);
-    const double reference_arc = PathView(input.path).match(input.state.pose).arc;
+    if (input.alignment) {
+      const auto target = swerve_chassis_core::inverse(
+        config_.geometry, {input.alignment->vx, input.alignment->vy, input.alignment->wz},
+        input.state.steering);
+      double peak = 1e-9;
+      for (double v : target.speed) peak = std::max(peak, std::abs(v));
+      const double scale = .5 * config_.limits.stopped_speed / peak;
+      fresh.assign(
+        config_.horizon,
+        {scale * input.alignment->vx, scale * input.alignment->vy, scale * input.alignment->wz});
+    }
+    const double reference_arc = PathView(input.path).start_match(input.state.pose).arc;
     result.reference_speed = reference->speed(reference_arc);
     result.reference_limit = reference->limiting_reason(reference_arc);
     result.branch_distance = reference->next_branch(reference_arc);
@@ -234,8 +387,9 @@ Result Controller::compute(const Input & input)
     result.noise_scale = noise_scale * alignment;
     bool rotation_only = PathView(input.path).length() < 1e-6;
     const bool hold_rotation_position =
-      rotation_only && std::abs(wrap_angle(input.path.back().yaw - input.state.pose.yaw)) > .1;
-    auto mean = !reorientation_ && warm_.size() == config_.horizon ? warm_ : fresh;
+      rotation_only && std::abs(wrap_angle(input.path.back().yaw - input.state.pose.yaw)) > .02;
+    auto mean =
+      !input.alignment && !reorientation_ && warm_.size() == config_.horizon ? warm_ : fresh;
     auto score = [&](const std::vector<Trajectory> & traces) {
       std::vector<double> costs(traces.size(), 0);
       std::vector<Rejection> rejected(traces.size(), Rejection::None);
@@ -297,14 +451,20 @@ Result Controller::compute(const Input & input)
         // A short validated departure can make progress without committing
         // the entire horizon through another steering event. It is scored
         // alongside the full seed and brake, never forced onto the executor.
-        if (k == 3) {
+        if (k == 3)
+          for (auto & u : candidate) {
+            u.vx *= .7;
+            u.vy *= .7;
+            u.wz *= .7;
+          }
+        if (k == 4) {
           candidate = fresh;
           for (std::size_t i = std::min<std::size_t>(5, candidate.size()); i < candidate.size();
                ++i)
             candidate[i] = {};
         }
         Velocity noise;
-        if (k >= 4 && !reorientation_)
+        if (k >= 5 && !reorientation_ && !input.alignment)
           for (auto & u : candidate) {
             const double a = config_.noise_correlation, b = std::sqrt(1 - a * a);
             noise = {
@@ -325,7 +485,7 @@ Result Controller::compute(const Input & input)
         batch.push_back(model_.rollout(input.state, condition(std::move(candidate))));
       }
       const auto costs = score(batch);
-      for (std::size_t k = 0; k < std::min<std::size_t>(4, batch.size()); ++k)
+      for (std::size_t k = 0; k < std::min<std::size_t>(5, batch.size()); ++k)
         result.candidates[k] = {
           costs[k], std::isfinite(costs[k]),
           breakdown.size() == batch.size() ? breakdown[k] : TrackingCost{}};
@@ -336,7 +496,7 @@ Result Controller::compute(const Input & input)
         best = costs[winner];
         selected = batch[winner].controls;
         selected_trace = batch[winner];
-        result.candidates[4] = {
+        result.candidates[5] = {
           best, true, breakdown.size() == batch.size() ? breakdown[winner] : TrackingCost{}};
         result.braking_selected = winner == 2;
       }
@@ -360,7 +520,7 @@ Result Controller::compute(const Input & input)
       const double cost = score(update).front();
       if (cost <= best + .02) {
         best = cost;
-        result.candidates[4] = {cost, true, breakdown.size() == 1 ? breakdown[0] : TrackingCost{}};
+        result.candidates[5] = {cost, true, breakdown.size() == 1 ? breakdown[0] : TrackingCost{}};
         selected = weighted;
         selected_trace = std::move(update.front());
         result.braking_selected = winner == 2 && result.effective_samples < 1 + 1e-9;
@@ -411,9 +571,17 @@ bool Controller::retime(const Input & input, double dt, Result & result)
     if (!trace.valid) return false;
     auto timed = input;
     timed.dt = dt;
+    if (result.motion_reference) {
+      timed.path = result.motion_reference->path;
+      timed.goal = result.motion_reference->goal;
+      timed.goal_active = result.motion_reference->goal_active;
+      timed.alignment = result.motion_reference->alignment;
+    }
     ReferenceProfile reference(timed.path, config_);
     CriticContext context{timed, config_, &reference};
-    context.initial_intent = reorientation_ ? &*reorientation_ : nullptr;
+    context.initial_intent =
+      timed.alignment ? &*timed.alignment : (reorientation_ ? &*reorientation_ : nullptr);
+    context.alignment_only = timed.alignment.has_value();
     std::vector<TrackingCost> breakdown;
     context.breakdown = &breakdown;
     std::vector<Trajectory> batch{trace};
@@ -426,7 +594,7 @@ bool Controller::retime(const Input & input, double dt, Result & result)
     result.command.velocity = controls.front();
     result.controls = controls;
     result.cost = costs.front();
-    result.candidates[4] = {
+    result.candidates[5] = {
       result.cost, true, breakdown.size() == 1 ? breakdown[0] : TrackingCost{}};
     result.prediction.clear();
     for (const auto & state : trace.states) result.prediction.push_back(state.pose);
