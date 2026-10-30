@@ -13,8 +13,8 @@ DIAGNOSTICS = ('compute_ms', 'cost', 'evaluated', 'effective_samples', 'invalid_
                'invalid_control', 'actuator_residual', 'generator_error', 'critic_rejected',
                'collision_rejected', 'critic_errors', 'controller_errors', 'braking_selected', 'presteering',
                'reference_speed', 'noise_scale', 'reorientation_active', 'reference_limit',
-               'branch_distance', 'route_section', 'route_rotating', 'remaining_path_m') + tuple(
-    f'{candidate}_{field}' for candidate in ('mean', 'fresh', 'brake', 'recovery', 'selected')
+               'branch_distance', 'branch_phase', 'completed_transition', 'route_section', 'route_rotating', 'remaining_path_m') + tuple(
+    f'{candidate}_{field}' for candidate in ('mean', 'fresh', 'brake', 'slow', 'recovery', 'selected')
     for field in ('valid', 'cost', 'path', 'heading', 'velocity', 'alignment', 'effort', 'progress', 'goal'))
 
 def heading(pose):
@@ -60,6 +60,9 @@ class Recording:
         self.last_pose = None
         self.heading_errors = []
         self.last_request = None
+        self.last_publication = None
+        self.max_feedback_linear_rate = 0.
+        self.max_feedback_angular_rate = 0.
         self.effective_samples = []
         self.max_request_linear_rate = 0.
         self.max_request_angular_rate = 0.
@@ -129,8 +132,18 @@ class Recording:
                 self.effective_samples.append(float(values['effective_samples']))
 
     def command(self, message, observer_stamp):
-        self.command_writer.writerow([stamp(message), observer_stamp, message.twist.linear.x,
-                                      message.twist.linear.y, message.twist.angular.z])
+        timestamp = stamp(message)
+        request = (message.twist.linear.x, message.twist.linear.y, message.twist.angular.z)
+        self.command_writer.writerow([timestamp, observer_stamp, *request])
+        if self.last_publication is not None:
+            previous_time, previous = self.last_publication
+            dt = timestamp-previous_time
+            if dt > 1e-6:
+                self.max_request_linear_rate = max(self.max_request_linear_rate,
+                    math.hypot(request[0]-previous[0], request[1]-previous[1])/dt)
+                self.max_request_angular_rate = max(self.max_request_angular_rate,
+                    abs(request[2]-previous[2])/dt)
+        self.last_publication = (timestamp, request)
 
     def execution(self, message):
         timestamp = stamp(message)
@@ -186,9 +199,9 @@ class Recording:
                     previous_time, previous, fault = self.last_request
                     dt = command_time-previous_time
                     if dt > 1e-6 and not fault and not execution.fault:
-                        self.max_request_linear_rate = max(self.max_request_linear_rate,
+                        self.max_feedback_linear_rate = max(self.max_feedback_linear_rate,
                             math.hypot(request[0]-previous[0],request[1]-previous[1])/dt)
-                        self.max_request_angular_rate = max(self.max_request_angular_rate,
+                        self.max_feedback_angular_rate = max(self.max_feedback_angular_rate,
                             abs(request[2]-previous[2])/dt)
                 self.last_request = (command_time, request, execution.fault)
                 extra = [stamp(execution), execution.feedback_stamp.sec+execution.feedback_stamp.nanosec*1e-9, command_time, execution.execution, execution.fault, int(execution.generator_valid)] + list(
@@ -227,7 +240,9 @@ class Recording:
                                  heading_rms_rad=math.sqrt(sum(v*v for v in self.heading_errors)/count),
                                  heading_peak_rad=max(self.heading_errors),
                                  max_request_linear_rate=self.max_request_linear_rate,
-                                 max_request_angular_rate=self.max_request_angular_rate)
+                                 max_request_angular_rate=self.max_request_angular_rate,
+                                 max_feedback_linear_rate=self.max_feedback_linear_rate,
+                                 max_feedback_angular_rate=self.max_feedback_angular_rate)
         if compute_times:
             ordered = sorted(compute_times)
             self.metadata['compute_ms'] = {
