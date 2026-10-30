@@ -178,6 +178,23 @@ TEST_F(Nav2PluginTest, RequestSlewUsesPublishedOutputWhenFeedbackLags)
     previous = current;
   }
 }
+TEST_F(Nav2PluginTest, FutureSnapshotDoesNotEraseFreshValidatedFeedback)
+{
+  controller->setPlan(path({{0, 0, 0}, {1, 0, 0}}));
+  compute();
+  observed.header.stamp = (source->now() + rclcpp::Duration::from_seconds(10.)).to_msg();
+  observed.feedback_stamp = observed.header.stamp;
+  states->publish(observed);
+  spin(20);
+  geometry_msgs::msg::PoseStamped current;
+  current.header.frame_id = "odom";
+  current.pose = pose_message({});
+  EXPECT_NO_THROW(controller->computeVelocityCommands(current, {}, goal.get()));
+  // Ignoring a future sample cannot refresh the age of the retained snapshot.
+  spin(550);
+  EXPECT_THROW(
+    controller->computeVelocityCommands(current, {}, goal.get()), nav2_core::NoValidControl);
+}
 TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
 {
   controller->setPlan(path({{0, 0, 0}, {0.5, 0.5, 0.5}}));

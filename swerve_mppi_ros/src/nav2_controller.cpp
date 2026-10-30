@@ -259,19 +259,21 @@ void Nav2Controller::configure(
       try {
         auto f = feedback(msg, r.config);
         const double stamp = seconds(msg.header.stamp);
-        if (r.node()->now().seconds() < r.state_stamp) {
+        const double now = r.node()->now().seconds();
+        if (r.last_time > 0 && now < r.last_time) {
           r.measured.reset();
           r.stop();
         }
-        if (stamp > r.node()->now().seconds() + 0.01) {
-          r.measured.reset();
-          return;
-        }
+        // A clock/state delivery skew must not erase a still-fresh validated
+        // snapshot. Reject the future sample; normal control-time age checks
+        // still expire the retained state and detect actual clock rewinds.
+        if (stamp > now + .01 || f.feedback_stamp > now + .01) return;
         if (r.measured && stamp <= r.state_stamp) return;
         r.measured = f;
         r.state_stamp = seconds(msg.header.stamp);
         r.state_wall = Steady::now();
-      } catch (const std::invalid_argument &) {
+      } catch (const std::invalid_argument & e) {
+        RCLCPP_WARN(r.node()->get_logger(), "Rejected chassis snapshot: %s", e.what());
         r.measured.reset();
       }
     });

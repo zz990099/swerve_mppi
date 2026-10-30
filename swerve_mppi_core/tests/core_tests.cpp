@@ -227,6 +227,23 @@ int main()
     check(
       Controller(c, {std::make_shared<Reject>()}).compute(settled).status == Status::NoSolution,
       "terminal hold remains subject to hard rejection");
+    auto precise_settle = settled;
+    precise_settle.state.requested = {};
+    precise_settle.path = {{0, 0, .006}};
+    precise_settle.goal = precise_settle.path.back();
+    precise_settle.precise_heading = true;
+    const auto precise_request = Controller(c).compute(precise_settle);
+    check(
+      precise_request.status == Status::Ok && precise_request.command.velocity.wz > 1e-4,
+      "terminal hold must not park inside an unfinished precise heading transition");
+    std::array<double, 4> lateral_boundary;
+    lateral_boundary.fill(-swerve_chassis_core::pi / 2);
+    const auto tiny_lateral = model.condition({-1e-9, -.0025, 0}, {}, lateral_boundary, .05);
+    const auto tiny_wheels = swerve_chassis_core::inverse(
+      c.geometry, {tiny_lateral.vx, tiny_lateral.vy, tiny_lateral.wz}, lateral_boundary);
+    check(
+      tiny_lateral.vx < 0 && tiny_wheels.steering[0] > 0,
+      "conditioning preserves a tiny component that selects the lateral steering branch");
     Input alignment = input;
     alignment.path = {{0, 0, .03}};
     alignment.goal = {0, 0, .03};

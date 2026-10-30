@@ -318,7 +318,8 @@ Result Controller::compute_tracking(const Input & input)
   std::vector<TrackingCost> breakdown;
   CriticContext context{input, config_, nullptr, &breakdown};
   const bool terminal = input.goal_active && distance(input.path.back(), input.goal) < 0.001;
-  const bool terminal_hold = terminal && distance(input.state.pose, input.goal) < .015 &&
+  const bool terminal_hold = terminal && !input.precise_heading && !input.alignment &&
+                             distance(input.state.pose, input.goal) < .015 &&
                              std::abs(wrap_angle(input.state.pose.yaw - input.goal.yaw)) < .01 &&
                              std::hypot(input.state.velocity.vx, input.state.velocity.vy) < .035 &&
                              std::abs(input.state.velocity.wz) < .035;

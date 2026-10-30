@@ -82,9 +82,9 @@ Velocity Model::condition(
     previous.vx + ratio * (desired.vx - previous.vx),
     previous.vy + ratio * (desired.vy - previous.vy),
     previous.wz + ratio * (desired.wz - previous.wz)};
-  if (std::abs(result.vx) < 1e-8) result.vx = 0;
-  if (std::abs(result.vy) < 1e-8) result.vy = 0;
-  if (std::abs(result.wz) < 1e-8) result.wz = 0;
+  // Even a tiny component can select the bounded steering representation
+  // near +/- pi/2. Snapping it to zero after conditioning can reverse every
+  // wheel's alignment target relative to the retained full-size intent.
   return result;
 }
 bool Model::valid(const State & s) const

@@ -124,3 +124,15 @@ the path's original timestamp; a changing map-to-odom localization correction
 can otherwise leave the completion target different from the tracking target.
 The live endpoint expires with the same state timeout and does not alter pose,
 velocity or settling tolerances.
+
+Terminal request holding is disabled during precise internal heading alignment:
+its 0.01 rad terminal neighborhood cannot satisfy a transition that still needs
+0.003 rad alignment. Request conditioning also retains small twist components;
+rounding a component to zero near +/- pi/2 changes the steering representation
+and can keep measured wheel alignment waiting for a different target forever.
+
+A future-dated chassis sample is rejected without erasing an already validated,
+still-fresh snapshot. The original control-time age limits still expire that
+snapshot; a genuine clock rewind is checked against the last control time.
+Malformed snapshots and stale feedback continue to stop control. This avoids
+turning asynchronous clock/state delivery into an unnecessary Nav2 zero pulse.
