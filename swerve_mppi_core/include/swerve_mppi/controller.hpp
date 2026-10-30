@@ -23,6 +23,7 @@ private:
     Pose origin, exit;
     Velocity alignment;
     int phase = 1;
+    bool settle_heading = false;
   };
   std::optional<BranchEvent> branch_;
   std::vector<Velocity> seed(

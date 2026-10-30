@@ -42,6 +42,8 @@ struct MotionReference
   Pose goal;
   bool goal_active = true;
   std::optional<Velocity> alignment;
+  bool precise_heading = false;
+  std::optional<Velocity> departure;
 };
 struct Input
 {
@@ -53,6 +55,8 @@ struct Input
   bool goal_active = true;  // Caller enables terminal attraction on the final ordered segment.
   std::optional<Velocity>
     alignment;  // Stopped wheel alignment, still rolled out and collision checked.
+  bool precise_heading = false;
+  std::optional<Velocity> departure;
 };
 struct Command
 {

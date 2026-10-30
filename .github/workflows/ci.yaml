@@ -1,6 +1,7 @@
 name: Core and path following
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -84,3 +85,4 @@ jobs:
             artifacts/
             log/
             build/swerve_mppi_ros/test_results/
+

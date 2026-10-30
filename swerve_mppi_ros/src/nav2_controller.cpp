@@ -411,7 +411,11 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     out.twist = twist(result.command.velocity);
     r.published_request = result.command.velocity;
     r.last_output_time = r.node()->now().seconds();
-    if (ordered) ordered->setReady(r.path.goal_active(r.config.approach_distance));
+    if (ordered)
+      ordered->setReady(
+        r.path.goal_active(r.config.approach_distance) &&
+        std::hypot(result.command.velocity.vx, result.command.velocity.vy) < 1e-4 &&
+        std::abs(result.command.velocity.wz) < 1e-4);
     return out;
   } catch (const nav2_core::ControllerException &) {
     if (ordered) ordered->setReady(false);

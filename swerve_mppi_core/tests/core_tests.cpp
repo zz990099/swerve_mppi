@@ -213,9 +213,23 @@ int main()
         "variable compute latency cannot exceed publication slew");
       timed.state.requested = request.command.velocity;
     }
+    Input settled = input;
+    settled.path = {{0, 0, 0}};
+    settled.goal = {0, 0, 0};
+    settled.state.requested = {.01, 0, .05};
+    const auto settled_request = Controller(c).compute(settled);
+    check(
+      settled_request.status == Status::Ok &&
+        std::hypot(settled_request.command.velocity.vx, settled_request.command.velocity.vy) <
+          1e-9 &&
+        std::abs(settled_request.command.velocity.wz) < 1e-9,
+      "settled terminal pose suppresses exploratory requests before Nav2 zero publication");
+    check(
+      Controller(c, {std::make_shared<Reject>()}).compute(settled).status == Status::NoSolution,
+      "terminal hold remains subject to hard rejection");
     Input alignment = input;
-    alignment.path = {{0, 0, 0}};
-    alignment.goal = {};
+    alignment.path = {{0, 0, .03}};
+    alignment.goal = {0, 0, .03};
     alignment.alignment = Velocity{0, 1, 0};
     auto aligned_request = Controller(c).compute(alignment);
     check(
@@ -224,6 +238,37 @@ int main()
     check(
       Controller(c, {std::make_shared<Reject>()}).compute(alignment).status == Status::NoSolution,
       "explicit alignment cannot bypass injected hard rejection");
+    Input cross_recovery;
+    cross_recovery.state.generator.valid = true;
+    cross_recovery.state.pose = {-.019, .2, .009};
+    cross_recovery.state.steering.fill(swerve_chassis_core::pi / 2);
+    cross_recovery.state.generator.command.steering = cross_recovery.state.steering;
+    cross_recovery.path = {{0, .2, 0}, {0, 1.2, 0}};
+    cross_recovery.goal = cross_recovery.path.back();
+    const auto correction = Controller(c).compute(cross_recovery);
+    check(
+      correction.status == Status::Ok && correction.command.velocity.vx > .001,
+      "small pose error with a significant steering correction must retain recovery intent");
+    Input lagged_branch;
+    lagged_branch.state.generator.valid = true;
+    lagged_branch.state.pose = {0, 0, 1.60};
+    const auto old_branch =
+      swerve_chassis_core::inverse(c.geometry, {std::cos(1.60), -std::sin(1.60), .2618});
+    lagged_branch.state.steering = old_branch.steering;
+    lagged_branch.state.generator.command.steering = old_branch.steering;
+    lagged_branch.path = {{.03, 0, 1.65}, {3, 0, 2.42754}};
+    lagged_branch.goal = lagged_branch.path.back();
+    lagged_branch.goal_active = false;
+    Controller branch_controller(c);
+    const auto transition = branch_controller.compute(lagged_branch);
+    check(
+      transition.status == Status::Ok && transition.branch_phase != 0,
+      "cropping past a representation boundary cannot hide a measured branch mismatch");
+    auto canceled_branch = lagged_branch;
+    canceled_branch.path.clear();
+    check(
+      branch_controller.compute(canceled_branch).status == Status::InvalidInput,
+      "retained transition cannot replace an invalid or canceled caller route");
     Input idle = input;
     idle.goal_active = false;
     idle.state.steering.fill(.07);

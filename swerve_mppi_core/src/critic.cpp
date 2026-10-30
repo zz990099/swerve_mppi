@@ -31,6 +31,8 @@ public:
     std::unique_ptr<ReferenceProfile> local_reference;
     if (!c.reference) local_reference = std::make_unique<ReferenceProfile>(c.input.path, c.config);
     const auto & reference = c.reference ? *c.reference : *local_reference;
+    const double heading_scale =
+      c.input.precise_heading ? std::min(.005, c.config.heading_scale) : c.config.heading_scale;
     auto start = path.start_match(c.input.state.pose);
     const double checkpoint = path.next_corner(start.arc);
     bool terminal = c.input.goal_active && distance(c.input.path.back(), c.input.goal) < .001;
@@ -82,9 +84,7 @@ public:
         // Collision and actuator feasibility remain independent hard checks.
         const double slack =
           std::pow(std::max(0., m.error - c.config.path_corridor) / c.config.position_scale, 2) +
-          std::pow(
-            std::max(0., std::abs(heading) - c.config.heading_corridor) / c.config.heading_scale,
-            2);
+          std::pow(std::max(0., std::abs(heading) - c.config.heading_corridor) / heading_scale, 2);
         const auto & u = t.controls[i - 1];
         const auto unit = reference.unit(progress, s.pose.yaw);
         const double along = s.velocity.vx * unit.vx + s.velocity.vy * unit.vy;
@@ -126,7 +126,7 @@ public:
           std::pow((u.wz - previous.wz) / (c.config.limits.angular_acceleration * dt), 2);
         detail.path +=
           norm * (4 * slack + w_.path_distance * std::pow(m.error / c.config.position_scale, 2));
-        detail.heading += norm * w_.path_heading * std::pow(heading / c.config.heading_scale, 2);
+        detail.heading += norm * w_.path_heading * std::pow(heading / heading_scale, 2);
         detail.velocity += norm * (std::pow(excess_speed / .1, 2) +
                                    w_.reference_velocity * velocity_error * velocity_error);
         detail.alignment += norm * w_.presteering_alignment * alignment_error;
@@ -152,8 +152,7 @@ public:
         if (remaining < .02)
           detail.goal +=
             w_.goal_heading *
-            std::pow(
-              wrap_angle(t.states.back().pose.yaw - c.input.goal.yaw) / c.config.heading_scale, 2);
+            std::pow(wrap_angle(t.states.back().pose.yaw - c.input.goal.yaw) / heading_scale, 2);
       }
       costs[k] += detail.path + detail.heading + detail.velocity + detail.alignment +
                   detail.effort + detail.progress + detail.goal;

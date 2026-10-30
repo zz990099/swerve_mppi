@@ -78,7 +78,9 @@ addressed.
 ## Explicit transition and ordered rejoin
 
 A stopped steering branch change keeps a short maneuver until measured body
-alignment, wheel alignment, departure and heading settling complete. Its chord
+alignment, wheel alignment and departure complete. The departure retains its
+translation/yaw coupling and rejoins while rolling when heading is within 0.03 rad;
+a larger measured error requires stopped heading settling. Its chord
 is bounded by the source path corridor and cannot pass a mandatory corner.
 Wheel alignment uses a small twist below the stopped-wheel threshold; it still
 passes through the same actuator rollout and collision checks. Returning to the
@@ -97,3 +99,21 @@ stamps. Chassis-reported accepted-request changes are retained separately as
 `max_feedback_linear_rate` and `max_feedback_angular_rate`; watchdog or feedback
 state changes must not be attributed to a nonexistent publication. Thresholds
 remain unchanged.
+
+The nominal steering filter also checks the effect of feedback correction on
+wheel rolling axes. A fixed 2 cm pose threshold alone can suppress a large
+steering correction at low reference speed and make alignment and tracking
+alternate indefinitely. Corrections exceeding half the tracking-angle tolerance
+retain their feedback steering intent throughout alignment and drive startup.
+Route progress searches a nearby forward arc using measured displacement as a
+budget, so a missed sampled tangent on a smooth curve cannot freeze progress.
+Mandatory corners and rotation sections remain barriers.
+
+Feature branches are validated by pull-request workflows; pushes to `main`
+remain validated directly. This prevents running the same physical round twice
+for a feature-branch push and its pull-request synchronize event.
+
+At a tightly settled terminal pose, the controller validates a slew-limited
+zero-request hold without exploratory noise. Ordered goal readiness additionally
+requires a zero outgoing request, so Nav2's final zero publication cannot truncate
+a still nonzero requested yaw rate while measured wheels happen to be stopped.
