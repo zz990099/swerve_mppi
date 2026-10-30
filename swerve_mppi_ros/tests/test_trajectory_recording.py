@@ -91,6 +91,20 @@ class RecordingTests(unittest.TestCase):
                 commands = list(csv.DictReader(file))
             self.assertEqual(float(commands[0]['observer_stamp_s']), 2.01)
 
+    def test_request_slew_uses_publication_stamps(self):
+        with TemporaryDirectory() as temporary:
+            record = Recording(temporary, 'straight', [(0, 0, 0), (1, 0, 0)], 42,
+                               pose(0, 0, 0), pose(0, 0, 0), 2)
+            def command(nanoseconds, vx, wz):
+                return NS(header=NS(stamp=NS(sec=2, nanosec=nanoseconds)),
+                          twist=NS(linear=NS(x=vx, y=0.), angular=NS(z=wz)))
+            record.command(command(0, 0., 0.), 2.04)
+            record.command(command(50000000, .04, .06), 2.30)
+            record.close(False, 'publication-only audit', [])
+            self.assertAlmostEqual(record.max_request_linear_rate, .8)
+            self.assertAlmostEqual(record.max_request_angular_rate, 1.2)
+            self.assertEqual(record.max_feedback_linear_rate, 0.)
+
     def test_rotated_coordinate_frames(self):
         x, y, angle = local_pose(pose(10, 21, math.pi), pose(10, 20, math.pi/2))
         self.assertAlmostEqual(x, 1)
@@ -160,3 +174,4 @@ class RecordingTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

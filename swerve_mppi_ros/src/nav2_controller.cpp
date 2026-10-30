@@ -35,6 +35,7 @@ struct Nav2Controller::Runtime
   PathHandler path;
   std::optional<ChassisFeedback> measured;
   std::optional<Velocity> published_request;
+  double last_output_time = 0;
   double state_stamp = 0, last_time = 0, frequency = 20, timeout = 0.25, transform_tolerance = 0.1;
   Steady::time_point state_wall{};
   bool active = false, map_enabled = true;
@@ -152,6 +153,7 @@ struct Nav2Controller::Runtime
     if (controller) controller->reset();
     published_request.reset();
     last_time = 0;
+    last_output_time = 0;
   }
   void report(const Result & result)
   {
@@ -196,6 +198,36 @@ struct Nav2Controller::Runtime
       value.value = p.second;
       item.values.push_back(value);
     }
+    auto add = [&](const std::string & key, double number) {
+      diagnostic_msgs::msg::KeyValue value;
+      value.key = key;
+      value.value = std::to_string(number);
+      item.values.push_back(value);
+    };
+    add("noise_scale", result.noise_scale);
+    add("reorientation_active", result.reorientation_active);
+    add("reference_limit", result.reference_limit);
+    add("branch_distance", result.branch_distance);
+    add("branch_phase", result.branch_phase);
+    add("completed_transition", result.completed_transition);
+    add("route_section", path.section());
+    add("route_rotating", path.rotating());
+    add("remaining_path_m", path.remaining());
+    for (std::size_t i = 0; i < result.candidates.size(); ++i) {
+      const std::string prefix =
+        std::array<std::string, 6>{"mean", "fresh", "brake", "slow", "recovery", "selected"}[i] +
+        "_";
+      const auto & d = result.candidates[i];
+      add(prefix + "valid", d.valid);
+      add(prefix + "cost", d.total);
+      add(prefix + "path", d.tracking.path);
+      add(prefix + "heading", d.tracking.heading);
+      add(prefix + "velocity", d.tracking.velocity);
+      add(prefix + "alignment", d.tracking.alignment);
+      add(prefix + "effort", d.tracking.effort);
+      add(prefix + "progress", d.tracking.progress);
+      add(prefix + "goal", d.tracking.goal);
+    }
     msg.status.push_back(item);
     diagnostics->publish(msg);
   }
@@ -227,19 +259,24 @@ void Nav2Controller::configure(
       try {
         auto f = feedback(msg, r.config);
         const double stamp = seconds(msg.header.stamp);
-        if (r.node()->now().seconds() < r.state_stamp) {
+        const double now = r.node()->now().seconds();
+        if (r.last_time > 0 && now < r.last_time) {
           r.measured.reset();
           r.stop();
         }
-        if (stamp > r.node()->now().seconds() + 0.01) {
-          r.measured.reset();
+        // A clock/state delivery skew must not erase a still-fresh validated
+        // snapshot. Reject the future sample; normal control-time age checks
+        // still expire the retained state and detect actual clock rewinds.
+        if (stamp > now + .01 || f.feedback_stamp > now + .01) {
+          if (f.fault) r.measured.reset();  // A reported fault must still stop control.
           return;
         }
         if (r.measured && stamp <= r.state_stamp) return;
         r.measured = f;
         r.state_stamp = seconds(msg.header.stamp);
         r.state_wall = Steady::now();
-      } catch (const std::invalid_argument &) {
+      } catch (const std::invalid_argument & e) {
+        RCLCPP_WARN(r.node()->get_logger(), "Rejected chassis snapshot: %s", e.what());
         r.measured.reset();
       }
     });
@@ -338,7 +375,10 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     input.state.pose = pose(r.transform(current, r.global_frame).pose);
     (void)velocity(speed);  // Validate Nav2 velocity; wheel feedback anchors actuator prediction.
     input.dt = dt;
-    const auto local = r.path.local(pose(r.transform(current, r.plan_frame).pose));
+    const auto previous_section = r.path.section();
+    const auto local =
+      r.path.local(pose(r.transform(current, r.plan_frame).pose), 3.0, input.state.velocity);
+    if (r.path.section() != previous_section) r.controller->reset();
     auto transform_path_pose = [&](Pose p) {
       geometry_msgs::msg::PoseStamped source;
       source.header.frame_id = r.plan_frame;
@@ -346,8 +386,8 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
       return pose(r.transform(source, r.global_frame).pose);
     };
     for (auto p : local) input.path.push_back(transform_path_pose(p));
-    input.goal = transform_path_pose(r.path.goal());
-    input.goal_active = r.path.goal_active(r.config.approach_distance);
+    input.goal = transform_path_pose(r.path.tracking_goal());
+    input.goal_active = r.path.tracking_goal_active(r.config.approach_distance);
     std::vector<std::uint8_t> grid;
     if (r.map_enabled) {
       auto map = r.costmap->getCostmap();
@@ -360,12 +400,28 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
                    map->getOriginY()};
     }
     auto result = r.controller->compute(input);
+    if (result.completed_transition) r.path.recover(pose(r.transform(current, r.plan_frame).pose));
+    if (r.last_output_time > 0 && result.status == Status::Ok) {
+      // Nav2 stamps its publication after this callback returns. Reserve one
+      // simulation millisecond for that handoff; a later current publication
+      // only increases the available interval.
+      const double available =
+        std::max(1e-6, r.node()->now().seconds() - r.last_output_time - .001);
+      if (available < input.dt && !r.controller->retime(input, available, result))
+        throw nav2_core::NoValidControl("retimed MPPI request failed validation");
+    }
     r.report(result);
     if (result.status != Status::Ok)
       throw nav2_core::NoValidControl("MPPI found no usable control");
     out.twist = twist(result.command.velocity);
     r.published_request = result.command.velocity;
-    if (ordered) ordered->setReady(input.goal_active);
+    r.last_output_time = r.node()->now().seconds();
+    if (ordered)
+      ordered->setReady(
+        r.path.goal_active(r.config.approach_distance) &&
+          std::hypot(result.command.velocity.vx, result.command.velocity.vy) < 1e-4 &&
+          std::abs(result.command.velocity.wz) < 1e-4,
+        transform_path_pose(r.path.goal()));
     return out;
   } catch (const nav2_core::ControllerException &) {
     if (ordered) ordered->setReady(false);

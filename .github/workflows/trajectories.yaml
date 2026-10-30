@@ -1,6 +1,7 @@
 name: Physical trajectory benchmark / 32 cases
 on:
   push:
+    branches: [main]
     paths:
       - '.github/workflows/trajectories.yaml'
       - 'swerve_mppi_core/**'
@@ -59,3 +60,4 @@ jobs:
           name: mppi-trajectories-32-cases
           path: artifacts/
           if-no-files-found: warn
+

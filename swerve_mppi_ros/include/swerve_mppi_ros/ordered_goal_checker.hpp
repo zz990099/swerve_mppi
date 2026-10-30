@@ -9,7 +9,8 @@
 
 namespace swerve_mppi_ros
 {
-// Nav2 owns completion. The controller supplies only ordered-progress readiness.
+// Nav2 owns completion. The controller supplies ordered progress and the live
+// endpoint in the costmap frame, using the same transform as its tracking goal.
 class OrderedGoalChecker : public nav2_core::GoalChecker
 {
 public:
@@ -22,7 +23,7 @@ public:
     const geometry_msgs::msg::Twist & velocity) override;
   bool getTolerances(
     geometry_msgs::msg::Pose & pose, geometry_msgs::msg::Twist & velocity) override;
-  void setReady(bool ready);
+  void setReady(bool ready, std::optional<Pose> current_goal = {});
 
 private:
   std::mutex mutex_;
@@ -30,6 +31,8 @@ private:
   GoalTolerance tolerance_;
   swerve_mppi_ros::GoalChecker checker_;
   bool ready_ = false, healthy_ = false;
+  std::optional<Pose> current_goal_;
+  double goal_stamp_ = 0;
   double feedback_stamp_ = 0, state_timeout_ = 0.25;
   std::string body_frame_;
   std::chrono::steady_clock::time_point feedback_wall_{};

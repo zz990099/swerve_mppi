@@ -65,12 +65,15 @@ void OrderedGoalChecker::reset()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   ready_ = false;
+  current_goal_.reset();
   checker_.reset();
 }
-void OrderedGoalChecker::setReady(bool ready)
+void OrderedGoalChecker::setReady(bool ready, std::optional<Pose> current_goal)
 {
   std::lock_guard<std::mutex> lock(mutex_);
   ready_ = ready;
+  current_goal_ = current_goal;
+  goal_stamp_ = clock_ ? clock_->now().seconds() : 0;
   if (!ready) checker_.reset();
 }
 bool OrderedGoalChecker::isGoalReached(
@@ -79,9 +82,12 @@ bool OrderedGoalChecker::isGoalReached(
 {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!ready_ || !clock_) return false;
-  const double age = clock_->now().seconds() - feedback_stamp_;
+  const double now = clock_->now().seconds();
+  const double age = now - feedback_stamp_;
+  const double goal_age = now - goal_stamp_;
   if (
     !healthy_ || age < 0 || age > state_timeout_ ||
+    (current_goal_ && (goal_age < 0 || goal_age > state_timeout_)) ||
     std::chrono::duration<double>(std::chrono::steady_clock::now() - feedback_wall_).count() >
       state_timeout_) {
     checker_.reset();
@@ -91,7 +97,7 @@ bool OrderedGoalChecker::isGoalReached(
     State state;
     state.pose = pose(query);
     state.velocity = velocity(speed);
-    return checker_.reached(state, pose(target), clock_->now().seconds());
+    return checker_.reached(state, current_goal_.value_or(pose(target)), now);
   } catch (const std::invalid_argument &) {
     checker_.reset();
     return false;

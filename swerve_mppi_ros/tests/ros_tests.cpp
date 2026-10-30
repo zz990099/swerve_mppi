@@ -178,6 +178,34 @@ TEST_F(Nav2PluginTest, RequestSlewUsesPublishedOutputWhenFeedbackLags)
     previous = current;
   }
 }
+TEST_F(Nav2PluginTest, FutureSnapshotDoesNotEraseFreshValidatedFeedback)
+{
+  controller->setPlan(path({{0, 0, 0}, {1, 0, 0}}));
+  compute();
+  observed.header.stamp = source->now() + rclcpp::Duration::from_seconds(10.);
+  observed.feedback_stamp = observed.header.stamp;
+  states->publish(observed);
+  spin(20);
+  geometry_msgs::msg::PoseStamped current;
+  current.header.frame_id = "odom";
+  current.pose = pose_message({});
+  EXPECT_NO_THROW(
+    controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get()));
+  // Ignoring a future sample cannot refresh the age of the retained snapshot.
+  spin(550);
+  EXPECT_THROW(
+    controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get()),
+    nav2_core::NoValidControl);
+  compute();  // Restore a fresh snapshot, then deliver a future-dated fault.
+  observed.header.stamp = source->now() + rclcpp::Duration::from_seconds(10.);
+  observed.feedback_stamp = observed.header.stamp;
+  observed.fault = 1;
+  states->publish(observed);
+  spin(20);
+  EXPECT_THROW(
+    controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get()),
+    nav2_core::NoValidControl);
+}
 TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
 {
   controller->setPlan(path({{0, 0, 0}, {0.5, 0.5, 0.5}}));
@@ -194,13 +222,42 @@ TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
   std::this_thread::sleep_for(60ms);
   EXPECT_FALSE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
   compute({1, 0, 0});
-  compute({0, 0, 0});
-  EXPECT_FALSE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
+  // Teleporting measured pose does not cancel the last published request.
+  // Completion must wait for that request to slew to zero as in a real stop.
+  geometry_msgs::msg::TwistStamped stopped_request;
+  bool zero_request = false;
+  for (int i = 0; i < 20; ++i) {
+    stopped_request = compute({0, 0, 0});
+    zero_request =
+      std::hypot(stopped_request.twist.linear.x, stopped_request.twist.linear.y) < 1e-4 &&
+      std::abs(stopped_request.twist.angular.z) < 1e-4;
+    EXPECT_FALSE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
+    if (zero_request) break;
+  }
+  ASSERT_TRUE(zero_request);
   std::this_thread::sleep_for(60ms);
   EXPECT_TRUE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
   observed.velocity.linear.z = 1;  // Invalid feedback must clear an earlier stopped sample.
   publish_state();
   EXPECT_FALSE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
+}
+TEST_F(Nav2PluginTest, GoalCheckerUsesLiveTransformedEndpoint)
+{
+  publish_state();
+  auto ordered = dynamic_cast<OrderedGoalChecker *>(goal.get());
+  ASSERT_NE(ordered, nullptr);
+  const auto query = pose_message({0, 0, .84});
+  const auto historical_target = pose_message({0, 0, .9});
+  ordered->setReady(true, Pose{0, 0, .84});
+  EXPECT_FALSE(goal->isGoalReached(query, historical_target, geometry_msgs::msg::Twist{}));
+  std::this_thread::sleep_for(60ms);
+  EXPECT_TRUE(goal->isGoalReached(query, historical_target, geometry_msgs::msg::Twist{}));
+  ordered->setReady(true, Pose{0, 0, 1.});
+  EXPECT_FALSE(goal->isGoalReached(query, historical_target, geometry_msgs::msg::Twist{}));
+  ordered->setReady(true, Pose{0, 0, .84});
+  std::this_thread::sleep_for(550ms);
+  publish_state();
+  EXPECT_FALSE(goal->isGoalReached(query, historical_target, geometry_msgs::msg::Twist{}));
 }
 TEST_F(Nav2PluginTest, CostmapTfAndInvalidInputs)
 {
