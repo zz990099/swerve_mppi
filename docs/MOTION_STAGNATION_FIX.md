@@ -60,7 +60,7 @@ retain Nav2's existing safety behavior.
 ## Diagnostics and regression
 
 Recordings retain candidate totals and tracking components for mean, fresh,
-brake, recovery and selected sequences. Components are path, heading, velocity,
+brake, slow, recovery and selected sequences. Components are path, heading, velocity,
 alignment, effort, progress and goal. Totals include injected costmap/custom
 critics. Diagnostics also expose route section, rotation state, remaining arc,
 latched reorientation, reference branch distance, noise scaling and reference
@@ -69,7 +69,31 @@ The chassis execution stream remains the authority for actual presteering.
 
 Portable tests cover rotation ordering, wraparound, measured stopping, shortened
 publication intervals and rejection during retiming. `stagnation` runs the three
-formerly stalled 12 m routes with the shared executor and an independent servo
-plant. The physical workflow remains one 32-case round with seed 42. Its 50 ms
+formerly stalled 12 m routes and the self-crossing cloverleaf route with the shared executor and an independent servo
+plant. The cloverleaf functional regression permits up to 90 simulated seconds; this
+does not change the physical wall-time gate. The physical workflow remains one 32-case round with seed 42. Its 50 ms
 P99 gate is unchanged, so real-time failures remain visible until separately
 addressed.
+
+## Explicit transition and ordered rejoin
+
+A stopped steering branch change keeps a short maneuver until measured body
+alignment, wheel alignment, departure and heading settling complete. Its chord
+is bounded by the source path corridor and cannot pass a mandatory corner.
+Wheel alignment uses a small twist below the stopped-wheel threshold; it still
+passes through the same actuator rollout and collision checks. Returning to the
+original route uses a bounded ordered rejoin and retains rotation barriers.
+The effective reference is retained for publication retiming, so retiming
+validates the maneuver actually being executed.
+
+A self-crossing local preview must not initialize the optimizer at a later loop
+that happens to be closer to the measured pose. Initial matching is limited to
+the adjacent 0.3 m preview and respects the next mandatory corner. During
+recovery, the retained steering intent includes the same cross-track and heading
+correction as the feedback seed; it is not just the path tangent.
+
+Request slew is evaluated from the published command stream and its command
+stamps. Chassis-reported accepted-request changes are retained separately as
+`max_feedback_linear_rate` and `max_feedback_angular_rate`; watchdog or feedback
+state changes must not be attributed to a nonexistent publication. Thresholds
+remain unchanged.

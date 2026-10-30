@@ -77,6 +77,12 @@ int main()
     check(path.rotating(), "rotation crossing pi remains an event");
     path.local({0, 0, -3.12});
     check(!path.rotating(), "wrapped yaw and duplicate points advance in order");
+    path.set({{0, 0, 0}, {.8, 0, 0}, {.8, .8, 0}, {0, .8, 0}, {0, 0, 0}});
+    path.local({0, 0, 0});
+    path.recover({0, 0, 0});
+    check(!path.goal_active(), "transition rejoin cannot jump to the coincident final leg");
+    path.recover({.8, .02, 0});
+    check(path.remaining() > 3., "transition rejoin cannot cross an unreached mandatory corner");
     CostmapCritic critic;
     std::uint8_t bytes[] = {0, 254, 255, 253};
     Input input;

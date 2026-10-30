@@ -34,11 +34,15 @@ int main()
 {
   Config config;
   config.max_speed = config.limits.linear_speed = 1.;
-  std::vector<Pose> heading, spiral;
+  std::vector<Pose> heading, spiral, clover;
   for (int i = 0; i <= 80; ++i) heading.push_back({2. * i / 80, 0, chassis::pi * i / 80});
   for (int i = 0; i <= 240; ++i) {
     double t = 4 * chassis::pi * i / 240;
     spiral.push_back({(.2 + .06 * t) * std::cos(t) - .2, (.2 + .06 * t) * std::sin(t), 0});
+  }
+  for (int i = 0; i <= 320; ++i) {
+    double t = 2 * chassis::pi * i / 320;
+    clover.push_back({.8 * std::sin(2 * t) * std::cos(t), .8 * std::sin(2 * t) * std::sin(t), 0});
   }
   std::vector<std::vector<Pose>> cases{
     scaled(heading), scaled(spiral),
@@ -51,6 +55,7 @@ int main()
        {0, .7, chassis::pi},
        {0, .7, 3 * chassis::pi / 2},
        {0, 0, 3 * chassis::pi / 2}})};
+  cases.push_back(scaled(clover));
   for (std::size_t name = 0; name < cases.size(); ++name) {
     OrderedPath route;
     route.set(cases[name]);
@@ -61,7 +66,10 @@ int main()
     state.generator.valid = true;
     double peak = 0;
     bool reached = false;
-    for (int step = 0; step < 1300; ++step) {
+    // This is a bounded functional completion check. Physical wall-time and
+    // compute deadlines remain independently enforced by tracking_quality.py.
+    const int maximum_steps = name == 3 ? 1800 : 1300;
+    for (int step = 0; step < maximum_steps; ++step) {
       Input input;
       input.state = state;
       const auto before = route.section();
@@ -70,6 +78,7 @@ int main()
       input.goal = route.tracking_goal();
       input.goal_active = route.tracking_goal_active();
       auto result = controller.compute(input);
+      if (result.completed_transition) route.recover(state.pose);
       if (result.status != Status::Ok)
         throw std::runtime_error("stagnation regression: no solution");
       for (int tick = 0; tick < 5; ++tick) {

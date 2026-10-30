@@ -83,6 +83,28 @@ int main()
     check(
       reverse_profile.unit(.2, 0).vx < -.99,
       "reverse reference does not rotate body heading to path tangent");
+    std::vector<Pose> crossing{{0, 0, 0}, {.1, .1, 0}, {.2, 0, 0}, {.1, -.1, 0}, {.001, 0, 0}};
+    check(
+      PathView(crossing).start_match({.001, 0, 0}).arc < .01,
+      "a closer future crossing cannot initialize progress at the end of the preview");
+    std::vector<Pose> ring;
+    for (int i = 0; i <= 80; ++i) {
+      const double a = 2 * swerve_chassis_core::pi * i / 80;
+      ring.push_back({.5 * std::sin(a), .5 * (1 - std::cos(a)), 0});
+    }
+    check(
+      PathView(ring).start_match({-.001, 0, 0}).arc < .02,
+      "smooth return leg cannot capture noisy initial matching");
+    Input ring_input;
+    ring_input.state.generator.valid = true;
+    ring_input.state.pose.x = -.001;
+    ring_input.path = ring;
+    ring_input.goal = ring.back();
+    ring_input.goal_active = false;
+    const auto ring_result = Controller(c).compute(ring_input);
+    check(
+      ring_result.status == Status::Ok && ring_result.reference_speed > .05,
+      "self-crossing preview cannot create a false terminal speed at startup");
     std::vector<Pose> return_path{{0, 0, 0}, {.7, 0, 0}, {0, 0, 0}};
     check(
       PathView(return_path).match_ordered({.1, 0, 0}, .67, 1.4).arc < .7,
@@ -191,6 +213,17 @@ int main()
         "variable compute latency cannot exceed publication slew");
       timed.state.requested = request.command.velocity;
     }
+    Input alignment = input;
+    alignment.path = {{0, 0, 0}};
+    alignment.goal = {};
+    alignment.alignment = Velocity{0, 1, 0};
+    auto aligned_request = Controller(c).compute(alignment);
+    check(
+      aligned_request.status == Status::Ok && aligned_request.command.velocity.vy > 0,
+      "stopped alignment retains a feasible steering intent");
+    check(
+      Controller(c, {std::make_shared<Reject>()}).compute(alignment).status == Status::NoSolution,
+      "explicit alignment cannot bypass injected hard rejection");
     Input idle = input;
     idle.goal_active = false;
     idle.state.steering.fill(.07);

@@ -59,6 +59,7 @@ int main()
         input.goal = path.tracking_goal();
         input.goal_active = path.tracking_goal_active();
         auto result = controller.compute(input);
+        if (result.completed_transition) path.recover(s.pose);
         times.push_back(result.compute_ms);
         if (result.status != Status::Ok) throw std::runtime_error("no valid closed-loop command");
         for (int tick = 0; tick < 5; ++tick) {
