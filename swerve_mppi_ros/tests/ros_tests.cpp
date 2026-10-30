@@ -182,26 +182,29 @@ TEST_F(Nav2PluginTest, FutureSnapshotDoesNotEraseFreshValidatedFeedback)
 {
   controller->setPlan(path({{0, 0, 0}, {1, 0, 0}}));
   compute();
-  observed.header.stamp = (source->now() + rclcpp::Duration::from_seconds(10.)).to_msg();
+  observed.header.stamp = source->now() + rclcpp::Duration::from_seconds(10.);
   observed.feedback_stamp = observed.header.stamp;
   states->publish(observed);
   spin(20);
   geometry_msgs::msg::PoseStamped current;
   current.header.frame_id = "odom";
   current.pose = pose_message({});
-  EXPECT_NO_THROW(controller->computeVelocityCommands(current, {}, goal.get()));
+  EXPECT_NO_THROW(
+    controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get()));
   // Ignoring a future sample cannot refresh the age of the retained snapshot.
   spin(550);
   EXPECT_THROW(
-    controller->computeVelocityCommands(current, {}, goal.get()), nav2_core::NoValidControl);
+    controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get()),
+    nav2_core::NoValidControl);
   compute();  // Restore a fresh snapshot, then deliver a future-dated fault.
-  observed.header.stamp = (source->now() + rclcpp::Duration::from_seconds(10.)).to_msg();
+  observed.header.stamp = source->now() + rclcpp::Duration::from_seconds(10.);
   observed.feedback_stamp = observed.header.stamp;
   observed.fault = 1;
   states->publish(observed);
   spin(20);
   EXPECT_THROW(
-    controller->computeVelocityCommands(current, {}, goal.get()), nav2_core::NoValidControl);
+    controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get()),
+    nav2_core::NoValidControl);
 }
 TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
 {
