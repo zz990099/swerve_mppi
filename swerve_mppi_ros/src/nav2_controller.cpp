@@ -87,6 +87,9 @@ struct Nav2Controller::Runtime
     number("noise_correlation", config.noise_correlation);
     number("temperature", config.temperature);
     number("lookahead", config.lookahead);
+    number("goal_heading_start_distance", config.goal_heading_start_distance);
+    number("goal_heading_full_distance", config.goal_heading_full_distance);
+    number("goal_heading_scale", config.goal_heading_scale);
     number("approach_distance", config.approach_distance);
     number("approach_gain", config.approach_gain);
     auto size = [&](const char * key, std::size_t & value) {
@@ -204,6 +207,7 @@ struct Nav2Controller::Runtime
       value.value = std::to_string(number);
       item.values.push_back(value);
     };
+    add("goal_heading_weight", result.goal_heading_weight);
     add("noise_scale", result.noise_scale);
     add("reorientation_active", result.reorientation_active);
     add("reference_limit", result.reference_limit);
@@ -330,7 +334,7 @@ void Nav2Controller::setPlan(const nav_msgs::msg::Path & message)
         throw std::invalid_argument("mixed path frames");
       candidate.push_back(pose(p.pose));
     }
-    r.path.set(std::move(candidate));
+    r.path.set(std::move(candidate), r.config.lookahead);
     r.plan_frame = message.header.frame_id;
   } catch (const std::exception & e) {
     throw nav2_core::InvalidPath(e.what());
@@ -387,7 +391,11 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     };
     for (auto p : local) input.path.push_back(transform_path_pose(p));
     input.goal = transform_path_pose(r.path.tracking_goal());
-    input.goal_active = r.path.tracking_goal_active(r.config.approach_distance);
+    input.goal_active = r.path.goal_active(r.config.goal_heading_start_distance);
+    input.remaining_arc = r.path.remaining();
+    input.reference_kind = r.path.remaining() < 1e-8 && input.path.size() == 1
+                             ? ReferenceKind::FixedHeading
+                             : ReferenceKind::GeometricPath;
     std::vector<std::uint8_t> grid;
     if (r.map_enabled) {
       auto map = r.costmap->getCostmap();

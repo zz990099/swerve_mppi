@@ -6,6 +6,7 @@
 #include <limits>
 #include <stdexcept>
 
+#include "swerve_mppi/heading_reference.hpp"
 #include "swerve_mppi/path.hpp"
 #include "swerve_mppi/reference.hpp"
 
@@ -19,14 +20,16 @@ bool finite(Velocity v)
 }
 bool finite(Pose p) { return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.yaw); }
 Velocity feedback_request(
-  const Config & config, const State & state, const PathMatch & match, double speed, Velocity unit)
+  const Config & config, const State & state, const PathMatch & match, double speed, Velocity unit,
+  const Input & input)
 {
   const double ex = config.cross_gain * (match.pose.x - state.pose.x);
   const double ey = config.cross_gain * (match.pose.y - state.pose.y);
   return {
     speed * unit.vx + std::cos(state.pose.yaw) * ex + std::sin(state.pose.yaw) * ey,
     speed * unit.vy - std::sin(state.pose.yaw) * ex + std::cos(state.pose.yaw) * ey,
-    speed * unit.wz + 2.5 * wrap_angle(match.pose.yaw - state.pose.yaw)};
+    (1 - input.goal_heading_weight) * speed * unit.wz +
+      2.5 * heading_feedback(input, match.pose.yaw, state.pose.yaw)};
 }
 bool stable_nominal(
   const Config & config, const State & state, const PathMatch & match, double speed,
@@ -94,7 +97,7 @@ std::vector<Velocity> Controller::seed(
     }
     const double speed = reference.speed(progress);
     const auto unit = reference.unit(progress, s.pose.yaw);
-    Velocity desired = feedback_request(config_, s, m, speed, unit);
+    Velocity desired = feedback_request(config_, s, m, speed, unit, input);
     // Filter only corrections smaller than the wheel tracking tolerance.
     // A fixed 2 cm pose gate can hide a large steering correction at low speed.
     bool stopped = true;
@@ -123,14 +126,28 @@ std::vector<Velocity> Controller::seed(
   }
   return out;
 }
-Result Controller::compute(const Input & source)
+Result Controller::compute(const Input & external)
 {
+  Input source = external;
+  try {
+    if (
+      source.reference_kind == ReferenceKind::ExternalPath && !source.path.empty() &&
+      source.path.size() <= 4096) {
+      source.path = geometric_path(source.path, config_.lookahead);
+      source.reference_kind = PathView(source.path).length() < 1e-8 ? ReferenceKind::FixedHeading
+                                                                    : ReferenceKind::GeometricPath;
+    }
+    if (!source.path.empty()) source.goal_heading_weight = terminal_heading_weight(source, config_);
+  } catch (const std::invalid_argument &) {
+    source.path.clear();
+  }
   const auto begin = std::chrono::steady_clock::now();
   // Validate the caller's reference before a retained maneuver can replace it.
   // In particular, a canceled/empty route must not execute stale alignment.
   if (
     source.path.empty() || source.path.size() > 4096 || !model_.valid(source.state) ||
     !finite(source.state.velocity) || !finite(source.goal) ||
+    !std::isfinite(source.remaining_arc) || source.remaining_arc < -1 ||
     (source.alignment && !finite(*source.alignment)) ||
     (source.departure && !finite(*source.departure)) || !std::isfinite(source.dt) ||
     source.dt <= 0 || source.dt > 1 ||
@@ -156,7 +173,7 @@ Result Controller::compute(const Input & source)
       const double speed = reference.speed(match.arc);
       const Velocity nominal{
         speed * desired_unit.vx, speed * desired_unit.vy, speed * desired_unit.wz};
-      auto feedback = feedback_request(config_, source.state, match, speed, actual_unit);
+      auto feedback = feedback_request(config_, source.state, match, speed, actual_unit, source);
       if (stable_nominal(config_, source.state, match, speed, nominal, feedback))
         feedback = nominal;
       const auto nominal_wheels = swerve_chassis_core::inverse(
@@ -274,14 +291,19 @@ Result Controller::compute(const Input & source)
       input.goal_active = false;
     }
     input.precise_heading = phase == 1 || phase == 4;
+    input.reference_kind =
+      phase == 2 ? ReferenceKind::WheelAlignment
+                 : (phase == 3 ? ReferenceKind::Departure : ReferenceKind::FixedHeading);
+    input.goal_heading_weight = phase == 1 || phase == 4 ? 1. : 0.;
   }
   auto result = compute_tracking(input);
   result.branch_phase = phase;
   result.completed_transition = completed;
-  if (phase)
-    result.motion_reference = MotionReference{
-      input.path,     input.goal, input.goal_active, input.alignment, input.precise_heading,
-      input.departure};
+  result.goal_heading_weight = input.goal_heading_weight;
+  result.motion_reference = MotionReference{
+    input.reference_kind, input.goal_heading_weight, input.remaining_arc, input.path,
+    input.goal,           input.goal_active,         input.alignment,     input.precise_heading,
+    input.departure};
   result.compute_ms =
     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
   return result;
@@ -297,8 +319,8 @@ Result Controller::compute_tracking(const Input & input)
   };
   if (
     input.path.empty() || input.path.size() > 4096 || !model_.valid(input.state) ||
-    !finite(input.state.velocity) || !finite(input.goal) ||
-    (input.alignment && !finite(*input.alignment)) ||
+    !finite(input.state.velocity) || !finite(input.goal) || !std::isfinite(input.remaining_arc) ||
+    input.remaining_arc < -1 || (input.alignment && !finite(*input.alignment)) ||
     (input.departure && !finite(*input.departure)) || !std::isfinite(input.dt) || input.dt <= 0 ||
     input.dt > 1 ||
     std::any_of(input.path.begin(), input.path.end(), [](Pose p) { return !finite(p); }) ||
@@ -367,7 +389,8 @@ Result Controller::compute_tracking(const Input & input)
       const auto actual_unit = reference->unit(match.arc, input.state.pose.yaw);
       const Velocity nominal{
         speed * nominal_unit.vx, speed * nominal_unit.vy, speed * nominal_unit.wz};
-      const auto feedback = feedback_request(config_, input.state, match, speed, actual_unit);
+      const auto feedback =
+        feedback_request(config_, input.state, match, speed, actual_unit, input);
       const bool nominal_start =
         stable_nominal(config_, input.state, match, speed, nominal, feedback);
       auto unit = reference->unit(match.arc, nominal_start ? match.pose.yaw : input.state.pose.yaw);
@@ -387,7 +410,8 @@ Result Controller::compute_tracking(const Input & input)
         const double ey = config_.cross_gain * (match.pose.y - input.state.pose.y);
         intent.vx += std::cos(input.state.pose.yaw) * ex + std::sin(input.state.pose.yaw) * ey;
         intent.vy += -std::sin(input.state.pose.yaw) * ex + std::cos(input.state.pose.yaw) * ey;
-        intent.wz += 2.5 * wrap_angle(match.pose.yaw - input.state.pose.yaw);
+        intent.wz = (1 - input.goal_heading_weight) * speed * unit.wz +
+                    2.5 * heading_feedback(input, match.pose.yaw, input.state.pose.yaw);
         intent = model_.project(intent);
       }
       if (std::hypot(intent.vx, intent.vy) + std::abs(intent.wz) > .01) {
@@ -465,7 +489,7 @@ Result Controller::compute_tracking(const Input & input)
     bool rotation_only = PathView(input.path).length() < 1e-6;
     const bool hold_rotation_position =
       !input.alignment && rotation_only &&
-      std::abs(wrap_angle(input.path.back().yaw - input.state.pose.yaw)) > .02;
+      std::abs(wrap_angle(input.goal.yaw - input.state.pose.yaw)) > .02;
     auto mean = !terminal_hold && !input.alignment && !input.departure && !reorientation_ &&
                     warm_.size() == config_.horizon
                   ? warm_
@@ -652,6 +676,9 @@ bool Controller::retime(const Input & input, double dt, Result & result)
     auto timed = input;
     timed.dt = dt;
     if (result.motion_reference) {
+      timed.reference_kind = result.motion_reference->reference_kind;
+      timed.goal_heading_weight = result.motion_reference->goal_heading_weight;
+      timed.remaining_arc = result.motion_reference->remaining_arc;
       timed.path = result.motion_reference->path;
       timed.goal = result.motion_reference->goal;
       timed.goal_active = result.motion_reference->goal_active;

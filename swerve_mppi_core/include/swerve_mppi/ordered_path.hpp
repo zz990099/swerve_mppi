@@ -1,7 +1,7 @@
 #pragma once
 #include <optional>
 
-#include "swerve_mppi/path.hpp"
+#include "swerve_mppi/heading_reference.hpp"
 
 namespace swerve_mppi
 {
@@ -10,12 +10,17 @@ namespace swerve_mppi
 class OrderedPath
 {
 public:
-  void set(std::vector<Pose> path)
+  void set(
+    std::vector<Pose> path, double lookahead = .3, ReferenceKind kind = ReferenceKind::ExternalPath)
   {
     if (path.empty() || path.size() > 4096) throw std::invalid_argument("empty or oversized path");
     for (auto p : path)
       if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.yaw))
         throw std::invalid_argument("invalid path");
+    final_goal_ = path.back();
+    if (!std::isfinite(lookahead) || lookahead <= 0)
+      throw std::invalid_argument("invalid lookahead");
+    if (kind == ReferenceKind::ExternalPath) path = geometric_path(path, lookahead);
     sections_.clear();
     std::vector<Pose> translation{path.front()};
     for (std::size_t i = 1; i < path.size(); ++i) {
@@ -52,8 +57,11 @@ public:
       length += PathView(sections_[i].points).length();
     return length;
   }
-  Pose goal() const { return sections_.back().points.back(); }
-  Pose tracking_goal() const { return sections_[section_].points.back(); }
+  Pose goal() const { return final_goal_; }
+  Pose tracking_goal() const
+  {
+    return section_ + 1 == sections_.size() ? final_goal_ : sections_[section_].points.back();
+  }
   bool rotating() const { return !empty() && sections_[section_].rotation; }
   std::size_t section() const { return section_; }
   // A completed bounded steering maneuver may follow a short chord instead
@@ -132,6 +140,7 @@ private:
     std::vector<Pose> points;
     bool rotation = false;
   };
+  Pose final_goal_;
   std::vector<Section> sections_;
   std::size_t section_ = 0;
   double progress_arc_ = 0, travel_budget_ = .03;

@@ -6,13 +6,13 @@ import time
 from pathlib import Path
 
 from trajectory_scenarios import TITLES
-from tracking_quality import evaluate, reference_match
+from tracking_quality import evaluate, reference_match, geometric_reference
 
 DIAGNOSTICS = ('compute_ms', 'cost', 'evaluated', 'effective_samples', 'invalid_state',
                'invalid_input',
                'invalid_control', 'actuator_residual', 'generator_error', 'critic_rejected',
                'collision_rejected', 'critic_errors', 'controller_errors', 'braking_selected', 'presteering',
-               'reference_speed', 'noise_scale', 'reorientation_active', 'reference_limit',
+               'reference_speed', 'goal_heading_weight', 'noise_scale', 'reorientation_active', 'reference_limit',
                'branch_distance', 'branch_phase', 'completed_transition', 'route_section', 'route_rotating', 'remaining_path_m') + tuple(
     f'{candidate}_{field}' for candidate in ('mean', 'fresh', 'brake', 'slow', 'recovery', 'selected')
     for field in ('valid', 'cost', 'path', 'heading', 'velocity', 'alignment', 'effort', 'progress', 'goal'))
@@ -53,6 +53,8 @@ class Recording:
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.points = points
+        self.travel_reference = geometric_reference(points)
+        self.heading_phases = []
         self.odom_origin, self.truth_origin = odom_origin, truth_origin
         self.last_stamp = initial_stamp-1e-9
         self.start = time.monotonic()
@@ -128,6 +130,8 @@ class Recording:
             if 'compute_ms' not in values:
                 continue
             self.diagnostic_writer.writerow([stamp(message)]+[values.get(key,'') for key in DIAGNOSTICS])
+            if 'goal_heading_weight' in values:
+                self.heading_phases.append((stamp(message), float(values['goal_heading_weight']), int(values.get('branch_phase', 0))))
             if 'effective_samples' in values:
                 self.effective_samples.append(float(values['effective_samples']))
 
@@ -178,8 +182,12 @@ class Recording:
             x, y, a = self.last_pose
             error = path_error(x, y, self.points)
             self.errors.append(error)
-            _, reference_yaw = reference_match(x, y, self.points)
-            self.heading_errors.append(abs(math.remainder(a-reference_yaw, 2*math.pi)))
+            # Only normal travel is compared to the XY-derived heading.
+            # Final orientation and internal maneuvers have different targets.
+            phase = next((p for p in reversed(self.heading_phases) if p[0] <= timestamp), None)
+            if phase is not None and phase[1] < .01 and phase[2] == 0 and len(self.travel_reference) > 1:
+                _, reference_yaw = reference_match(x, y, self.travel_reference)
+                self.heading_errors.append(abs(math.remainder(a-reference_yaw, 2*math.pi)))
             ox, oy, oa = local_pose(odom.pose.pose, self.odom_origin)
             peak = max(map(abs, execution.wheel_speeds)) if execution is not None else None
             if self.first_stamp is None:
@@ -237,8 +245,10 @@ class Recording:
                                  path_peak_m=max(self.errors), stopped_fraction=self.stopped/count,
                                  final_position_error_m=math.hypot(x-gx, y-gy),
                                  final_yaw_error_rad=abs(math.remainder(a-ga, 2*math.pi)),
-                                 heading_rms_rad=math.sqrt(sum(v*v for v in self.heading_errors)/count),
-                                 heading_peak_rad=max(self.heading_errors),
+                                 heading_rms_rad=(math.sqrt(sum(v*v for v in self.heading_errors)/len(self.heading_errors)) if self.heading_errors else None),
+                                 heading_peak_rad=max(self.heading_errors, default=None),
+                                 heading_samples=len(self.heading_errors),
+                                 heading_reference="XY geometry; normal travel only",
                                  max_request_linear_rate=self.max_request_linear_rate,
                                  max_request_angular_rate=self.max_request_angular_rate,
                                  max_feedback_linear_rate=self.max_feedback_linear_rate,

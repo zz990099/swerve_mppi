@@ -17,6 +17,8 @@ struct Config
   double temperature = 0.5;
   double lookahead = 0.3, approach_distance = 0.5, approach_gain = 2.0;
   double max_residual = 0.08;
+  double goal_heading_start_distance = .50, goal_heading_full_distance = .10;
+  double goal_heading_scale = .35;
   double position_scale = .03, heading_scale = .05, cross_gain = 4.;
   double path_corridor = .04, heading_corridor = .10;
   std::uint32_t seed = 42;

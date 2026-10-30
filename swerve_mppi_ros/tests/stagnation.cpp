@@ -71,12 +71,14 @@ int main()
     const int maximum_steps = name == 3 ? 1800 : 1300;
     for (int step = 0; step < maximum_steps; ++step) {
       Input input;
+      input.reference_kind = ReferenceKind::GeometricPath;
       input.state = state;
       const auto before = route.section();
       input.path = route.local(state.pose, 3., state.velocity);
       if (route.section() != before) controller.reset();
       input.goal = route.tracking_goal();
-      input.goal_active = route.tracking_goal_active();
+      input.goal_active = route.goal_active(config.goal_heading_start_distance);
+      input.remaining_arc = route.remaining();
       auto result = controller.compute(input);
       if (result.completed_transition) route.recover(state.pose);
       if (result.status != Status::Ok)

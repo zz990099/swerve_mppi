@@ -16,6 +16,9 @@ if(BUILD_TESTING)
   add_executable(core_tests tests/core_tests.cpp)
   target_link_libraries(core_tests PRIVATE swerve_mppi::core)
   add_test(NAME core COMMAND core_tests)
+  add_executable(heading_tests tests/heading_tests.cpp)
+  target_link_libraries(heading_tests PRIVATE swerve_mppi::core)
+  add_test(NAME heading_reference COMMAND heading_tests)
   add_test(NAME installed_consumer COMMAND ${CMAKE_COMMAND}
     "-DDEPENDENCY_PREFIX=${CMAKE_PREFIX_PATH}" -DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_test.cmake)

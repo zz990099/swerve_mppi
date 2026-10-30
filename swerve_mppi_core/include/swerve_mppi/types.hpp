@@ -36,8 +36,19 @@ struct GridView
   bool valid() const;
   bool world_to_map(double x, double y, std::size_t & mx, std::size_t & my) const;
 };
+enum class ReferenceKind
+{
+  ExternalPath,
+  GeometricPath,
+  FixedHeading,
+  WheelAlignment,
+  Departure
+};
 struct MotionReference
 {
+  ReferenceKind reference_kind = ReferenceKind::GeometricPath;
+  double goal_heading_weight = 0;
+  double remaining_arc = -1;
   std::vector<Pose> path;
   Pose goal;
   bool goal_active = true;
@@ -47,6 +58,9 @@ struct MotionReference
 };
 struct Input
 {
+  ReferenceKind reference_kind = ReferenceKind::ExternalPath;
+  double remaining_arc = -1;        // Measured ordered remaining distance, before local cropping.
+  double goal_heading_weight = -1;  // Prepared once per compute, shared by all samples.
   State state;
   std::vector<Pose> path;  // Caller-prepared local ordered section; exclude later return legs.
   Pose goal;               // Full path endpoint, not the local crop endpoint.
@@ -106,6 +120,7 @@ struct Result
   bool presteering = false;
   double reference_speed = 0;
   double noise_scale = 0, branch_distance = -1;
+  double goal_heading_weight = 0;
   std::uint32_t reference_limit = 0;
   bool reorientation_active = false;
   bool completed_transition = false;
