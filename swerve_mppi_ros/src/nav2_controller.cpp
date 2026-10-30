@@ -267,7 +267,10 @@ void Nav2Controller::configure(
         // A clock/state delivery skew must not erase a still-fresh validated
         // snapshot. Reject the future sample; normal control-time age checks
         // still expire the retained state and detect actual clock rewinds.
-        if (stamp > now + .01 || f.feedback_stamp > now + .01) return;
+        if (stamp > now + .01 || f.feedback_stamp > now + .01) {
+          if (f.fault) r.measured.reset();  // A reported fault must still stop control.
+          return;
+        }
         if (r.measured && stamp <= r.state_stamp) return;
         r.measured = f;
         r.state_stamp = seconds(msg.header.stamp);

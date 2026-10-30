@@ -194,6 +194,14 @@ TEST_F(Nav2PluginTest, FutureSnapshotDoesNotEraseFreshValidatedFeedback)
   spin(550);
   EXPECT_THROW(
     controller->computeVelocityCommands(current, {}, goal.get()), nav2_core::NoValidControl);
+  compute();  // Restore a fresh snapshot, then deliver a future-dated fault.
+  observed.header.stamp = (source->now() + rclcpp::Duration::from_seconds(10.)).to_msg();
+  observed.feedback_stamp = observed.header.stamp;
+  observed.fault = 1;
+  states->publish(observed);
+  spin(20);
+  EXPECT_THROW(
+    controller->computeVelocityCommands(current, {}, goal.get()), nav2_core::NoValidControl);
 }
 TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
 {
