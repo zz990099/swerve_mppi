@@ -194,8 +194,19 @@ TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
   std::this_thread::sleep_for(60ms);
   EXPECT_FALSE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
   compute({1, 0, 0});
-  compute({0, 0, 0});
-  EXPECT_FALSE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
+  // Teleporting measured pose does not cancel the last published request.
+  // Completion must wait for that request to slew to zero as in a real stop.
+  geometry_msgs::msg::TwistStamped stopped_request;
+  bool zero_request = false;
+  for (int i = 0; i < 20; ++i) {
+    stopped_request = compute({0, 0, 0});
+    zero_request =
+      std::hypot(stopped_request.twist.linear.x, stopped_request.twist.linear.y) < 1e-4 &&
+      std::abs(stopped_request.twist.angular.z) < 1e-4;
+    EXPECT_FALSE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
+    if (zero_request) break;
+  }
+  ASSERT_TRUE(zero_request);
   std::this_thread::sleep_for(60ms);
   EXPECT_TRUE(goal->isGoalReached(origin, origin, geometry_msgs::msg::Twist{}));
   observed.velocity.linear.z = 1;  // Invalid feedback must clear an earlier stopped sample.
