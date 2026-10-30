@@ -136,3 +136,9 @@ still-fresh snapshot. The original control-time age limits still expire that
 snapshot; a genuine clock rewind is checked against the last control time.
 Malformed snapshots and stale feedback continue to stop control. This avoids
 turning asynchronous clock/state delivery into an unnecessary Nav2 zero pulse.
+
+After a measured heading correction completes, ordinary feedback-consistent
+presteering resumes translation before another explicit branch maneuver can
+start. A spin wheel configuration is not evidence of a new spatial steering
+branch. Reclassifying it immediately caused repeated 5 cm departures and heading
+corrections around the same smooth path segment despite successful arrival.

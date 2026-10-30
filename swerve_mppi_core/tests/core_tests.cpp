@@ -281,6 +281,38 @@ int main()
     check(
       transition.status == Status::Ok && transition.branch_phase != 0,
       "cropping past a representation boundary cannot hide a measured branch mismatch");
+    Controller handoff(c);
+    auto handoff_input = lagged_branch;
+    auto handoff_result = handoff.compute(handoff_input);
+    if (handoff_result.branch_phase == 1) {
+      handoff_input.state.pose.yaw = handoff_result.motion_reference->goal.yaw;
+      handoff_result = handoff.compute(handoff_input);
+    }
+    check(handoff_result.branch_phase == 2, "handoff reaches wheel alignment");
+    auto intent = *handoff_result.motion_reference->alignment;
+    auto wheels = swerve_chassis_core::inverse(c.geometry, {intent.vx, intent.vy, intent.wz});
+    handoff_input.state.steering = wheels.steering;
+    handoff_input.state.generator.command.steering = wheels.steering;
+    handoff_result = handoff.compute(handoff_input);
+    check(handoff_result.branch_phase == 3, "aligned handoff departs");
+    handoff_input.state.pose = handoff_result.motion_reference->goal;
+    handoff_input.state.pose.yaw =
+      PathView(handoff_input.path).start_match(handoff_input.state.pose).pose.yaw + .04;
+    handoff_result = handoff.compute(handoff_input);
+    check(handoff_result.branch_phase == 4, "measured heading error requests settling");
+    handoff_input.state.pose.yaw = handoff_result.motion_reference->goal.yaw;
+    wheels = swerve_chassis_core::inverse(c.geometry, {0, 0, 1});
+    handoff_input.state.steering = wheels.steering;
+    handoff_input.state.generator.command.steering = wheels.steering;
+    handoff_result = handoff.compute(handoff_input);
+    check(handoff_result.completed_transition, "measured heading settling completes");
+    handoff_result = handoff.compute(handoff_input);
+    check(
+      handoff_result.status == Status::Ok && handoff_result.branch_phase == 0 &&
+        std::hypot(handoff_result.command.velocity.vx, handoff_result.command.velocity.vy) +
+            std::abs(handoff_result.command.velocity.wz) >
+          1e-4,
+      "spin wheel configuration must resume ordinary tracking before a new branch event");
     auto canceled_branch = lagged_branch;
     canceled_branch.path.clear();
     check(

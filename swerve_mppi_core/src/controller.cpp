@@ -68,6 +68,7 @@ void Controller::reset()
 {
   clear_optimization();
   branch_.reset();
+  tracking_start_ = false;
 }
 std::vector<Velocity> Controller::seed(
   const Input & input, const ReferenceProfile & reference,
@@ -137,12 +138,13 @@ Result Controller::compute(const Input & source)
     !std::isfinite(PathView(source.path).length()))
     return compute_tracking(source);
   Input input = source;
+  if (std::hypot(source.state.velocity.vx, source.state.velocity.vy) > .04) tracking_start_ = false;
   bool stopped = true;
   for (double v : source.state.wheel_speeds) stopped &= std::abs(v) < config_.limits.stopped_speed;
   // Branch events are short, ordered maneuvers in the same continuous twist
   // space. Their location and exit are held until measured completion.
   if (
-    !branch_ && stopped && !source.path.empty() && source.path.size() <= 4096 &&
+    !branch_ && !tracking_start_ && stopped && !source.path.empty() && source.path.size() <= 4096 &&
     model_.valid(source.state) &&
     std::all_of(source.path.begin(), source.path.end(), [](Pose p) { return finite(p); })) {
     try {
@@ -249,6 +251,10 @@ Result Controller::compute(const Input & source)
       event.phase == 4 &&
       (!event.settle_heading ||
        (stopped && std::abs(wrap_angle(source.state.pose.yaw - event.origin.yaw)) < .003))) {
+      // A heading correction leaves the wheels in a spin configuration.
+      // Let ordinary feedback-consistent presteering resume translation before
+      // interpreting that wheel pose as another spatial branch event.
+      tracking_start_ = event.settle_heading;
       branch_.reset();
       clear_optimization();
       completed = true;
