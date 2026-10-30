@@ -44,3 +44,8 @@ External path intermediate yaw is ignored: travel heading follows ordered XY geo
 with an independent final yaw. This policy is experimental; see
 [heading contract](docs/GEOMETRIC_HEADING.md) and
 [recorded limitations](docs/GEOMETRIC_HEADING_VALIDATION.md).
+
+For incremental local single-scenario tests without ROS, see
+[local testing](docs/LOCAL_TESTING.md). The latest experimental heading changes
+and unresolved strict regressions are recorded in
+[local optimization results](docs/GEOMETRIC_HEADING_LOCAL_OPTIMIZATION.md).

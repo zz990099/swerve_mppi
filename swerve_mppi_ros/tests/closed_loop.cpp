@@ -123,7 +123,9 @@ int main()
           std::cout << "plant=" << plant << " scenario=" << scenario
                     << " simulated_s=" << step * 0.05 << " error=" << distance(s.pose, path.goal())
                     << " rms=" << std::sqrt(square_error / observations) << " peak=" << peak
-                    << " stopped=" << double(stopped) / observations << '\n';
+                    << " stopped=" << double(stopped) / observations << " heading_rms="
+                    << std::sqrt(heading_square / std::max(1, heading_observations))
+                    << " heading_peak=" << heading_peak << std::endl;
           if (
             std::sqrt(square_error / observations) > .03 || peak > .075 ||
             double(stopped) / observations > .55 ||

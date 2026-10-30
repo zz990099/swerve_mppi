@@ -90,6 +90,7 @@ struct Nav2Controller::Runtime
     number("goal_heading_start_distance", config.goal_heading_start_distance);
     number("goal_heading_full_distance", config.goal_heading_full_distance);
     number("goal_heading_scale", config.goal_heading_scale);
+    number("travel_heading_scale", config.travel_heading_scale);
     number("approach_distance", config.approach_distance);
     number("approach_gain", config.approach_gain);
     auto size = [&](const char * key, std::size_t & value) {
@@ -393,6 +394,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     input.goal = transform_path_pose(r.path.tracking_goal());
     input.goal_active = r.path.goal_active(r.config.goal_heading_start_distance);
     input.remaining_arc = r.path.remaining();
+    if (ordered) input.goal_tolerance = ordered->tolerance();
     input.reference_kind = r.path.remaining() < 1e-8 && input.path.size() == 1
                              ? ReferenceKind::FixedHeading
                              : ReferenceKind::GeometricPath;

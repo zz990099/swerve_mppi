@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "swerve_mppi/config.hpp"
+#include "swerve_mppi/heading_reference.hpp"
 #include "swerve_mppi/path.hpp"
 
 namespace swerve_mppi
@@ -122,6 +123,27 @@ public:
       }
     }
   }
+  ReferenceProfile(const Input & input, const Config & config)
+  : ReferenceProfile(input.path, config)
+  {
+    if (
+      input.reference_kind == ReferenceKind::EffectivePath && input.goal_active &&
+      distance(input.path.back(), input.goal) < .001 && input.goal_heading_weight > 0) {
+      const double remaining =
+        std::max(ordered_remaining(input), distance(input.state.pose, input.goal));
+      const double error = std::abs(wrap_angle(input.goal.yaw - input.state.pose.yaw));
+      // Leave time to turn before arrival. The same cap governs nominal speed,
+      // scoring, seed generation and retiming.
+      const double cap = config.max_yaw_rate *
+                         std::max(0., remaining - input.goal_tolerance.position) /
+                         std::max(.01, error);
+      for (std::size_t i = 0; i < speed_.size(); ++i)
+        if (cap < speed_[i]) {
+          speed_[i] = cap;
+          reasons_[i] |= 128;
+        }
+    }
+  }
   ReferenceProfile(const ReferenceProfile &) = delete;
   ReferenceProfile & operator=(const ReferenceProfile &) = delete;
   double speed(double arc) const
@@ -135,7 +157,7 @@ public:
     return speed_[i - 1] + t * (speed_[i] - speed_[i - 1]);
   }
   // Bit mask: geometry/end=1, yaw=2, wheel speed=4, corner=8,
-  // actuator rate=16, acceleration envelope=64. Interpolation combines neighboring active limits.
+  // actuator rate=16, acceleration envelope=64, final heading approach=128. Interpolation combines neighboring active limits.
   std::uint32_t limiting_reason(double arc) const
   {
     auto it = std::upper_bound(s_.begin(), s_.end(), arc);

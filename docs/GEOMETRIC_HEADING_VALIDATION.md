@@ -1,5 +1,9 @@
 # 几何朝向策略：实施与验证结果
 
+> 本文保留上一轮版本的历史证据。本轮实施与本地测试见
+> [GEOMETRIC_HEADING_LOCAL_OPTIMIZATION.md](GEOMETRIC_HEADING_LOCAL_OPTIMIZATION.md)。
+
+
 实施分支：`feat/geometric-travel-heading`；[草稿 PR #6](https://github.com/zz990099/swerve_mppi/pull/6)。
 基线 `35b082b`；实现 `bb2904453cf7a9d268640d3a4d70d85dcefc60d5`。
 

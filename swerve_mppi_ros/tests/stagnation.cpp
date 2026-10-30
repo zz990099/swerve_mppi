@@ -104,7 +104,11 @@ int main()
       }
       state.requested = result.command.velocity;
       peak = std::max(peak, PathView(cases[name]).match(state.pose).error);
-      if (peak > .1) throw std::runtime_error("stagnation regression: corridor exceeded");
+      if (peak > .1) {
+        std::cerr << "corridor exceeded case=" << name << " t=" << step * .05 << " peak=" << peak
+                  << " remaining=" << route.remaining() << std::endl;
+        throw std::runtime_error("stagnation regression: corridor exceeded");
+      }
       if (route.goal_active() && goal.reached(state, route.goal(), step * .05)) {
         reached = true;
         std::cout << "stagnation case=" << name << " seconds=" << step * .05 << " peak=" << peak

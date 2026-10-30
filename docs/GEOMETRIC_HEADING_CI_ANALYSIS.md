@@ -1,5 +1,9 @@
 # PR #6 最新 CI 与 main 的对比
 
+> 本文保留上一轮版本的历史证据。本轮实施与本地测试见
+> [GEOMETRIC_HEADING_LOCAL_OPTIMIZATION.md](GEOMETRIC_HEADING_LOCAL_OPTIMIZATION.md)。
+
+
 最新有效仿真运行：[41034920183](https://github.com/zz990099/swerve_mppi/actions/runs/41034920183)，PR 算法版本 bb29044，记录脚本修正版 63c97b2，CI 实际测试 merge commit bda34e1f。
 main 对照运行：[41021506828](https://github.com/zz990099/swerve_mppi/actions/runs/41021506828)，版本 35b082b。
 两轮都是 seed 42、原始输入参考点完全相同、平移路径至少 12 m、1 m/s 上限、map 路径、原始轮式里程计、真值 map→odom。

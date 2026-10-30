@@ -40,7 +40,8 @@ controller_server:
       lookahead: 0.30
       goal_heading_start_distance: 0.50
       goal_heading_full_distance: 0.10
-      goal_heading_scale: 0.35
+      goal_heading_scale: 0.10
+      travel_heading_scale: 0.50
       max_speed: 0.8
       max_yaw_rate: 0.8
 

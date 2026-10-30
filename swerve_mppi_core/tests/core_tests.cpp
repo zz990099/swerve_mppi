@@ -97,7 +97,7 @@ int main()
       "smooth return leg cannot capture noisy initial matching");
     Input ring_input;
     ring_input.reference_kind =
-      ReferenceKind::GeometricPath;  // Explicit prepared/internal reference.
+      ReferenceKind::EffectivePath;  // Explicit prepared/internal reference.
     ring_input.state.generator.valid = true;
     ring_input.state.pose.x = -.001;
     ring_input.path = ring;
@@ -155,7 +155,7 @@ int main()
     check(!model.rollout(state, {{0.2, 0, 0}}).valid, "missing snapshot rejected");
     state.generator.valid = true;
     Input input;
-    input.reference_kind = ReferenceKind::GeometricPath;  // Explicit prepared/internal reference.
+    input.reference_kind = ReferenceKind::EffectivePath;  // Explicit prepared/internal reference.
     input.state = state;
     input.path = {{0, 0, 0}, {1, 0, 0}};
     input.goal = input.path.back();
@@ -169,7 +169,7 @@ int main()
     input.state = state;
     check(controller.compute(input).status == Status::Ok, "input recovery");
     Input lateral;
-    lateral.reference_kind = ReferenceKind::GeometricPath;  // Explicit prepared/internal reference.
+    lateral.reference_kind = ReferenceKind::EffectivePath;  // Explicit prepared/internal reference.
     lateral.state.generator.valid = true;
     lateral.path = {{0, 0, 0}, {0, .8, 0}};
     lateral.goal = lateral.path.back();
@@ -261,7 +261,7 @@ int main()
       "explicit alignment cannot bypass injected hard rejection");
     Input cross_recovery;
     cross_recovery.reference_kind =
-      ReferenceKind::GeometricPath;  // Explicit prepared/internal reference.
+      ReferenceKind::EffectivePath;  // Explicit prepared/internal reference.
     cross_recovery.state.generator.valid = true;
     cross_recovery.state.pose = {-.019, .2, .009};
     cross_recovery.state.steering.fill(swerve_chassis_core::pi / 2);
@@ -274,7 +274,7 @@ int main()
       "small pose error with a significant steering correction must retain recovery intent");
     Input lagged_branch;
     lagged_branch.reference_kind =
-      ReferenceKind::GeometricPath;  // Explicit prepared/internal reference.
+      ReferenceKind::EffectivePath;  // Explicit prepared/internal reference.
     lagged_branch.state.generator.valid = true;
     lagged_branch.state.pose = {0, 0, 1.60};
     const auto old_branch =

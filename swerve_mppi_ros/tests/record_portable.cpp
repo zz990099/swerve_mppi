@@ -11,7 +11,28 @@ using namespace swerve_mppi;
 namespace chassis = swerve_chassis_core;
 int main(int argc, char ** argv)
 {
-  if (argc != 2) return 2;
+  if (argc < 2) return 2;
+  double max_speed = .8, servo_time = .12, max_time = 90.;
+  bool keep_path_yaw = false;
+  for (int i = 2; i < argc; ++i) {
+    std::string option(argv[i]);
+    if (option == "--keep-path-yaw") {
+      keep_path_yaw = true;
+      continue;
+    }
+    if (++i >= argc) return 2;
+    const double value = std::stod(argv[i]);
+    if (!std::isfinite(value) || value <= 0) return 2;
+    if (option == "--max-speed")
+      max_speed = value;
+    else if (option == "--servo-time")
+      servo_time = value;
+    else if (option == "--max-time")
+      max_time = value;
+    else
+      return 2;
+  }
+  if (max_speed > 1 || servo_time > 1 || max_time > 600) return 2;
   const std::filesystem::path root(argv[1]);
   std::ifstream cases(root / "cases.txt");
   std::ofstream metrics(root / "metrics.csv");
@@ -31,9 +52,18 @@ int main(int argc, char ** argv)
     if (points.empty()) return 3;
     Config config;
     config.seed = 42;
+    config.max_speed = max_speed;
+    config.limits.linear_speed = std::max(max_speed, config.limits.linear_speed);
     Controller controller(config);
     OrderedPath path;
-    path.set(points, config.lookahead);
+#ifdef SWERVE_HEADING_REFERENCE
+    path.set(
+      points, config.lookahead,
+      keep_path_yaw ? ReferenceKind::GeometricPath : ReferenceKind::ExternalPath);
+#else
+    (void)keep_path_yaw;
+    path.set(points);
+#endif
     chassis::Generator executor(config.geometry, config.limits);
     swerve_mppi_ros::GoalChecker checker;
     State state;
@@ -47,15 +77,21 @@ int main(int argc, char ** argv)
     std::string status = "timeout";
     std::size_t failures = 0;
     std::vector<double> times;
-    for (int step = 0; step < 1800; ++step) {
+    for (int step = 0; step < static_cast<int>(std::ceil(max_time / .05)); ++step) {
       time = step * .05;
       Input input;
+#ifdef SWERVE_HEADING_REFERENCE
       input.reference_kind = ReferenceKind::GeometricPath;
+#endif
       input.state = state;
       input.path = path.local(state.pose, 3., state.velocity);
-      input.goal = path.goal();
+      input.goal = path.tracking_goal();
+#ifdef SWERVE_HEADING_REFERENCE
       input.goal_active = path.goal_active(config.goal_heading_start_distance);
       input.remaining_arc = path.remaining();
+#else
+      input.goal_active = path.tracking_goal_active();
+#endif
       auto result = controller.compute(input);
       if (result.completed_transition) path.recover(state.pose);
       times.push_back(result.compute_ms);
@@ -74,8 +110,8 @@ int main(int argc, char ** argv)
         auto target = out.state.command;
         // Independent servo plant is 20% slower than the controller model.
         for (std::size_t w = 0; w < 4; ++w)
-          target.steering[w] =
-            state.steering[w] - std::expm1(-.01 / .12) * (target.steering[w] - state.steering[w]);
+          target.steering[w] = state.steering[w] - std::expm1(-.01 / servo_time) *
+                                                     (target.steering[w] - state.steering[w]);
         auto joints =
           chassis::response({state.steering, state.wheel_speeds}, target, config.limits, .01);
         state.steering = joints.steering;
@@ -87,11 +123,15 @@ int main(int argc, char ** argv)
       state.requested = result.command.velocity;
       double error = PathView(points).match(state.pose).error;
       peak = std::max(peak, error);
+      double heading_weight = 0;
+#ifdef SWERVE_HEADING_REFERENCE
+      heading_weight = result.goal_heading_weight;
+#endif
       trace << time << ',' << state.pose.x << ',' << state.pose.y << ',' << state.pose.yaw << ','
             << state.velocity.vx << ',' << state.velocity.vy << ',' << state.velocity.wz << ','
             << state.requested.vx << ',' << state.requested.vy << ',' << state.requested.wz << ','
-            << path.remaining() << ',' << result.goal_heading_weight << ',' << result.branch_phase
-            << ',' << result.compute_ms << ',' << error << '\n';
+            << path.remaining() << ',' << heading_weight << ',' << result.branch_phase << ','
+            << result.compute_ms << ',' << error << '\n';
       if (
         path.goal_active() && std::hypot(state.requested.vx, state.requested.vy) < 1e-4 &&
         std::abs(state.requested.wz) < 1e-4 && checker.reached(state, path.goal(), time)) {

@@ -30,15 +30,13 @@ public:
     if (c.breakdown) c.breakdown->assign(batch.size(), {});
     PathView path(c.input.path);
     std::unique_ptr<ReferenceProfile> local_reference;
-    if (!c.reference) local_reference = std::make_unique<ReferenceProfile>(c.input.path, c.config);
+    if (!c.reference) local_reference = std::make_unique<ReferenceProfile>(c.input, c.config);
     const auto & reference = c.reference ? *c.reference : *local_reference;
+    const double weight = std::clamp(c.input.goal_heading_weight, 0., 1.);
     const double heading_scale =
-      c.input.precise_heading ? std::min(.005, c.config.heading_scale) : c.config.heading_scale;
-    const double goal_weight = c.input.goal_heading_weight >= 0
-                                 ? c.input.goal_heading_weight
-                                 : terminal_heading_weight(c.input, c.config);
-    const double travel_weight = 1 - goal_weight;
-    const double goal_scale = c.input.precise_heading ? heading_scale : c.config.goal_heading_scale;
+      c.input.precise_heading
+        ? std::min(.005, c.config.heading_scale)
+        : (1 - weight) * c.config.travel_heading_scale + weight * c.config.goal_heading_scale;
     auto start = path.start_match(c.input.state.pose);
     const double checkpoint = path.next_corner(start.arc);
     bool terminal = c.input.goal_active && distance(c.input.path.back(), c.input.goal) < .001;
@@ -89,10 +87,7 @@ public:
         // deviating prediction also rejects physically necessary recovery/braking.
         // Collision and actuator feasibility remain independent hard checks.
         const double slack =
-          std::pow(std::max(0., m.error - c.config.path_corridor) / c.config.position_scale, 2) +
-          travel_weight *
-            std::pow(
-              std::max(0., std::abs(heading) - c.config.heading_corridor) / heading_scale, 2);
+          std::pow(std::max(0., m.error - c.config.path_corridor) / c.config.position_scale, 2);
         const auto & u = t.controls[i - 1];
         const auto unit = reference.unit(progress, s.pose.yaw);
         const double along = s.velocity.vx * unit.vx + s.velocity.vy * unit.vy;
@@ -134,10 +129,8 @@ public:
           std::pow((u.wz - previous.wz) / (c.config.limits.angular_acceleration * dt), 2);
         detail.path +=
           norm * (4 * slack + w_.path_distance * std::pow(m.error / c.config.position_scale, 2));
-        detail.heading +=
-          norm * travel_weight * w_.path_heading * std::pow(heading / heading_scale, 2);
-        detail.goal += norm * goal_weight * w_.goal_heading *
-                       std::pow(wrap_angle(s.pose.yaw - c.input.goal.yaw) / goal_scale, 2);
+        detail.heading += norm * ((1 - weight) * w_.path_heading + weight * w_.goal_heading) *
+                          std::pow(heading / heading_scale, 2);
         detail.velocity += norm * (std::pow(excess_speed / .1, 2) +
                                    w_.reference_velocity * velocity_error * velocity_error);
         detail.alignment += norm * w_.presteering_alignment * alignment_error;

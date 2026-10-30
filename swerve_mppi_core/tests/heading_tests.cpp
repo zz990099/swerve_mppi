@@ -1,4 +1,5 @@
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 #include "swerve_mppi/controller.hpp"
@@ -19,6 +20,14 @@ public:
   {
     weight = c.input.goal_heading_weight;
     kind = c.input.reference_kind;
+  }
+};
+class Reject final : public Critic
+{
+  void score(const CriticContext &, const std::vector<Trajectory> &, std::vector<double> & costs)
+    const override
+  {
+    for (auto & cost : costs) cost = std::numeric_limits<double>::infinity();
   }
 };
 int main()
@@ -90,6 +99,56 @@ int main()
     require(
       route.goal().yaw == 1.2 && route.local({0, 0, 0}).size() == 1,
       "pure rotation remains supported");
+    Input startup;
+    startup.reference_kind = ReferenceKind::GeometricPath;
+    startup.state.generator.valid = true;
+    startup.path = {{0, 0, 1.57079632679}, {3, 0, 1.57079632679}};
+    startup.goal = startup.path.back();
+    startup.goal_active = false;
+    startup.goal_heading_weight = 0;
+    const auto effective = effective_heading_path(startup, config);
+    require(
+      std::abs(effective.front().yaw - startup.state.pose.yaw) <= config.heading_corridor + 1e-9,
+      "startup reference begins inside heading corridor");
+    PathView feasible(effective);
+    require(
+      std::abs(feasible.yaw_derivative(.05)) * config.max_speed <= config.max_yaw_rate + 1e-6,
+      "large startup yaw has a rate-limited spatial reference");
+    require(
+      effective.back().yaw > effective.front().yaw,
+      "startup heading converges toward travel direction");
+    Input arrived;
+    arrived.state.generator.valid = true;
+    arrived.state.pose = {.024, 0, .017};
+    arrived.path = {{0, 0, 0}};
+    arrived.goal = {0, 0, 0};
+    arrived.remaining_arc = 0;
+    arrived.state.requested = {-.008, -.027, .034};
+    const auto held = Controller(config).compute(arrived);
+    require(
+      held.status == Status::Ok &&
+        std::hypot(held.command.velocity.vx, held.command.velocity.vy) < 1e-10 &&
+        std::abs(held.command.velocity.wz) < 1e-10,
+      "arrived and stopped pose emits validated zero inside shared completion tolerances");
+    require(
+      Controller(config, {std::make_shared<Reject>()}).compute(arrived).status ==
+        Status::NoSolution,
+      "terminal zero request cannot bypass a hard critic rejection");
+    arrived.goal_tolerance.yaw = .005;
+    const auto correcting = Controller(config).compute(arrived);
+    require(
+      correcting.status == Status::Ok && std::abs(correcting.command.velocity.wz) > 1e-5,
+      "custom tighter goal tolerance retains heading correction");
+    arrived.path = {{.024, 0, .017}, {1, 0, 0}, {.024, 0, .017}};
+    arrived.goal = arrived.path.back();
+    arrived.remaining_arc = -1;
+    require(
+      !terminal_position_reached(arrived),
+      "coincident endpoint cannot bypass ordered remaining distance");
+    arrived.goal_tolerance.yaw = -1;
+    require(
+      Controller(config).compute(arrived).status == Status::InvalidInput,
+      "invalid completion tolerances rejected");
     config.goal_heading_full_distance = config.goal_heading_start_distance;
     bool rejected = false;
     try {

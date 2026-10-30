@@ -40,9 +40,14 @@ enum class ReferenceKind
 {
   ExternalPath,
   GeometricPath,
+  EffectivePath,  // Prepared by Controller; shared yaw profile for scoring and retiming.
   FixedHeading,
   WheelAlignment,
   Departure
+};
+struct GoalTolerance
+{
+  double position = .06, yaw = .05, linear_speed = .035, angular_speed = .035, settle = .3;
 };
 struct MotionReference
 {
@@ -55,6 +60,7 @@ struct MotionReference
   std::optional<Velocity> alignment;
   bool precise_heading = false;
   std::optional<Velocity> departure;
+  GoalTolerance goal_tolerance;
 };
 struct Input
 {
@@ -71,6 +77,7 @@ struct Input
     alignment;  // Stopped wheel alignment, still rolled out and collision checked.
   bool precise_heading = false;
   std::optional<Velocity> departure;
+  GoalTolerance goal_tolerance;
 };
 struct Command
 {

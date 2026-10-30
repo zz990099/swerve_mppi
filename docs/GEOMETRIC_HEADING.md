@@ -6,29 +6,33 @@ prepares the complete route before cropping; the original final pose is kept
 separately. `lookahead` (0.30 m) derives forward heading without looking through
 mandatory corners. Pure rotation tasks remain supported by the final pose yaw.
 
-`Input::reference_kind` distinguishes external paths, prepared geometric paths,
-fixed internal heading, wheel alignment, and departure. Low-level callers passing
-already-prepared references must explicitly select `GeometricPath`; ordinary
-external input defaults to `ExternalPath`. The internal `OrderedPath::set`
-reference-kind argument retains explicit ordered rotation tests and is not a
-ROS configuration switch for restoring intermediate external yaw semantics.
+`Input::reference_kind` distinguishes external XY paths, geometric paths,
+controller-prepared `EffectivePath`, fixed internal heading, wheel alignment,
+and departure. The controller constructs one effective yaw path from travel
+geometry and independent final yaw. A spatially decaying startup offset avoids
+an instantaneous body-yaw step. All consumers, including the wheel/velocity
+profile, seed, critics, recovery and retiming, use this effective path.
 
-Final orientation activates using measured ordered remaining distance and XY
-distance to the final goal. All samples share one smoothstep weight per cycle,
-starting at 0.50 m and reaching full authority at 0.10 m. Travel heading cost and
-heading-corridor penalties fade together. Goal heading is scored throughout each
-prediction; the former candidate-dependent 0.02 m gate is removed. Feedback seed
-and latched steering intent use the same weighted yaw objectives. The goal cost
-scale is 0.35 rad, independently of completion tolerances and precise internal
-heading alignment. The geometric nominal speed envelope is retained; all blended
-requests still undergo conditioning and actuator rollout feasibility checks.
+Final orientation uses measured ordered remaining distance and XY goal distance.
+All samples share one smoothstep weight per cycle, starting at 0.50 m and reaching
+full authority at 0.10 m. There is one circular heading target and one heading
+error; its scale changes from `travel_heading_scale=0.50` rad to
+`goal_heading_scale=0.10` rad. The old duplicate goal/path heading objectives
+and ordinary yaw-corridor slack are removed. Position tracking remains stronger.
+The former predicted-remaining 0.02 m switch remains removed.
 
-Internal branch maneuvers preserve their fixed heading/departure intent and
-precise alignment semantics. Effective references, reference kind, ordered
-remaining distance and blend weight are retained for publication retiming even
-during normal tracking. Ordinary goal blending does not reset the optimizer on
-every cycle. Existing terminal hold, zero-output completion readiness, live
-map-to-odom goal conversion, feedback health and settling gates remain enabled.
+The common velocity profile reserves time for final rotation. Once measured
+ordered progress and XY position enter the goal region, translation correction
+stops while final yaw is corrected. Core and ROS share `GoalTolerance`; the
+adapter passes its actual OrderedGoalChecker settings. A stopped arrived state
+clears obsolete steering intent and produces a slew-limited, rolled-out,
+critic-validated zero request. The measured wheel-speed, settling, zero-output,
+feedback-health and collision gates remain active. Precise internal maneuvers
+keep their own references and tighter alignment behavior.
+
+Effective reference snapshots include completion tolerances for retiming.
+Synthetic tests with explicit internal yaw select `EffectivePath`; this is not
+a ROS switch for restoring external intermediate yaw semantics.
 
 ## Validation
 
@@ -42,22 +46,14 @@ internal alignment; positional and final-yaw acceptance thresholds are unchanged
 The physical workflow remains one 32-case Gazebo/Nav2 round with seed 42 and
 minimum route length 12 m. No real-time acceptance gates are relaxed.
 
-`record_portable` records the same 32 scenario shapes at their original lengths,
-with seed 42, 20 Hz requests, the shared chassis executor and an independent
-0.12 s steering servo plant (controller nominal 0.10 s). It retains partial
-trajectories and reports stalled/no-solution/deviation cases without tuning them
-away. Numerical results do not validate ROS lifecycle, TF, odometry or Gazebo.
-Run it with a directory containing `cases.txt` and `references/<name>.csv`.
+`record_portable` can run one selected scenario or an explicit full round,
+with configurable route length, speed and independent steering servo response.
+The default Python entry selects `straight`, not all 32 cases. It records failures
+and partial trajectories. See [local reproduction](LOCAL_TESTING.md).
 
-This implementation is experimental until the complete regression and physical
-results have been assessed. Known failures are retained in the validation report.
-
-Numerical reproduction after building the portable target:
-
-```bash
-python3 swerve_mppi_ros/tests/run_portable_recordings.py \
-  --executable build-support/record_portable --output heading-results
-```
-
-The numerical montage uses functional completion and a 0.10 m position corridor;
-it is not a substitute for the existing full physical quality verdict.
+The implementation remains experimental. The latest seven-case local round
+passes functional completion and the 10 cm XY corridor, but strict heading and
+180-degree final-turn regressions remain. See
+[latest implementation and limitations](GEOMETRIC_HEADING_LOCAL_OPTIMIZATION.md).
+Historical numerical and Gazebo evidence remains in the earlier validation reports;
+it does not validate this new revision.

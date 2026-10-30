@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(swerve_mppi_core VERSION 1.0.0 LANGUAGES CXX)
-find_package(swerve_chassis_core 1 CONFIG REQUIRED)
+if(NOT TARGET swerve_chassis_core::swerve_chassis_core)
+  find_package(swerve_chassis_core 1 CONFIG REQUIRED)
+endif()
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 option(BUILD_TESTING "Build tests" ON)
@@ -19,9 +21,11 @@ if(BUILD_TESTING)
   add_executable(heading_tests tests/heading_tests.cpp)
   target_link_libraries(heading_tests PRIVATE swerve_mppi::core)
   add_test(NAME heading_reference COMMAND heading_tests)
-  add_test(NAME installed_consumer COMMAND ${CMAKE_COMMAND}
-    "-DDEPENDENCY_PREFIX=${CMAKE_PREFIX_PATH}" -DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
-    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_test.cmake)
+  if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    add_test(NAME installed_consumer COMMAND ${CMAKE_COMMAND}
+      "-DDEPENDENCY_PREFIX=${CMAKE_PREFIX_PATH}" -DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_test.cmake)
+  endif()
 endif()
 install(TARGETS swerve_mppi_core EXPORT swerve_mppi_coreTargets ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(DIRECTORY include/ DESTINATION include)

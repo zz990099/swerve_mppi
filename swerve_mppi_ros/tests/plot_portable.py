@@ -2,6 +2,7 @@
 import argparse
 import csv
 import math
+import json
 from pathlib import Path
 
 import matplotlib
@@ -17,9 +18,14 @@ def render(root):
     with (root/'metrics.csv').open() as f:
         metrics = list(csv.DictReader(f))
     passed = sum(row['status'] == 'passed' for row in metrics)
+    settings = json.loads((root/'experiment.json').read_text()) if (root/'experiment.json').exists() else {}
+    setup = (f"seed 42, minimum route {settings.get('minimum_length', 'original')} m, "
+             f"speed cap {settings.get('max_speed', .8)} m/s, servo {settings.get('servo_time', .12)} s")
     plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 9,
                          'axes.spines.top': False, 'axes.spines.right': False})
-    fig, axes = plt.subplots(8, 4, figsize=(19, 30))
+    columns = min(4, len(metrics))
+    row_count = math.ceil(len(metrics)/columns)
+    fig, axes = plt.subplots(row_count, columns, figsize=(4.8*columns, 4.4*row_count+2), squeeze=False)
     for index, (ax, row) in enumerate(zip(axes.flat, metrics), 1):
         name = row['scenario']
         reference = np.loadtxt(root/'references'/f'{name}.csv', delimiter=',', ndmin=2)
@@ -46,17 +52,22 @@ def render(root):
         ax.set_aspect('equal', adjustable='datalim')
         ax.margins(.20)
         ax.grid(alpha=.18)
+    for ax in list(axes.flat)[len(metrics):]:
+        ax.set_visible(False)
     fig.suptitle(f'XY-derived heading + independent final yaw  |  {passed}/{len(metrics)} passed\n'
-                 'NUMERICAL CLOSED LOOP  |  one round, seed 42, original route lengths\n'
-                 'Shared chassis executor + independent 0.12s servo plant; no ROS / Gazebo / odometry\n'
+                 f'NUMERICAL CLOSED LOOP  |  {setup}\n'
+                 'Shared chassis executor + independent servo plant; no ROS / Gazebo / odometry\n'
                  'Dashed: XY route   Orange arrows: body yaw   Blue star/arrow: final pose',
                  fontsize=14, weight='bold', y=.992)
     fig.tight_layout(rect=(0, 0, 1, .951), h_pad=2)
     fig.savefig(root/'heading_32_case_overview.png', dpi=130)
     plt.close(fig)
 
-    selected = ['final_yaw', 'reverse', 'figure_eight', 'slalom']
-    fig, axes = plt.subplots(len(selected), 3, figsize=(18, 15))
+    selected = [n for n in ['final_yaw', 'reverse', 'crab_right', 'figure_eight', 'slalom']
+                if any(r['scenario'] == n for r in metrics)]
+    if not selected:
+        return
+    fig, axes = plt.subplots(len(selected), 3, figsize=(18, max(5, len(selected)*3.8)), squeeze=False)
     for axs, name in zip(axes, selected):
         row = next(r for r in metrics if r['scenario'] == name)
         data = np.atleast_1d(np.genfromtxt(root/f'{name}.csv', delimiter=',', names=True))
@@ -89,7 +100,7 @@ def render(root):
         for ax in axs:
             ax.grid(alpha=.18)
             ax.legend(loc='best', fontsize=7)
-    fig.suptitle('Terminal handoff and retained failures\nNumerical plant recordings; failures retained without tuning',
+    fig.suptitle('Terminal handoff and selected cases\nNumerical plant recordings; see metrics for pass/fail',
                  fontsize=16, weight='bold')
     fig.tight_layout(rect=(0, 0, 1, .95), h_pad=2.5)
     fig.savefig(root/'heading_handoff_and_failures.png', dpi=150)

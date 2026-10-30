@@ -1,0 +1,22 @@
+scenario,version,status,duration_s,path_peak_cm,final_position_cm,final_yaw_rad,compute_p99_ms
+crab,main 35b082b,passed,15.3,1.0303,1.32485,0.00240716,44.3846
+crab,PR before optimization,passed,27.2,9.22246,0.570458,0.00929817,52.4563
+crab,Current optimization,passed,23.9,5.087479999999999,5.0740300000000005,0.0062342,57.4762
+crab_right,main 35b082b,passed,15.05,0.540454,1.3804,0.00513148,49.1865
+crab_right,PR before optimization,path_deviation,28.05,12.0362,0.5861500000000001,0.00818222,51.3506
+crab_right,Current optimization,passed,23.55,5.54299,5.53004,0.0129073,55.005
+reverse_diagonal,main 35b082b,passed,14.7,0.269776,1.40144,4.63563e-06,51.7867
+reverse_diagonal,PR before optimization,passed,27.65,7.68093,0.528936,0.00891386,51.7596
+reverse_diagonal,Current optimization,passed,30.7,9.41567,0.153934,0.00189859,52.4728
+lateral_zigzag,main 35b082b,passed,24.4,1.00965,1.29396,2.72716e-05,53.8717
+lateral_zigzag,PR before optimization,timeout,129.95,12.3742,746.007,1.03535,55.1744
+lateral_zigzag,Current optimization,passed,53.9,8.15099,2.2944,0.00597139,53.7694
+figure_eight,main 35b082b,passed,35.7,1.53504,1.27856,3.10452e-05,50.3033
+figure_eight,PR before optimization,passed,42.8,7.6080499999999995,0.46733199999999997,0.00933558,54.1698
+figure_eight,Current optimization,passed,38.8,1.79495,3.30042,0.00740064,51.0018
+straight,main 35b082b,passed,14.35,0.650764,1.3970399999999998,1.3694e-05,52.0538
+straight,PR before optimization,passed,14.35,0.650764,1.397,1.38151e-05,61.5783
+straight,Current optimization,passed,14.8,0.6721119999999999,1.2302799999999998,4.46964e-05,52.0246
+final_yaw,main 35b082b,passed,14.3,0.497605,1.27542,0.000937598,53.6839
+final_yaw,PR before optimization,passed,19.35,0.650764,0.0225384,0.00910999,55.521
+final_yaw,Current optimization,passed,18.5,3.17732,3.1671199999999997,0.00540626,51.9753

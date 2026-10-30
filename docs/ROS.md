@@ -65,6 +65,7 @@ Intermediate path orientations and coincident-position yaw markers are ignored.
 The final original pose yaw remains the task target. `lookahead` (0.30 m) sets
 the geometric preview; `goal_heading_start_distance` (0.50 m) and
 `goal_heading_full_distance` (0.10 m) define measured terminal blending.
-`goal_heading_scale` (0.35 rad) normalizes the goal objective without changing
-GoalChecker tolerances. `goal_heading_weight` is published with diagnostics.
+`travel_heading_scale` (0.50 rad) and `goal_heading_scale` (0.10 rad) normalize
+one shared heading error as final orientation takes over. GoalChecker tolerances
+also govern stopped arrival/zero-request handoff; they remain separately configured. `goal_heading_weight` is published with diagnostics.
 See GEOMETRIC_HEADING.md for internal reference and retiming semantics.
