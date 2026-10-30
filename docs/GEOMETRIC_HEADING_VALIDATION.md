@@ -36,7 +36,7 @@ reverse 和 hairpin 在最终朝向接管阶段停滞；figure_eight、slalom �
 
 - 核心、几何朝向契约、安装后消费者：3/3 通过。
 - 路径/碰撞支持检查：通过。
-- Python 记录与审计测试：17/17 通过。
+- Python 记录与审计测试：18/18 通过。
 - ROS 官方格式与 git diff --check：通过。
 - GitHub CI：Debug 核心检查、Jazzy ROS 集成测试通过；Release 的 closed_loop/stagnation 回归失败，与本地一致。
 - closed_loop：失败。首个失败为 plant=0、scenario=1（侧向起步），位置 peak=2.98 cm；没有放宽既有质量门槛。
@@ -44,8 +44,10 @@ reverse 和 hairpin 在最终朝向接管阶段停滞；figure_eight、slalom �
 
 ## Gazebo / Nav2 CI
 
-[物理工作流](https://github.com/zz990099/swerve_mppi/actions/runs/41033621126)已启动：一轮 32 场景、seed 42、平移路径至少 12 m，map 路径 + 原始轮式里程计 + 真值 map→odom。
-本报告生成时仍在运行，没有将数值闭环 24/32 作为物理 CI 结论。
+初次尝试因新增记录脚本把 `branch_phase="0.000000"` 直接按 int 解析而中断。该记录缺陷已在 `63c97b2` 修正，新增小数形式诊断字段回归检查通过。初次尝试不作为控制效果验证结论。
+
+[物理工作流](https://github.com/zz990099/swerve_mppi/actions/runs/41034920183)已启动：一轮 32 场景、seed 42、平移路径至少 12 m，map 路径 + 原始轮式里程计 + 真值 map→odom。
+有效仿真已完成：27/32 轨迹检查通过、29/32 动作完成、完整质量检查 0/32（全部超过 50 ms P99）。main 同口径分别为 32/32、32/32、31/32。详细退化分析见 main_vs_pr_analysis.md / GEOMETRIC_HEADING_CI_ANALYSIS.md。
 
 ## 文件
 
