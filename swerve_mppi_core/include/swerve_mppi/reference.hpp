@@ -80,8 +80,10 @@ public:
       auto it = std::lower_bound(s_.begin(), s_.end(), end);
       const auto j = static_cast<std::size_t>(it - s_.begin());
       const double change = turns[std::min(j, count)] - turns[i];
-      preference_[i] = (end - s_[i]) / config_.heading_preference_distance /
-                       (1 + std::pow(change / config_.heading_preference_turn, 2));
+      preference_[i] = std::clamp(
+        (end - s_[i]) / config_.heading_preference_distance /
+          (1 + std::pow(change / config_.heading_preference_turn, 2)),
+        0., 1.);
     }
     // Both target rate and expected servo tracking error constrain arc speed.
     const double steering_rate = std::min(
@@ -146,6 +148,13 @@ public:
       input.path, config,
       free_heading(input) ? std::optional<double>(input.state.pose.yaw) : std::nullopt)
   {
+    if (!valid_heading_preferences(input))
+      throw std::invalid_argument("invalid route heading context");
+    if (!input.heading_preferences.empty()) {
+      preference_ = input.heading_preferences;
+      for (std::size_t i = 0; i < input.path.size(); ++i)
+        preference_arc_.push_back(path_.vertex_arc(i));
+    }
     if (
       (free_heading(input) || input.reference_kind == ReferenceKind::EffectivePath) &&
       input.goal_active && distance(input.path.back(), input.goal) < .001 &&
@@ -179,12 +188,13 @@ public:
   }
   double heading_preference(double arc) const
   {
-    auto it = std::upper_bound(s_.begin(), s_.end(), arc);
-    const auto i = static_cast<std::size_t>(it - s_.begin());
+    const auto & grid = preference_arc_.empty() ? s_ : preference_arc_;
+    auto it = std::upper_bound(grid.begin(), grid.end(), arc);
+    const auto i = static_cast<std::size_t>(it - grid.begin());
     if (!i) return preference_.front();
-    if (i >= s_.size()) return preference_.back();
-    const double t = (arc - s_[i - 1]) / (s_[i] - s_[i - 1]);
-    return preference_[i - 1] + t * (preference_[i] - preference_[i - 1]);
+    if (i >= grid.size()) return preference_.back();
+    const double t = (arc - grid[i - 1]) / (grid[i] - grid[i - 1]);
+    return std::clamp(preference_[i - 1] + t * (preference_[i] - preference_[i - 1]), 0., 1.);
   }
   // Bit mask: geometry/end=1, yaw=2, wheel speed=4, corner=8,
   // actuator rate=16, acceleration envelope=64, final heading approach=128. Interpolation combines neighboring active limits.
@@ -225,7 +235,7 @@ private:
   PathView path_;
   Config config_;
   std::optional<double> body_yaw_;
-  std::vector<double> s_, speed_, corners_, branches_, preference_;
+  std::vector<double> s_, speed_, corners_, branches_, preference_, preference_arc_;
   std::vector<std::uint32_t> reasons_;
 };
 }  // namespace swerve_mppi

@@ -57,6 +57,7 @@ int main()
         input.state = s;
         const auto previous_section = path.section();
         input.path = path.local(s.pose, 3.0, s.velocity);
+        input.heading_preferences = path.heading_preferences();
         if (path.section() != previous_section) controller.reset();
         input.goal = path.tracking_goal();
         input.goal_active = path.goal_active(config.goal_heading_start_distance);

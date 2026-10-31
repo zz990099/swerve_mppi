@@ -7,15 +7,22 @@
 
 #include "swerve_mppi/controller.hpp"
 #include "swerve_mppi_ros/control_support.hpp"
+#ifdef SWERVE_CRITIC_HEADING
+#include "decision_recording.hpp"
+#endif
 using namespace swerve_mppi;
 namespace chassis = swerve_chassis_core;
 int main(int argc, char ** argv)
 {
   if (argc < 2) return 2;
   double max_speed = .8, servo_time = .12, max_time = 90.;
-  bool keep_path_yaw = false;
+  bool keep_path_yaw = false, decisions = false;
   for (int i = 2; i < argc; ++i) {
     std::string option(argv[i]);
+    if (option == "--decision-log") {
+      decisions = true;
+      continue;
+    }
     if (option == "--keep-path-yaw") {
       keep_path_yaw = true;
       continue;
@@ -59,9 +66,15 @@ int main(int argc, char ** argv)
 #ifdef SWERVE_HEADING_REFERENCE
     path.set(
       points, config.lookahead,
-      keep_path_yaw ? ReferenceKind::GeometricPath : ReferenceKind::ExternalPath);
+      keep_path_yaw ? ReferenceKind::GeometricPath : ReferenceKind::ExternalPath
+#ifdef SWERVE_CRITIC_HEADING
+      ,
+      config.heading_preference_distance, config.heading_preference_turn
+#endif
+    );
 #else
     (void)keep_path_yaw;
+    (void)decisions;
     path.set(points);
 #endif
     chassis::Generator executor(config.geometry, config.limits);
@@ -72,6 +85,14 @@ int main(int argc, char ** argv)
     trace << std::setprecision(12);
     trace << "t,x,y,yaw,vx,vy,wz,request_vx,request_vy,request_wz,remaining,goal_weight,branch_"
              "phase,compute_ms,path_error,heading_preference,heading_cost,goal_cost\n";
+#ifdef SWERVE_CRITIC_HEADING
+    std::ofstream audit;
+    if (decisions) {
+      audit.open(root / (name + "_decisions.csv"));
+      audit << std::setprecision(12);
+      swerve_mppi_ros::decision_header(audit);
+    }
+#endif
     double peak = 0, time = 0, last_motion = 0;
     Pose motion_pose;
     std::string status = "timeout";
@@ -83,16 +104,25 @@ int main(int argc, char ** argv)
 #ifdef SWERVE_HEADING_REFERENCE
       input.reference_kind = ReferenceKind::GeometricPath;
 #endif
+#ifdef SWERVE_CRITIC_HEADING
+      input.record_decisions = decisions;
+#endif
       input.state = state;
       input.path = path.local(state.pose, 3., state.velocity);
       input.goal = path.tracking_goal();
 #ifdef SWERVE_HEADING_REFERENCE
       input.goal_active = path.goal_active(config.goal_heading_start_distance);
       input.remaining_arc = path.remaining();
+#ifdef SWERVE_CRITIC_HEADING
+      input.heading_preferences = path.heading_preferences();
+#endif
 #else
       input.goal_active = path.tracking_goal_active();
 #endif
       auto result = controller.compute(input);
+#ifdef SWERVE_CRITIC_HEADING
+      if (decisions) swerve_mppi_ros::decision_rows(audit, time, input, result);
+#endif
       if (result.completed_transition) path.recover(state.pose);
       times.push_back(result.compute_ms);
       if (result.status != Status::Ok) {

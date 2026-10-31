@@ -58,7 +58,7 @@ Build and run the existing contract and quality checks separately:
 ```bash
 cmake --build build-local --parallel 2
 ctest --test-dir build-local --output-on-failure
-ctest --test-dir build-local -R '^(core|heading_reference|support_tests|installed_consumer)$' \
+ctest --test-dir build-local -R '^(core|heading_reference|liveness|support_tests|installed_consumer)$' \
   --output-on-failure
 ```
 
@@ -91,3 +91,34 @@ cases, sequentially. `--cases straight` is a fast build/adapter smoke check.
 The geometry-only adapter preserves the original final yaw as a separate goal;
 its incompatibility with the baseline terminal logic is part of the experiment.
 Do not interpret this adapter as an exact source-level feature-toggle factorial.
+
+## Decision audit
+
+Enable only for diagnosis; CSV I/O and per-candidate matching affect timing:
+
+```bash
+python3 swerve_mppi_ros/tests/run_portable_recordings.py \
+  --executable build-local/record_portable --output artifacts-local/figure-eight-audit \
+  --cases figure_eight --decision-log --no-plot
+python3 tools/analyze_decisions.py \
+  artifacts-local/figure-eight-audit/figure_eight_decisions.csv --time 30 \
+  --output artifacts-local/figure-eight-decision.json
+```
+
+The optional 56-column decision CSV records every iteration/candidate and the
+weighted update: raw/conditioned controls, rejection reason, predicted ordered
+progress, cost breakdown, measured velocity/pose/steering, requested motion and
+steering targets. Candidate indices: 0 continuation, 1 fresh, 2 brake, 3 slow,
+4 short recovery, 5 guided, 6 reconsidered intent, 7 terminal stop/rotation,
+8 terminal position, >=9 exploration; index `samples` is the weighted update.
+Unavailable specialized proposals fall back to fresh/mean/guided controls.
+The original 18-column trajectory format stays unchanged. Production diagnostics
+are off by default; `Input::record_decisions` must be explicitly enabled.
+The analyzer inspects captured frames without rerunning the scenario and maps
+non-finite cost values to JSON null. It ignores incomplete trailing rows.
+
+`liveness` freezes two measured stopped states from the earlier failed recordings
+and checks that feasible useful motion wins against parking, optional auditing
+preserves output, terminal rotation predicts braking first, cached preferences
+stay valid and independent of crop length, retained retiming context is used,
+and hard critic rejection still wins.

@@ -61,6 +61,7 @@ struct MotionReference
   bool precise_heading = false;
   std::optional<Velocity> departure;
   GoalTolerance goal_tolerance;
+  std::vector<double> heading_preferences;
 };
 struct Input
 {
@@ -78,6 +79,9 @@ struct Input
   bool precise_heading = false;
   std::optional<Velocity> departure;
   GoalTolerance goal_tolerance;
+  std::vector<double> heading_preferences;  // Optional full-route context at local path vertices.
+  bool record_decisions =
+    false;  // Optional per-candidate audit; no production allocation by default.
 };
 struct Command
 {
@@ -116,6 +120,21 @@ struct CandidateDiagnostic
   bool valid = false;
   TrackingCost tracking;
 };
+struct SeedDiagnostic
+{
+  Velocity desired_first, conditioned_first;
+  double desired_peak = 0, conditioned_peak = 0;
+};
+struct DecisionDiagnostic
+{
+  std::size_t iteration = 0, candidate = 0;
+  bool selected = false, valid = false;
+  Rejection rejection = Rejection::None;
+  Velocity raw_first, conditioned_first;
+  double raw_peak = 0, conditioned_peak = 0, predicted_progress = 0, xy_motion = 0, yaw_motion = 0;
+  double cost = 0;
+  TrackingCost tracking;
+};
 struct Result
 {
   Command command;
@@ -135,6 +154,11 @@ struct Result
   int branch_phase =
     0;  // 0 tracking, 1 body alignment, 2 wheel alignment, 3 departure, 4 heading settle.
   std::optional<MotionReference> motion_reference;
+  std::array<SeedDiagnostic, 2> seeds{};  // Fresh and optional geometry-guided seed.
+  std::optional<Velocity> alignment_intent;
+  double alignment_error = 0;
+  bool terminal_hold = false;
+  std::vector<DecisionDiagnostic> decisions;
   // mean, fresh, brake, slow, recovery and selected. Total also includes custom critics.
   std::array<CandidateDiagnostic, 6> candidates{};
   std::vector<Pose> prediction;

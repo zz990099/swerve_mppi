@@ -2,6 +2,7 @@
 #include <optional>
 
 #include "swerve_mppi/heading_reference.hpp"
+#include "swerve_mppi/reference.hpp"
 
 namespace swerve_mppi
 {
@@ -11,7 +12,8 @@ class OrderedPath
 {
 public:
   void set(
-    std::vector<Pose> path, double lookahead = .3, ReferenceKind kind = ReferenceKind::ExternalPath)
+    std::vector<Pose> path, double lookahead = .3, ReferenceKind kind = ReferenceKind::ExternalPath,
+    double heading_preview = 2.0, double heading_turn = .50)
   {
     if (path.empty() || path.size() > 4096) throw std::invalid_argument("empty or oversized path");
     for (auto p : path)
@@ -26,14 +28,26 @@ public:
     for (std::size_t i = 1; i < path.size(); ++i) {
       if (distance(path[i - 1], path[i]) < 1e-8) {
         if (std::abs(wrap_angle(path[i].yaw - path[i - 1].yaw)) < 1e-8) continue;
-        if (translation.size() > 1) sections_.push_back({translation, false});
-        sections_.push_back({{path[i - 1], path[i]}, true});
+        if (translation.size() > 1) sections_.push_back({translation, false, {}});
+        sections_.push_back({{path[i - 1], path[i]}, true, {}});
         translation = {path[i]};
       } else {
         translation.push_back(path[i]);
       }
     }
-    if (translation.size() > 1 || sections_.empty()) sections_.push_back({translation, false});
+    if (translation.size() > 1 || sections_.empty()) sections_.push_back({translation, false, {}});
+    Config context;
+    context.heading_preference_distance = heading_preview;
+    context.heading_preference_turn = heading_turn;
+    // Build on each complete ordered section, before local cropping. Runtime
+    // queries use this fixed spatial context rather than the moving crop end.
+    for (auto & section : sections_) {
+      ReferenceProfile profile(section.points, context);
+      PathView view(section.points);
+      for (std::size_t i = 0; i < section.points.size(); ++i)
+        section.preference.push_back(profile.heading_preference(view.vertex_arc(i)));
+    }
+    local_preference_.clear();
     section_ = 0;
     progress_arc_ = 0;
     travel_budget_ = .03;
@@ -64,6 +78,7 @@ public:
   }
   bool rotating() const { return !empty() && sections_[section_].rotation; }
   std::size_t section() const { return section_; }
+  const std::vector<double> & heading_preferences() const { return local_preference_; }
   // A completed bounded steering maneuver may follow a short chord instead
   // of every sampled tangent. Rejoin only this section's nearby ordered arc;
   // never cross an unreached mandatory corner or a rotation section.
@@ -103,7 +118,10 @@ public:
       travel_budget_ = .03;
     }
     const auto & points = sections_[section_].points;
-    if (rotating()) return points;
+    if (rotating()) {
+      local_preference_ = sections_[section_].preference;
+      return points;
+    }
     PathView view(points);
     // A missed sampled tangent must not freeze progress on a smooth curve.
     // The forward search is paid for by measured displacement and cannot pass
@@ -126,11 +144,18 @@ public:
     }
     double end = std::min(view.length(), progress_arc_ + length);
     std::vector<Pose> out{view.at(progress_arc_)};
+    local_preference_ = {preference_at(view, progress_arc_)};
     for (std::size_t i = 1; i < points.size(); ++i) {
       double arc = view.vertex_arc(i);
-      if (arc > progress_arc_ + 1e-8 && arc < end - 1e-8) out.push_back(points[i]);
+      if (arc > progress_arc_ + 1e-8 && arc < end - 1e-8) {
+        out.push_back(points[i]);
+        local_preference_.push_back(sections_[section_].preference[i]);
+      }
     }
-    if (end > progress_arc_ + 1e-8) out.push_back(view.at(end));
+    if (end > progress_arc_ + 1e-8) {
+      out.push_back(view.at(end));
+      local_preference_.push_back(preference_at(view, end));
+    }
     return out;
   }
 
@@ -139,7 +164,20 @@ private:
   {
     std::vector<Pose> points;
     bool rotation = false;
+    std::vector<double> preference;
   };
+  double preference_at(const PathView & view, double arc) const
+  {
+    const auto & weights = sections_[section_].preference;
+    for (std::size_t i = 1; i < weights.size(); ++i)
+      if (view.vertex_arc(i) >= arc) {
+        const double a = view.vertex_arc(i - 1), b = view.vertex_arc(i);
+        const double t = b > a ? std::clamp((arc - a) / (b - a), 0., 1.) : 0;
+        return weights[i - 1] + t * (weights[i] - weights[i - 1]);
+      }
+    return weights.back();
+  }
+  std::vector<double> local_preference_;
   Pose final_goal_;
   std::vector<Section> sections_;
   std::size_t section_ = 0;

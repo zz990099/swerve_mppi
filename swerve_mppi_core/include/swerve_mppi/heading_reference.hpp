@@ -60,6 +60,14 @@ inline bool free_heading(const Input & input)
 {
   return input.reference_kind == ReferenceKind::GeometricPath;
 }
+inline bool valid_heading_preferences(const Input & input)
+{
+  return input.heading_preferences.empty() ||
+         (input.heading_preferences.size() == input.path.size() &&
+          std::all_of(
+            input.heading_preferences.begin(), input.heading_preferences.end(),
+            [](double w) { return std::isfinite(w) && w >= 0 && w <= 1; }));
+}
 inline bool terminal_position_reached(const Input & input)
 {
   return input.goal_active && distance(input.path.back(), input.goal) < .001 &&

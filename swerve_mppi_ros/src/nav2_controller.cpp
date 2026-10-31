@@ -337,7 +337,9 @@ void Nav2Controller::setPlan(const nav_msgs::msg::Path & message)
         throw std::invalid_argument("mixed path frames");
       candidate.push_back(pose(p.pose));
     }
-    r.path.set(std::move(candidate), r.config.lookahead);
+    r.path.set(
+      std::move(candidate), r.config.lookahead, ReferenceKind::ExternalPath,
+      r.config.heading_preference_distance, r.config.heading_preference_turn);
     r.plan_frame = message.header.frame_id;
   } catch (const std::exception & e) {
     throw nav2_core::InvalidPath(e.what());
@@ -396,6 +398,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     input.goal = transform_path_pose(r.path.tracking_goal());
     input.goal_active = r.path.goal_active(r.config.goal_heading_start_distance);
     input.remaining_arc = r.path.remaining();
+    input.heading_preferences = r.path.heading_preferences();
     if (ordered) input.goal_tolerance = ordered->tolerance();
     input.reference_kind = r.path.remaining() < 1e-8 && input.path.size() == 1
                              ? ReferenceKind::FixedHeading

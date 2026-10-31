@@ -78,7 +78,7 @@ void Controller::reset()
 }
 std::vector<Velocity> Controller::seed(
   const Input & input, const ReferenceProfile & reference, const std::optional<Velocity> & intent,
-  bool align_heading) const
+  SeedStyle style, SeedDiagnostic * diagnostic) const
 {
   State s = input.state;
   PathView path(input.path);
@@ -101,10 +101,31 @@ std::vector<Velocity> Controller::seed(
     const double speed = reference.speed(progress);
     const auto unit = reference.unit(progress, s.pose.yaw);
     Velocity desired = feedback_request(config_, s, m, speed, unit, input);
-    if (align_heading && free_heading(input)) {
+    if (style == SeedStyle::Alignment && free_heading(input)) {
       const double direction = std::clamp(heading_feedback(m.pose.yaw, s.pose.yaw), -1., 1.);
       desired.wz += (1 - input.goal_heading_weight) * reference.heading_preference(progress) * .35 *
                     config_.max_yaw_rate * direction;
+    }
+    if (style == SeedStyle::Rotation) {
+      desired.vx = 0;
+      desired.vy = 0;
+      // Predict a connected stop-then-turn trajectory. An immediate spin on a
+      // moving rolling branch can be projected into unwanted translation.
+      if (
+        std::hypot(s.velocity.vx, s.velocity.vy) > input.goal_tolerance.linear_speed ||
+        std::hypot(s.requested.vx, s.requested.vy) > 1e-4)
+        desired = {};
+    }
+    if (style == SeedStyle::Position) {
+      const double dx = config_.cross_gain * (input.goal.x - s.pose.x);
+      const double dy = config_.cross_gain * (input.goal.y - s.pose.y);
+      desired = {
+        std::cos(s.pose.yaw) * dx + std::sin(s.pose.yaw) * dy,
+        -std::sin(s.pose.yaw) * dx + std::cos(s.pose.yaw) * dy, 0};
+      if (
+        std::abs(s.velocity.wz) > input.goal_tolerance.angular_speed ||
+        std::abs(s.requested.wz) > 1e-4)
+        desired = {};
     }
     // Filter only corrections smaller than the wheel tracking tolerance.
     // A fixed 2 cm pose gate can hide a large steering correction at low speed.
@@ -130,6 +151,16 @@ std::vector<Velocity> Controller::seed(
         speed * input.departure->vx, speed * input.departure->vy, speed * input.departure->wz};
     auto v = model_.condition(
       desired, s.requested, s.generator.command.steering, i ? config_.model_dt : input.dt);
+    if (diagnostic) {
+      if (!i) {
+        diagnostic->desired_first = desired;
+        diagnostic->conditioned_first = v;
+      }
+      diagnostic->desired_peak = std::max(
+        diagnostic->desired_peak, std::hypot(desired.vx, desired.vy) + .3 * std::abs(desired.wz));
+      diagnostic->conditioned_peak =
+        std::max(diagnostic->conditioned_peak, std::hypot(v.vx, v.vy) + .3 * std::abs(v.wz));
+    }
     out.push_back(v);
     auto next = model_.rollout(s, {v});
     if (next.valid) s = next.states.back();
@@ -145,6 +176,7 @@ Result Controller::compute(const Input & external)
       source.reference_kind == ReferenceKind::ExternalPath && !source.path.empty() &&
       source.path.size() <= 4096) {
       source.path = geometric_path(source.path, config_.lookahead);
+      source.heading_preferences.clear();
       source.reference_kind = PathView(source.path).length() < 1e-8 ? ReferenceKind::FixedHeading
                                                                     : ReferenceKind::GeometricPath;
     }
@@ -155,8 +187,8 @@ Result Controller::compute(const Input & external)
   // Validate the caller's reference before a retained maneuver can replace it.
   // In particular, a canceled/empty route must not execute stale alignment.
   if (
-    source.path.empty() || source.path.size() > 4096 || !model_.valid(source.state) ||
-    !finite(source.state.velocity) || !finite(source.goal) ||
+    source.path.empty() || source.path.size() > 4096 || !valid_heading_preferences(source) ||
+    !model_.valid(source.state) || !finite(source.state.velocity) || !finite(source.goal) ||
     !std::isfinite(source.remaining_arc) || source.remaining_arc < -1 ||
     (source.alignment && !finite(*source.alignment)) ||
     (source.departure && !finite(*source.departure)) || !std::isfinite(source.dt) ||
@@ -300,6 +332,7 @@ Result Controller::compute(const Input & external)
       input.departure = event.alignment;
       input.goal_active = false;
     }
+    input.heading_preferences.clear();
     input.precise_heading = phase == 1 || phase == 4;
     input.reference_kind =
       phase == 2 ? ReferenceKind::WheelAlignment
@@ -310,10 +343,17 @@ Result Controller::compute(const Input & external)
   result.branch_phase = phase;
   result.completed_transition = completed;
   result.goal_heading_weight = input.goal_heading_weight;
-  result.motion_reference = MotionReference{
-    input.reference_kind, input.goal_heading_weight, input.remaining_arc, input.path,
-    input.goal,           input.goal_active,         input.alignment,     input.precise_heading,
-    input.departure,      input.goal_tolerance};
+  result.motion_reference = MotionReference{input.reference_kind,
+                                            input.goal_heading_weight,
+                                            input.remaining_arc,
+                                            input.path,
+                                            input.goal,
+                                            input.goal_active,
+                                            input.alignment,
+                                            input.precise_heading,
+                                            input.departure,
+                                            input.goal_tolerance,
+                                            input.heading_preferences};
   result.compute_ms =
     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
   return result;
@@ -328,10 +368,10 @@ Result Controller::compute_tracking(const Input & input)
     return result;
   };
   if (
-    input.path.empty() || input.path.size() > 4096 || !valid_goal_tolerance(input.goal_tolerance) ||
-    !model_.valid(input.state) || !finite(input.state.velocity) || !finite(input.goal) ||
-    !std::isfinite(input.remaining_arc) || input.remaining_arc < -1 ||
-    (input.alignment && !finite(*input.alignment)) ||
+    input.path.empty() || input.path.size() > 4096 || !valid_heading_preferences(input) ||
+    !valid_goal_tolerance(input.goal_tolerance) || !model_.valid(input.state) ||
+    !finite(input.state.velocity) || !finite(input.goal) || !std::isfinite(input.remaining_arc) ||
+    input.remaining_arc < -1 || (input.alignment && !finite(*input.alignment)) ||
     (input.departure && !finite(*input.departure)) || !std::isfinite(input.dt) || input.dt <= 0 ||
     input.dt > 1 ||
     std::any_of(input.path.begin(), input.path.end(), [](Pose p) { return !finite(p); }) ||
@@ -372,6 +412,8 @@ Result Controller::compute_tracking(const Input & input)
              : 1.0;
   double best = std::numeric_limits<double>::infinity();
   std::vector<Velocity> selected;
+  std::size_t selected_decision = 0;
+  std::vector<Rejection> last_rejections;
   Trajectory selected_trace;
   try {
     reference = std::make_unique<ReferenceProfile>(input, config_);
@@ -447,12 +489,36 @@ Result Controller::compute_tracking(const Input & input)
         throw;
       }
     }
-    auto fresh = seed(input, *reference, reorientation_);
-    auto guided =
-      free_heading(input) && !reorientation_ ? seed(input, *reference, {}, true) : fresh;
+    result.terminal_hold = terminal_hold;
+    result.alignment_intent = reorientation_;
+    if (reorientation_) {
+      const auto wheels = swerve_chassis_core::inverse(
+        config_.geometry, {reorientation_->vx, reorientation_->vy, reorientation_->wz},
+        input.state.steering);
+      for (std::size_t w = 0; w < 4; ++w)
+        result.alignment_error =
+          std::max(result.alignment_error, std::abs(wheels.steering[w] - input.state.steering[w]));
+    }
+    auto fresh = seed(
+      input, *reference, reorientation_, SeedStyle::Tracking,
+      input.record_decisions ? &result.seeds[0] : nullptr);
+    auto guided = free_heading(input) && !reorientation_
+                    ? seed(
+                        input, *reference, {}, SeedStyle::Alignment,
+                        input.record_decisions ? &result.seeds[1] : nullptr)
+                    : fresh;
+    auto unlocked = free_heading(input) && reorientation_ ? seed(input, *reference) : fresh;
+    const bool terminal_pose = free_heading(input) && terminal &&
+                               ordered_remaining(input) <= config_.goal_heading_full_distance;
+    const bool terminal_rotation = free_heading(input) && terminal && input.goal_heading_weight > 0;
+    auto rotate = terminal_rotation ? seed(input, *reference, {}, SeedStyle::Rotation) : fresh;
+    auto position = terminal_pose ? seed(input, *reference, {}, SeedStyle::Position) : fresh;
     if (terminal_hold) {
       fresh.assign(config_.horizon, {});
       guided = fresh;
+      unlocked = fresh;
+      rotate = fresh;
+      position = fresh;
     }
     if (input.alignment) {
       const auto target = swerve_chassis_core::inverse(
@@ -559,12 +625,51 @@ Result Controller::compute_tracking(const Input & input)
             break;
         }
       }
+      if (input.record_decisions) last_rejections = rejected;
       result.evaluated += traces.size();
       return costs;
+    };
+    auto decision = [&](
+                      const Trajectory & trajectory, const std::vector<Velocity> & raw,
+                      std::size_t iteration, std::size_t candidate, double cost,
+                      TrackingCost tracking, Rejection reason) {
+      DecisionDiagnostic d;
+      d.iteration = iteration;
+      d.candidate = candidate;
+      d.valid = std::isfinite(cost);
+      d.rejection = reason;
+      d.cost = cost;
+      d.tracking = tracking;
+      if (!raw.empty()) d.raw_first = raw.front();
+      if (!trajectory.controls.empty()) d.conditioned_first = trajectory.controls.front();
+      for (const auto & u : raw)
+        d.raw_peak = std::max(d.raw_peak, std::hypot(u.vx, u.vy) + .3 * std::abs(u.wz));
+      for (const auto & u : trajectory.controls)
+        d.conditioned_peak =
+          std::max(d.conditioned_peak, std::hypot(u.vx, u.vy) + .3 * std::abs(u.wz));
+      PathView path(input.path);
+      const double start = path.start_match(input.state.pose).arc;
+      double progress = start;
+      for (const auto & state : trajectory.states)
+        progress =
+          path
+            .match_ordered(
+              state.pose, progress,
+              std::min(path.length(), progress + config_.max_speed * config_.model_dt * 1.5 + .02))
+            .arc;
+      d.predicted_progress = progress - start;
+      if (!trajectory.states.empty()) {
+        d.xy_motion = distance(input.state.pose, trajectory.states.back().pose);
+        d.yaw_motion =
+          std::abs(wrap_angle(input.state.pose.yaw - trajectory.states.back().pose.yaw));
+      }
+      result.decisions.push_back(d);
     };
     for (std::size_t iteration = 0; iteration < config_.iterations; ++iteration) {
       std::vector<Trajectory> batch;
       batch.reserve(config_.samples);
+      std::vector<std::vector<Velocity>> raw_candidates;
+      if (input.record_decisions) raw_candidates.reserve(config_.samples);
       for (std::size_t k = 0; k < config_.samples; ++k) {
         auto candidate = k == 1 ? fresh : mean;
         // Always regenerate a slew-limited brake from this cycle's state. It
@@ -588,8 +693,11 @@ Result Controller::compute_tracking(const Input & input)
         // Keep-body and optional gentle-alignment proposals compete under the
         // same costs and physical checks. Neither is imposed on every sample.
         if (free_heading(input) && k >= 5 && k % 2) candidate = guided;
+        if (free_heading(input) && k == 6) candidate = unlocked;
+        if (terminal_rotation && k == 7) candidate = rotate;
+        if (terminal_pose && k == 8) candidate = position;
         Velocity noise;
-        if (k >= 6 && !terminal_hold && !reorientation_ && !input.alignment && !input.departure)
+        if (k >= 9 && !terminal_hold && !reorientation_ && !input.alignment && !input.departure)
           for (auto & u : candidate) {
             const double a = config_.noise_correlation, b = std::sqrt(1 - a * a);
             noise = {
@@ -607,9 +715,16 @@ Result Controller::compute_tracking(const Input & input)
             u.vx = 0;
             u.vy = 0;
           }
+        if (input.record_decisions) raw_candidates.push_back(candidate);
         batch.push_back(model_.rollout(input.state, condition(std::move(candidate))));
       }
       const auto costs = score(batch);
+      const auto offset = result.decisions.size();
+      if (input.record_decisions)
+        for (std::size_t k = 0; k < batch.size(); ++k)
+          decision(
+            batch[k], raw_candidates[k], iteration, k, costs[k],
+            breakdown.size() == batch.size() ? breakdown[k] : TrackingCost{}, last_rejections[k]);
       for (std::size_t k = 0; k < std::min<std::size_t>(5, batch.size()); ++k)
         result.candidates[k] = {
           costs[k], std::isfinite(costs[k]),
@@ -618,6 +733,7 @@ Result Controller::compute_tracking(const Input & input)
         static_cast<std::size_t>(std::min_element(costs.begin(), costs.end()) - costs.begin());
       if (!std::isfinite(costs[winner])) break;
       if (costs[winner] < best) {
+        if (input.record_decisions) selected_decision = offset + winner;
         best = costs[winner];
         selected = batch[winner].controls;
         selected_trace = batch[winner];
@@ -640,10 +756,16 @@ Result Controller::compute_tracking(const Input & input)
       }
       result.effective_samples = total * total / squared;
       for (auto & u : weighted) u = model_.project({u.vx / total, u.vy / total, u.wz / total});
+      auto raw_weighted = input.record_decisions ? weighted : std::vector<Velocity>{};
       weighted = condition(std::move(weighted));
       std::vector<Trajectory> update{model_.rollout(input.state, weighted)};
       const double cost = score(update).front();
+      if (input.record_decisions)
+        decision(
+          update.front(), raw_weighted, iteration, config_.samples, cost,
+          breakdown.size() == 1 ? breakdown[0] : TrackingCost{}, last_rejections.front());
       if (cost <= best + .02) {
+        if (input.record_decisions) selected_decision = result.decisions.size() - 1;
         best = cost;
         result.candidates[5] = {cost, true, breakdown.size() == 1 ? breakdown[0] : TrackingCost{}};
         selected = weighted;
@@ -665,7 +787,7 @@ Result Controller::compute_tracking(const Input & input)
   }
   // Only the optimizer's accepted request may latch an ordinary wheel-alignment
   // intent. This is execution continuity, not a prescribed body-heading target.
-  if (free_heading(input) && !terminal_hold && !reorientation_) {
+  if (free_heading(input) && !terminal_hold) {
     bool stopped = true;
     for (double speed : input.state.wheel_speeds)
       stopped &= std::abs(speed) < config_.limits.stopped_speed;
@@ -679,9 +801,20 @@ Result Controller::compute_tracking(const Input & input)
                    config_.limits.tracking_tolerance;
         driving |= std::abs(target.speed[w]) > 2 * config_.limits.stopped_speed;
       }
-      if (turning && driving) reorientation_ = u;
+      if (turning && driving) {
+        // Wheel direction is homogeneous in twist. Preserve the optimizer's
+        // accepted direction, not a tiny slew-limited launch amplitude.
+        double amplitude = 0;
+        for (const auto & v : selected)
+          amplitude = std::max(amplitude, std::hypot(v.vx, v.vy) + .3 * std::abs(v.wz));
+        const double scale =
+          std::max(1., amplitude / std::max(1e-9, std::hypot(u.vx, u.vy) + .3 * std::abs(u.wz)));
+        reorientation_ = model_.project({scale * u.vx, scale * u.vy, scale * u.wz});
+      }
     }
   }
+  if (input.record_decisions && selected_decision < result.decisions.size())
+    result.decisions[selected_decision].selected = true;
   result.status = Status::Ok;
   result.command.velocity = selected.front();
   result.cost = best;
@@ -719,6 +852,7 @@ bool Controller::retime(const Input & input, double dt, Result & result)
       timed.reference_kind = result.motion_reference->reference_kind;
       timed.goal_heading_weight = result.motion_reference->goal_heading_weight;
       timed.goal_tolerance = result.motion_reference->goal_tolerance;
+      timed.heading_preferences = result.motion_reference->heading_preferences;
       timed.remaining_arc = result.motion_reference->remaining_arc;
       timed.path = result.motion_reference->path;
       timed.goal = result.motion_reference->goal;

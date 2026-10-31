@@ -114,7 +114,13 @@ public:
             // A later stop in this rollout belongs to a future branch event;
             // charging that angle at every remaining step rewards parking
             // before the event. Its physical motion still incurs actuator cost.
-            if (!initial_alignment_done) alignment_error += std::pow(std::sin(error) / .5, 2) / 4;
+            if (!free_heading(c.input) && !initial_alignment_done)
+              alignment_error += std::pow(std::sin(error) / .5, 2) / 4;
+            // Ordinary candidates already pay actual steering/drive work via
+            // rollout actuator cost. Charging their initial setup error again
+            // only while requesting motion makes a necessary restart lose to
+            // parking, which has no setup error. Explicit alignment tasks keep
+            // their own target-alignment objective.
             if (reorienting && std::abs(error) > c.config.limits.tracking_tolerance)
               target_speed = 0;  // Reference time pauses during necessary reorientation.
           }

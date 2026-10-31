@@ -11,7 +11,7 @@ from plot_portable import render
 
 
 def run(executable, output, cases=('straight',), minimum_length=12., max_speed=1.,
-        servo_time=.12, max_time=130., keep_path_yaw=False, plot=True):
+        servo_time=.12, max_time=130., keep_path_yaw=False, plot=True, decision_log=False):
     root = Path(output).resolve()
     root.mkdir(parents=True, exist_ok=False)
     (root/'references').mkdir()
@@ -22,10 +22,12 @@ def run(executable, output, cases=('straight',), minimum_length=12., max_speed=1
     (root/'experiment.json').write_text(json.dumps(dict(
         source='local numerical closed loop, not Gazebo', cases=list(cases), seed=42,
         minimum_length=minimum_length, max_speed=max_speed, servo_time=servo_time,
-        max_time=max_time, keep_path_yaw=keep_path_yaw,
+        max_time=max_time, keep_path_yaw=keep_path_yaw, decision_log=decision_log,
         executable_sha256=hashlib.sha256(Path(executable).read_bytes()).hexdigest()), indent=2)+'\n')
     command = [str(Path(executable).resolve()), str(root), '--max-speed', str(max_speed),
                '--servo-time', str(servo_time), '--max-time', str(max_time)]
+    if decision_log:
+        command.append('--decision-log')
     if keep_path_yaw:
         command.append('--keep-path-yaw')
     with (root/'run.log').open('w') as log:
@@ -48,7 +50,8 @@ if __name__ == '__main__':
     parser.add_argument('--max-time', type=float, default=130.)
     parser.add_argument('--keep-path-yaw', action='store_true', help='Diagnostic ablation only')
     parser.add_argument('--no-plot', action='store_true')
+    parser.add_argument('--decision-log', action='store_true')
     args = parser.parse_args()
     run(args.executable, args.output, BENCHMARK_CASES if args.all_cases else args.cases,
         args.minimum_length, args.max_speed, args.servo_time, args.max_time,
-        args.keep_path_yaw, not args.no_plot)
+        args.keep_path_yaw, not args.no_plot, args.decision_log)
