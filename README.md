@@ -52,3 +52,6 @@ and unresolved strict regressions are recorded in
 
 The current body-heading policy is a bounded critic preference, with independent
 final yaw: [policy and known limits](docs/SOFT_HEADING_POLICY.md).
+
+The frozen 32-case local round and retained failures are documented in
+[soft-heading validation](docs/SOFT_HEADING_VALIDATION.md).

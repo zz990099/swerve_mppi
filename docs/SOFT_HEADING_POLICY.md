@@ -71,4 +71,4 @@ physical selected-request latching was restored before the final frozen round.
 
 This revision does not introduce an orientation-aware polygon collision model,
 repair deep wheel-transition/terminal issues, or optimize realtime performance.
-Full-round observations are recorded separately after the frozen local round.
+Full-round observations and retained regressions are recorded in SOFT_HEADING_VALIDATION.md.
