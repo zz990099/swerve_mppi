@@ -55,3 +55,6 @@ final yaw: [policy and known limits](docs/SOFT_HEADING_POLICY.md).
 
 The frozen 32-case local round and retained failures are documented in
 [soft-heading validation](docs/SOFT_HEADING_VALIDATION.md).
+
+Steering restart, terminal candidates and complete-route context changes, with one
+full local round and unresolved gates: [liveness validation](docs/LIVENESS_VALIDATION.md).
