@@ -58,3 +58,15 @@ wheel speeds <=0.05 rad/s, in addition to Nav2 pose and body-speed tolerances.
 The default costmap is obstacle-free for physical tracking acceptance. Supply
 real sensor/static layers for navigation. The collision critic uses the costmap's
 circumscribed footprint radius, conservatively swept between prediction samples.
+
+## Geometric heading policy
+
+Intermediate path orientations and coincident-position yaw markers are ignored.
+The final original pose yaw remains the task target. `lookahead` (0.30 m) sets
+the geometric preview; `goal_heading_start_distance` (0.50 m) and
+`goal_heading_full_distance` (0.10 m) define measured terminal blending.
+`path_heading_weight` bounds ordinary travel-heading preference; the route context
+uses `heading_preference_distance` (2 m) and `heading_preference_turn` (0.50 rad).
+`goal_heading_scale` (0.10 rad) applies only to the independent final-yaw task. GoalChecker tolerances
+also govern stopped arrival/zero-request handoff; they remain separately configured. `goal_heading_weight` is published with diagnostics.
+See SOFT_HEADING_POLICY.md for candidate, reference and retiming semantics.

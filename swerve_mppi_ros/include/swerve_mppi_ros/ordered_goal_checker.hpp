@@ -24,6 +24,7 @@ public:
   bool getTolerances(
     geometry_msgs::msg::Pose & pose, geometry_msgs::msg::Twist & velocity) override;
   void setReady(bool ready, std::optional<Pose> current_goal = {});
+  GoalTolerance tolerance() const { return tolerance_; }
 
 private:
   std::mutex mutex_;

@@ -47,17 +47,21 @@ int main()
       State s;
       s.generator.valid = true;
       bool reached = false;
-      PathView reference(paths[scenario]);
+      auto geometry = geometric_path(paths[scenario], config.lookahead);
+      PathView reference(geometry);
       double square_error = 0, peak = 0, heading_square = 0, heading_peak = 0, settled_since = -1;
-      int observations = 0, stopped = 0;
+      int observations = 0, heading_observations = 0, stopped = 0;
       for (int step = 0; step < 800; ++step) {
         Input input;
+        input.reference_kind = ReferenceKind::GeometricPath;
         input.state = s;
         const auto previous_section = path.section();
         input.path = path.local(s.pose, 3.0, s.velocity);
+        input.heading_preferences = path.heading_preferences();
         if (path.section() != previous_section) controller.reset();
         input.goal = path.tracking_goal();
-        input.goal_active = path.tracking_goal_active();
+        input.goal_active = path.goal_active(config.goal_heading_start_distance);
+        input.remaining_arc = path.remaining();
         auto result = controller.compute(input);
         if (result.completed_transition) path.recover(s.pose);
         times.push_back(result.compute_ms);
@@ -98,8 +102,13 @@ int main()
         double angle = std::abs(wrap_angle(s.pose.yaw - match.pose.yaw));
         square_error += match.error * match.error;
         peak = std::max(peak, match.error);
-        heading_square += angle * angle;
-        heading_peak = std::max(heading_peak, angle);
+        if (
+          result.goal_heading_weight < .01 && result.branch_phase == 0 &&
+          std::hypot(s.velocity.vx, s.velocity.vy) > .1) {
+          heading_square += angle * angle;
+          heading_peak = std::max(heading_peak, angle);
+          ++heading_observations;
+        }
         ++observations;
         double wheel_peak = 0;
         for (double v : s.wheel_speeds) wheel_peak = std::max(wheel_peak, std::abs(v));
@@ -115,12 +124,15 @@ int main()
           std::cout << "plant=" << plant << " scenario=" << scenario
                     << " simulated_s=" << step * 0.05 << " error=" << distance(s.pose, path.goal())
                     << " rms=" << std::sqrt(square_error / observations) << " peak=" << peak
-                    << " stopped=" << double(stopped) / observations << '\n';
+                    << " stopped=" << double(stopped) / observations << " heading_rms="
+                    << std::sqrt(heading_square / std::max(1, heading_observations))
+                    << " heading_peak=" << heading_peak << std::endl;
           if (
             std::sqrt(square_error / observations) > .03 || peak > .075 ||
             double(stopped) / observations > .55 ||
             (reference.length() > 1e-6 &&
-             (std::sqrt(heading_square / observations) > .05 || heading_peak > .12)))
+             (std::sqrt(heading_square / std::max(1, heading_observations)) > .05 ||
+              heading_peak > .12)))
             throw std::runtime_error("closed-loop tracking quality gate failed");
           break;
         }

@@ -27,9 +27,17 @@ private:
   };
   std::optional<BranchEvent> branch_;
   bool tracking_start_ = false;
+  enum class SeedStyle
+  {
+    Tracking,
+    Alignment,
+    Position,
+    Rotation
+  };
   std::vector<Velocity> seed(
     const Input & input, const ReferenceProfile & reference,
-    const std::optional<Velocity> & intent = {}) const;
+    const std::optional<Velocity> & intent = {}, SeedStyle style = SeedStyle::Tracking,
+    SeedDiagnostic * diagnostic = nullptr) const;
   Config config_;
   Critics critics_;
   Model model_;

@@ -41,10 +41,12 @@ physical +/-90 degree steering range. Warm start advances with elapsed model int
 fresh measured/target state on every compute. Invalid state, new tasks and clock
 resets clear it; ordinary presteering does not.
 
-Path yaw is the desired body orientation, not inferred from the path tangent.
-Lateral tracking can keep yaw constant. Body-yaw feedforward follows the path
-reference, while curvature/corner preview reduces speed before actuator demands
-become infeasible. Ordered progress is geometric arc length, with no waypoint
+External intermediate yaw is ignored. The complete ordered XY route generates
+a forward geometric heading before local cropping; final pose yaw is retained
+separately. Measured terminal progress blends travel and goal heading objectives.
+Explicit internal alignment/departure references retain their own heading and
+publication-retiming snapshot. Curvature/corner preview reduces speed before
+actuator demands become infeasible. Ordered progress is geometric arc length, with no waypoint
 acceptance-radius pruning of a dense curve. Terminal activation uses remaining
 arc length, and the local path retains later turns for preview. Critics cover
 normalized path errors, ordered progress/remaining distance, command effort,

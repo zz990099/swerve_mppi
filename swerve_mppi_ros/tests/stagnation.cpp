@@ -71,12 +71,15 @@ int main()
     const int maximum_steps = name == 3 ? 1800 : 1300;
     for (int step = 0; step < maximum_steps; ++step) {
       Input input;
+      input.reference_kind = ReferenceKind::GeometricPath;
       input.state = state;
       const auto before = route.section();
       input.path = route.local(state.pose, 3., state.velocity);
+      input.heading_preferences = route.heading_preferences();
       if (route.section() != before) controller.reset();
       input.goal = route.tracking_goal();
-      input.goal_active = route.tracking_goal_active();
+      input.goal_active = route.goal_active(config.goal_heading_start_distance);
+      input.remaining_arc = route.remaining();
       auto result = controller.compute(input);
       if (result.completed_transition) route.recover(state.pose);
       if (result.status != Status::Ok)
@@ -102,7 +105,11 @@ int main()
       }
       state.requested = result.command.velocity;
       peak = std::max(peak, PathView(cases[name]).match(state.pose).error);
-      if (peak > .1) throw std::runtime_error("stagnation regression: corridor exceeded");
+      if (peak > .1) {
+        std::cerr << "corridor exceeded case=" << name << " t=" << step * .05 << " peak=" << peak
+                  << " remaining=" << route.remaining() << std::endl;
+        throw std::runtime_error("stagnation regression: corridor exceeded");
+      }
       if (route.goal_active() && goal.reached(state, route.goal(), step * .05)) {
         reached = true;
         std::cout << "stagnation case=" << name << " seconds=" << step * .05 << " peak=" << peak

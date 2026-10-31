@@ -36,17 +36,38 @@ struct GridView
   bool valid() const;
   bool world_to_map(double x, double y, std::size_t & mx, std::size_t & my) const;
 };
+enum class ReferenceKind
+{
+  ExternalPath,
+  GeometricPath,
+  EffectivePath,  // Explicit internal reference with prescribed body yaw; not ordinary XY tracking.
+  FixedHeading,
+  WheelAlignment,
+  Departure
+};
+struct GoalTolerance
+{
+  double position = .06, yaw = .05, linear_speed = .035, angular_speed = .035, settle = .3;
+};
 struct MotionReference
 {
+  ReferenceKind reference_kind = ReferenceKind::GeometricPath;
+  double goal_heading_weight = 0;
+  double remaining_arc = -1;
   std::vector<Pose> path;
   Pose goal;
   bool goal_active = true;
   std::optional<Velocity> alignment;
   bool precise_heading = false;
   std::optional<Velocity> departure;
+  GoalTolerance goal_tolerance;
+  std::vector<double> heading_preferences;
 };
 struct Input
 {
+  ReferenceKind reference_kind = ReferenceKind::ExternalPath;
+  double remaining_arc = -1;        // Measured ordered remaining distance, before local cropping.
+  double goal_heading_weight = -1;  // Prepared once per compute, shared by all samples.
   State state;
   std::vector<Pose> path;  // Caller-prepared local ordered section; exclude later return legs.
   Pose goal;               // Full path endpoint, not the local crop endpoint.
@@ -57,6 +78,10 @@ struct Input
     alignment;  // Stopped wheel alignment, still rolled out and collision checked.
   bool precise_heading = false;
   std::optional<Velocity> departure;
+  GoalTolerance goal_tolerance;
+  std::vector<double> heading_preferences;  // Optional full-route context at local path vertices.
+  bool record_decisions =
+    false;  // Optional per-candidate audit; no production allocation by default.
 };
 struct Command
 {
@@ -95,6 +120,21 @@ struct CandidateDiagnostic
   bool valid = false;
   TrackingCost tracking;
 };
+struct SeedDiagnostic
+{
+  Velocity desired_first, conditioned_first;
+  double desired_peak = 0, conditioned_peak = 0;
+};
+struct DecisionDiagnostic
+{
+  std::size_t iteration = 0, candidate = 0;
+  bool selected = false, valid = false;
+  Rejection rejection = Rejection::None;
+  Velocity raw_first, conditioned_first;
+  double raw_peak = 0, conditioned_peak = 0, predicted_progress = 0, xy_motion = 0, yaw_motion = 0;
+  double cost = 0;
+  TrackingCost tracking;
+};
 struct Result
 {
   Command command;
@@ -106,12 +146,19 @@ struct Result
   bool presteering = false;
   double reference_speed = 0;
   double noise_scale = 0, branch_distance = -1;
+  double goal_heading_weight = 0;
+  double heading_preference = 0;
   std::uint32_t reference_limit = 0;
   bool reorientation_active = false;
   bool completed_transition = false;
   int branch_phase =
     0;  // 0 tracking, 1 body alignment, 2 wheel alignment, 3 departure, 4 heading settle.
   std::optional<MotionReference> motion_reference;
+  std::array<SeedDiagnostic, 2> seeds{};  // Fresh and optional geometry-guided seed.
+  std::optional<Velocity> alignment_intent;
+  double alignment_error = 0;
+  bool terminal_hold = false;
+  std::vector<DecisionDiagnostic> decisions;
   // mean, fresh, brake, slow, recovery and selected. Total also includes custom critics.
   std::array<CandidateDiagnostic, 6> candidates{};
   std::vector<Pose> prediction;

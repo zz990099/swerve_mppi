@@ -32,8 +32,10 @@ void validate(const Config & c)
   swerve_chassis_core::validate(c.geometry, c.limits);
   for (double x :
        {c.max_yaw_rate, c.model_dt, c.integration_dt, c.steering_time_constant, c.temperature,
-        c.lookahead, c.approach_distance, c.approach_gain, c.max_residual, c.position_scale,
-        c.heading_scale, c.cross_gain, c.path_corridor, c.heading_corridor})
+        c.goal_heading_start_distance, c.goal_heading_full_distance, c.goal_heading_scale,
+        c.heading_preference_distance, c.heading_preference_turn, c.lookahead, c.approach_distance,
+        c.approach_gain, c.max_residual, c.position_scale, c.heading_scale, c.cross_gain,
+        c.path_corridor, c.heading_corridor})
     if (!std::isfinite(x) || x <= 0)
       throw std::invalid_argument("positive finite parameter required");
   for (double x : {c.max_speed, c.noise_linear, c.noise_angular})
@@ -41,8 +43,9 @@ void validate(const Config & c)
       throw std::invalid_argument("nonnegative finite parameter required");
   if (
     !std::isfinite(c.noise_correlation) || c.noise_correlation < 0 || c.noise_correlation >= 1 ||
-    c.horizon < 2 || c.horizon > 200 || c.samples < 4 || c.samples > 2048 || c.iterations < 1 ||
-    c.iterations > 8 || c.integration_dt > c.model_dt || c.integration_dt > 0.1 ||
+    c.goal_heading_start_distance <= c.goal_heading_full_distance || c.horizon < 2 ||
+    c.horizon > 200 || c.samples < 4 || c.samples > 2048 || c.iterations < 1 || c.iterations > 8 ||
+    c.integration_dt > c.model_dt || c.integration_dt > 0.1 ||
     c.model_dt / c.integration_dt > 100 || c.max_speed > c.limits.linear_speed ||
     c.max_yaw_rate > c.limits.angular_speed)
     throw std::invalid_argument("invalid optimizer dimensions, discretization or planner limits");

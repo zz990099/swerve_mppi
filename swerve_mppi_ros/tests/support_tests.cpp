@@ -57,7 +57,7 @@ int main()
     }
     path.set({{0, 0, 1.2}});
     check(path.goal_active(), "rotation remains terminal");
-    path.set({{0, 0, 0}, {1, 0, 0}, {1, 0, 1.57}, {1, 1, 1.57}});
+    path.set({{0, 0, 0}, {1, 0, 0}, {1, 0, 1.57}, {1, 1, 1.57}}, .3, ReferenceKind::FixedHeading);
     auto incoming = path.local({.99, 0, 0}, 3., {.1, 0, 0});
     check(
       !path.rotating() && incoming.back().yaw == 0,
@@ -72,7 +72,8 @@ int main()
     check(
       !path.rotating() && outgoing.back().y == 1,
       "aligned stopped rotation releases outgoing translation");
-    path.set({{0, 0, 3.12}, {0, 0, -3.12}, {0, 0, -3.12}, {1, 0, -3.12}});
+    path.set(
+      {{0, 0, 3.12}, {0, 0, -3.12}, {0, 0, -3.12}, {1, 0, -3.12}}, .3, ReferenceKind::FixedHeading);
     path.local({0, 0, 3.12});
     check(path.rotating(), "rotation crossing pi remains an event");
     path.local({0, 0, -3.12});

@@ -84,7 +84,7 @@ for cx, cy, start, end, straight in [
 PATHS['rounded_rectangle'] = rounded
 
 TITLES = {
-    'straight': 'Forward straight', 'smooth_s': 'Smooth S bend / fixed body yaw',
+    'straight': 'Forward straight', 'smooth_s': 'Smooth S bend / geometric heading',
     'smooth_curve': 'Regular curve / tangent body yaw',
     'crab': 'Perpendicular start / left', 'crab_right': 'Perpendicular start / right',
     'reverse': 'Opposite direction / reverse', 'reverse_curve': 'Reverse curve',
@@ -96,10 +96,10 @@ TITLES = {
     'reverse_diagonal': 'Diagonal / reverse left',
     'l_turn_left': 'Sharp L turn / left',
     'l_turn_right': 'Sharp L turn / right',
-    'zigzag': 'Zigzag / fixed body yaw',
+    'zigzag': 'Zigzag / geometric heading',
     'lateral_zigzag': 'Lateral zigzag',
     'u_turn': 'U turn / tangent body yaw',
-    'hairpin_fixed_yaw': 'Hairpin / fixed body yaw',
+    'hairpin_fixed_yaw': 'Hairpin / geometric heading',
     'circle_cw': 'Full circle / clockwise',
     'circle_ccw': 'Full circle / counterclockwise',
     'figure_eight': 'Figure eight / self crossing',
@@ -108,9 +108,9 @@ TITLES = {
     'spiral_out': 'Expanding spiral / two turns',
     'rounded_rectangle': 'Rounded rectangle / tangent yaw',
     'cloverleaf': 'Four-leaf / repeated crossings',
-    'heading_sweep': 'Straight + 180 deg body rotation',
+    'heading_sweep': 'Straight + final 180 deg rotation',
     'reverse_s': 'Reverse S bend',
-    'stop_turn_go': 'Square / stop, rotate, translate',
+    'stop_turn_go': 'Square / geometric heading + final yaw',
 }
 BENCHMARK_CASES = tuple(TITLES)
 

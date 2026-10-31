@@ -1,23 +1,27 @@
 #pragma once
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <swerve_chassis_core/kinematics.hpp>
 #include <vector>
 
 #include "swerve_mppi/config.hpp"
+#include "swerve_mppi/heading_reference.hpp"
 #include "swerve_mppi/path.hpp"
 
 namespace swerve_mppi
 {
-// Adaptive time parameterization of an ordered geometric path. Body heading
-// comes from the path, independently of its direction of travel. Wheel targets
-// below are per unit arc speed, hence include the yaw/translation coupling.
+// Nominal XY speed profile. Ordinary tracking evaluates its envelope at the
+// current body heading without prescribing a yaw derivative. Explicit internal
+// references retain their yaw/translation coupling. Every candidate is still
+// checked using its own predicted actuator/body state.
 class ReferenceProfile
 {
 public:
-  ReferenceProfile(const std::vector<Pose> & points, const Config & config)
-  : points_(points), path_(points_), config_(config)
+  ReferenceProfile(
+    const std::vector<Pose> & points, const Config & config, std::optional<double> body_yaw = {})
+  : points_(points), path_(points_), config_(config), body_yaw_(body_yaw)
   {
     validate(config_);
     if (points.empty() || points.size() > 4096 || !std::isfinite(path_.length()))
@@ -39,7 +43,7 @@ public:
     std::array<double, 4> previous{};
     for (std::size_t i = 0; i <= count; ++i) {
       const double s = s_[i];
-      const auto u = unit(s, path_.at(s).yaw);
+      const auto u = unit(s, body_yaw_.value_or(path_.at(s).yaw));
       wheels[i] = swerve_chassis_core::inverse(config_.geometry, {u.vx, u.vy, u.wz}, previous);
       previous = wheels[i].steering;
       double cap = path_.speed_limit(
@@ -63,6 +67,23 @@ public:
           reasons_[i] = 8;
         }
       speed_[i] = cap;
+    }
+    // Common route-only preference: no candidate can lower its own weight by
+    // slowing, stopping or turning more. Preview is bounded by the supplied
+    // ordered section; direction changes beyond its end are not invented.
+    std::vector<double> turns(count + 1, 0);
+    for (std::size_t i = 1; i <= count; ++i)
+      turns[i] = turns[i - 1] + std::abs(wrap_angle(path_.at(s_[i]).yaw - path_.at(s_[i - 1]).yaw));
+    preference_.resize(count + 1);
+    for (std::size_t i = 0; i <= count; ++i) {
+      const double end = std::min(path_.length(), s_[i] + config_.heading_preference_distance);
+      auto it = std::lower_bound(s_.begin(), s_.end(), end);
+      const auto j = static_cast<std::size_t>(it - s_.begin());
+      const double change = turns[std::min(j, count)] - turns[i];
+      preference_[i] = std::clamp(
+        (end - s_[i]) / config_.heading_preference_distance /
+          (1 + std::pow(change / config_.heading_preference_turn, 2)),
+        0., 1.);
     }
     // Both target rate and expected servo tracking error constrain arc speed.
     const double steering_rate = std::min(
@@ -122,6 +143,37 @@ public:
       }
     }
   }
+  ReferenceProfile(const Input & input, const Config & config)
+  : ReferenceProfile(
+      input.path, config,
+      free_heading(input) ? std::optional<double>(input.state.pose.yaw) : std::nullopt)
+  {
+    if (!valid_heading_preferences(input))
+      throw std::invalid_argument("invalid route heading context");
+    if (!input.heading_preferences.empty()) {
+      preference_ = input.heading_preferences;
+      for (std::size_t i = 0; i < input.path.size(); ++i)
+        preference_arc_.push_back(path_.vertex_arc(i));
+    }
+    if (
+      (free_heading(input) || input.reference_kind == ReferenceKind::EffectivePath) &&
+      input.goal_active && distance(input.path.back(), input.goal) < .001 &&
+      input.goal_heading_weight > 0) {
+      const double remaining =
+        std::max(ordered_remaining(input), distance(input.state.pose, input.goal));
+      const double error = std::abs(wrap_angle(input.goal.yaw - input.state.pose.yaw));
+      // Leave time to turn before arrival. The same cap governs nominal speed,
+      // scoring, seed generation and retiming.
+      const double cap = config.max_yaw_rate *
+                         std::max(0., remaining - input.goal_tolerance.position) /
+                         std::max(.01, error);
+      for (std::size_t i = 0; i < speed_.size(); ++i)
+        if (cap < speed_[i]) {
+          speed_[i] = cap;
+          reasons_[i] |= 128;
+        }
+    }
+  }
   ReferenceProfile(const ReferenceProfile &) = delete;
   ReferenceProfile & operator=(const ReferenceProfile &) = delete;
   double speed(double arc) const
@@ -134,8 +186,18 @@ public:
     const double t = (arc - s_[i - 1]) / (s_[i] - s_[i - 1]);
     return speed_[i - 1] + t * (speed_[i] - speed_[i - 1]);
   }
+  double heading_preference(double arc) const
+  {
+    const auto & grid = preference_arc_.empty() ? s_ : preference_arc_;
+    auto it = std::upper_bound(grid.begin(), grid.end(), arc);
+    const auto i = static_cast<std::size_t>(it - grid.begin());
+    if (!i) return preference_.front();
+    if (i >= grid.size()) return preference_.back();
+    const double t = (arc - grid[i - 1]) / (grid[i] - grid[i - 1]);
+    return std::clamp(preference_[i - 1] + t * (preference_[i] - preference_[i - 1]), 0., 1.);
+  }
   // Bit mask: geometry/end=1, yaw=2, wheel speed=4, corner=8,
-  // actuator rate=16, acceleration envelope=64. Interpolation combines neighboring active limits.
+  // actuator rate=16, acceleration envelope=64, final heading approach=128. Interpolation combines neighboring active limits.
   std::uint32_t limiting_reason(double arc) const
   {
     auto it = std::upper_bound(s_.begin(), s_.end(), arc);
@@ -165,14 +227,15 @@ public:
     const double x = (pb.x - pa.x) / length, y = (pb.y - pa.y) / length;
     return {
       std::cos(body_yaw) * x + std::sin(body_yaw) * y,
-      -std::sin(body_yaw) * x + std::cos(body_yaw) * y, path_.yaw_derivative(arc)};
+      -std::sin(body_yaw) * x + std::cos(body_yaw) * y, body_yaw_ ? 0 : path_.yaw_derivative(arc)};
   }
 
 private:
   std::vector<Pose> points_;
   PathView path_;
   Config config_;
-  std::vector<double> s_, speed_, corners_, branches_;
+  std::optional<double> body_yaw_;
+  std::vector<double> s_, speed_, corners_, branches_, preference_, preference_arc_;
   std::vector<std::uint32_t> reasons_;
 };
 }  // namespace swerve_mppi

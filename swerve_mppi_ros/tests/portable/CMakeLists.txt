@@ -11,3 +11,9 @@ foreach(name support_tests closed_loop stagnation)
 endforeach()
 set_tests_properties(closed_loop stagnation PROPERTIES TIMEOUT 240)
 
+
+add_executable(record_portable ../record_portable.cpp)
+target_link_libraries(record_portable PRIVATE swerve_mppi::core)
+target_include_directories(record_portable PRIVATE ../../include)
+
+target_compile_definitions(record_portable PRIVATE SWERVE_HEADING_REFERENCE=1 SWERVE_CRITIC_HEADING=1)
