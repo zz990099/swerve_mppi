@@ -54,7 +54,7 @@ def render(root):
         ax.grid(alpha=.18)
     for ax in list(axes.flat)[len(metrics):]:
         ax.set_visible(False)
-    fig.suptitle(f'XY-derived heading + independent final yaw  |  {passed}/{len(metrics)} passed\n'
+    fig.suptitle(f'Soft geometric-heading preference + independent final yaw  |  {passed}/{len(metrics)} passed\n'
                  f'NUMERICAL CLOSED LOOP  |  {setup}\n'
                  'Shared chassis executor + independent servo plant; no ROS / Gazebo / odometry\n'
                  'Dashed: XY route   Orange arrows: body yaw   Blue star/arrow: final pose',
@@ -91,6 +91,8 @@ def render(root):
         axs[1].axhline(math.degrees(goal_yaw), color='#2563eb', ls=':', label='Final yaw')
         axs[1].set(xlabel='Simulation time [s]', ylabel='Yaw [deg]')
         axs[2].plot(data['t'], data['goal_weight'], color='#7c3aed', label='Final yaw weight')
+        if 'heading_preference' in data.dtype.names:
+            axs[2].plot(data['t'], data['heading_preference'], color='#15803d', label='Travel heading preference')
         axs[2].step(data['t'], data['branch_phase']/4, color='#d97706', alpha=.6,
                     label='Internal phase / 4')
         twin = axs[2].twinx()

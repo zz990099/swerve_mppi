@@ -5,6 +5,7 @@
 #include "swerve_mppi/controller.hpp"
 #include "swerve_mppi/heading_reference.hpp"
 #include "swerve_mppi/ordered_path.hpp"
+#include "swerve_mppi/reference.hpp"
 using namespace swerve_mppi;
 void require(bool value, const char * message)
 {
@@ -15,11 +16,19 @@ class Capture final : public Critic
 public:
   mutable double weight = -1;
   mutable ReferenceKind kind = ReferenceKind::ExternalPath;
-  void score(
-    const CriticContext & c, const std::vector<Trajectory> &, std::vector<double> &) const override
+  mutable bool hold_candidate = false, turn_candidate = false;
+  void score(const CriticContext & c, const std::vector<Trajectory> & batch, std::vector<double> &)
+    const override
   {
     weight = c.input.goal_heading_weight;
     kind = c.input.reference_kind;
+    for (const auto & t : batch)
+      if (t.valid && !t.controls.empty()) {
+        hold_candidate |= std::all_of(
+          t.controls.begin(), t.controls.end(), [](Velocity u) { return std::abs(u.wz) < 1e-10; });
+        turn_candidate |=
+          std::any_of(t.controls.begin(), t.controls.end(), [](Velocity u) { return u.wz > .01; });
+      }
   }
 };
 class Reject final : public Critic
@@ -102,21 +111,61 @@ int main()
     Input startup;
     startup.reference_kind = ReferenceKind::GeometricPath;
     startup.state.generator.valid = true;
-    startup.path = {{0, 0, 1.57079632679}, {3, 0, 1.57079632679}};
+    startup.path = {{0, 0, 1.57079632679}, {0, 3, 1.57079632679}};
     startup.goal = startup.path.back();
     startup.goal_active = false;
     startup.goal_heading_weight = 0;
-    const auto effective = effective_heading_path(startup, config);
+    ReferenceProfile straight(startup, config);
     require(
-      std::abs(effective.front().yaw - startup.state.pose.yaw) <= config.heading_corridor + 1e-9,
-      "startup reference begins inside heading corridor");
-    PathView feasible(effective);
+      std::abs(straight.unit(.2, 0).wz) < 1e-12,
+      "ordinary XY speed reference does not impose body yaw rate");
     require(
-      std::abs(feasible.yaw_derivative(.05)) * config.max_speed <= config.max_yaw_rate + 1e-6,
-      "large startup yaw has a rate-limited spatial reference");
+      straight.heading_preference(0) > .99, "long straight route has full direction preference");
+    auto corner = startup;
+    corner.path = {{0, 0, 0}, {.5, 0, 0}, {.5, .5, 1.57079632679}, {1, .5, 0}};
+    ReferenceProfile complex(corner, config);
     require(
-      effective.back().yaw > effective.front().yaw,
-      "startup heading converges toward travel direction");
+      complex.heading_preference(0) < .2 * straight.heading_preference(0),
+      "short repeated turns continuously weaken preference");
+    auto arbitrary = startup;
+    arbitrary.path[0].yaw = -2;
+    arbitrary.path[1].yaw = 2;
+    ReferenceProfile no_yaw_coupling(arbitrary, config);
+    require(
+      std::abs(straight.speed(.2) - no_yaw_coupling.speed(.2)) < 1e-10,
+      "ordinary nominal speed is independent of prescribed body yaw changes");
+    auto proposals = std::make_shared<Capture>();
+    auto proposal_critics = tracking_critics();
+    proposal_critics.push_back(proposals);
+    const auto choice = Controller(config, proposal_critics).compute(startup);
+    require(
+      choice.status == Status::Ok && choice.branch_phase == 0 &&
+        choice.motion_reference->reference_kind == ReferenceKind::GeometricPath,
+      "ordinary startup keeps free yaw and has no mandatory body alignment phase");
+    require(
+      proposals->hold_candidate && proposals->turn_candidate,
+      "physically valid keep-heading and gentle-alignment candidates both reach scoring");
+    const auto heading = tracking_critics().back();
+    Trajectory aligned, opposite;
+    aligned.states = {startup.state, startup.state};
+    opposite = aligned;
+    aligned.states.back().pose = {0, .05, 1.57079632679};
+    opposite.states.back().pose = {0, .05, -1.57079632679};
+    aligned.controls = {{0, .1, 0}};
+    opposite.controls = aligned.controls;
+    std::vector<double> costs(2, 0);
+    heading->score({startup, config, &straight}, {aligned, opposite}, costs);
+    require(
+      std::abs(costs[0]) < 1e-10 && costs[1] > costs[0] && costs[1] <= .5 + 1e-10 &&
+        std::isfinite(costs[1]),
+      "travel heading is a bounded preference and opposite yaw remains admissible");
+    auto finishing = startup;
+    finishing.goal_active = true;
+    finishing.goal_heading_weight = 1;
+    finishing.goal = {0, 3, -1.57079632679};
+    costs.assign(2, 0);
+    heading->score({finishing, config, &straight}, {aligned, opposite}, costs);
+    require(costs[1] < costs[0], "final task yaw is scored independently of geometric heading");
     Input arrived;
     arrived.state.generator.valid = true;
     arrived.state.pose = {.024, 0, .017};

@@ -12,7 +12,7 @@ DIAGNOSTICS = ('compute_ms', 'cost', 'evaluated', 'effective_samples', 'invalid_
                'invalid_input',
                'invalid_control', 'actuator_residual', 'generator_error', 'critic_rejected',
                'collision_rejected', 'critic_errors', 'controller_errors', 'braking_selected', 'presteering',
-               'reference_speed', 'goal_heading_weight', 'noise_scale', 'reorientation_active', 'reference_limit',
+               'reference_speed', 'goal_heading_weight', 'heading_preference', 'noise_scale', 'reorientation_active', 'reference_limit',
                'branch_distance', 'branch_phase', 'completed_transition', 'route_section', 'route_rotating', 'remaining_path_m') + tuple(
     f'{candidate}_{field}' for candidate in ('mean', 'fresh', 'brake', 'slow', 'recovery', 'selected')
     for field in ('valid', 'cost', 'path', 'heading', 'velocity', 'alignment', 'effort', 'progress', 'goal'))

@@ -54,39 +54,11 @@ inline double terminal_heading_weight(const Input & input, const Config & config
     0., 1.);
   return t * t * (3 - 2 * t);
 }
-// One circular yaw target for every consumer. The startup offset decays along
-// the route, so a sideways start has a feasible turning reference rather than
-// a sudden heading step. It disappears at the final-yaw handoff.
-inline std::vector<Pose> effective_heading_path(const Input & input, const Config & config)
+// Ordinary XY tracking leaves body yaw free. Explicit internal references keep
+// their heading semantics, independently of the external-path policy.
+inline bool free_heading(const Input & input)
 {
-  if (input.reference_kind != ReferenceKind::GeometricPath) return input.path;
-  PathView path(input.path);
-  const double start = path.start_match(input.state.pose).arc;
-  const double weight = input.goal_heading_weight;
-  const auto target = [&](double arc) {
-    const double yaw = path.at(arc).yaw;
-    return yaw + weight * wrap_angle(input.goal.yaw - yaw);
-  };
-  const double error = wrap_angle(input.state.pose.yaw - target(start));
-  const double offset = (1 - weight) * error;
-  const double relaxation = std::max(
-    config.lookahead,
-    std::abs(offset) * std::max(.1, config.max_speed) / (.35 * config.max_yaw_rate));
-  std::vector<double> arcs{0};
-  for (std::size_t i = 1; i < input.path.size(); ++i) {
-    const double a = path.vertex_arc(i - 1), b = path.vertex_arc(i);
-    const auto count =
-      static_cast<std::size_t>(std::clamp(std::ceil((b - a) / .05 - 1e-8), 1., 512.));
-    if (arcs.size() + count > 4096) throw std::invalid_argument("effective path too large");
-    for (std::size_t j = 1; j <= count; ++j) arcs.push_back(a + (b - a) * j / count);
-  }
-  std::vector<Pose> result;
-  for (double arc : arcs) {
-    auto p = path.at(arc);
-    p.yaw = wrap_angle(target(arc) + offset * std::exp(-std::max(0., arc - start) / relaxation));
-    result.push_back(p);
-  }
-  return result;
+  return input.reference_kind == ReferenceKind::GeometricPath;
 }
 inline bool terminal_position_reached(const Input & input)
 {

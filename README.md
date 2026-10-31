@@ -49,3 +49,6 @@ For incremental local single-scenario tests without ROS, see
 [local testing](docs/LOCAL_TESTING.md). The latest experimental heading changes
 and unresolved strict regressions are recorded in
 [local optimization results](docs/GEOMETRIC_HEADING_LOCAL_OPTIMIZATION.md).
+
+The current body-heading policy is a bounded critic preference, with independent
+final yaw: [policy and known limits](docs/SOFT_HEADING_POLICY.md).

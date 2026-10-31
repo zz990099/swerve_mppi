@@ -40,7 +40,7 @@ enum class ReferenceKind
 {
   ExternalPath,
   GeometricPath,
-  EffectivePath,  // Prepared by Controller; shared yaw profile for scoring and retiming.
+  EffectivePath,  // Explicit internal reference with prescribed body yaw; not ordinary XY tracking.
   FixedHeading,
   WheelAlignment,
   Departure
@@ -128,6 +128,7 @@ struct Result
   double reference_speed = 0;
   double noise_scale = 0, branch_distance = -1;
   double goal_heading_weight = 0;
+  double heading_preference = 0;
   std::uint32_t reference_limit = 0;
   bool reorientation_active = false;
   bool completed_transition = false;

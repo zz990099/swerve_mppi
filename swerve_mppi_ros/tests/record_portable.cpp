@@ -71,7 +71,7 @@ int main(int argc, char ** argv)
     std::ofstream trace(root / (name + ".csv"));
     trace << std::setprecision(12);
     trace << "t,x,y,yaw,vx,vy,wz,request_vx,request_vy,request_wz,remaining,goal_weight,branch_"
-             "phase,compute_ms,path_error\n";
+             "phase,compute_ms,path_error,heading_preference,heading_cost,goal_cost\n";
     double peak = 0, time = 0, last_motion = 0;
     Pose motion_pose;
     std::string status = "timeout";
@@ -131,7 +131,14 @@ int main(int argc, char ** argv)
             << state.velocity.vx << ',' << state.velocity.vy << ',' << state.velocity.wz << ','
             << state.requested.vx << ',' << state.requested.vy << ',' << state.requested.wz << ','
             << path.remaining() << ',' << heading_weight << ',' << result.branch_phase << ','
-            << result.compute_ms << ',' << error << '\n';
+            << result.compute_ms << ',' << error;
+#ifdef SWERVE_CRITIC_HEADING
+      trace << ',' << result.heading_preference << ',' << result.candidates[5].tracking.heading
+            << ',' << result.candidates[5].tracking.goal;
+#else
+      trace << ",0,0,0";
+#endif
+      trace << '\n';
       if (
         path.goal_active() && std::hypot(state.requested.vx, state.requested.vy) < 1e-4 &&
         std::abs(state.requested.wz) < 1e-4 && checker.reached(state, path.goal(), time)) {

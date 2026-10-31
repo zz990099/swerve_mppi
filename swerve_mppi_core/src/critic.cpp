@@ -33,10 +33,9 @@ public:
     if (!c.reference) local_reference = std::make_unique<ReferenceProfile>(c.input, c.config);
     const auto & reference = c.reference ? *c.reference : *local_reference;
     const double weight = std::clamp(c.input.goal_heading_weight, 0., 1.);
-    const double heading_scale =
-      c.input.precise_heading
-        ? std::min(.005, c.config.heading_scale)
-        : (1 - weight) * c.config.travel_heading_scale + weight * c.config.goal_heading_scale;
+    const double heading_scale = c.input.precise_heading ? std::min(.005, c.config.heading_scale)
+                                                         : (1 - weight) * c.config.heading_scale +
+                                                             weight * c.config.goal_heading_scale;
     auto start = path.start_match(c.input.state.pose);
     const double checkpoint = path.next_corner(start.arc);
     bool terminal = c.input.goal_active && distance(c.input.path.back(), c.input.goal) < .001;
@@ -103,7 +102,9 @@ public:
           for (double v : request.speed)
             reorienting |= std::abs(v) > 2 * c.config.limits.stopped_speed;
           const auto alignment_intent =
-            !initial_alignment_done && c.initial_intent ? *c.initial_intent : unit;
+            free_heading(c.input)
+              ? u
+              : (!initial_alignment_done && c.initial_intent ? *c.initial_intent : unit);
           const auto intent = swerve_chassis_core::inverse(
             c.config.geometry, {alignment_intent.vx, alignment_intent.vy, alignment_intent.wz},
             s.generator.command.steering);
@@ -129,8 +130,9 @@ public:
           std::pow((u.wz - previous.wz) / (c.config.limits.angular_acceleration * dt), 2);
         detail.path +=
           norm * (4 * slack + w_.path_distance * std::pow(m.error / c.config.position_scale, 2));
-        detail.heading += norm * ((1 - weight) * w_.path_heading + weight * w_.goal_heading) *
-                          std::pow(heading / heading_scale, 2);
+        if (!free_heading(c.input))
+          detail.heading += norm * ((1 - weight) * w_.path_heading + weight * w_.goal_heading) *
+                            std::pow(heading / heading_scale, 2);
         detail.velocity += norm * (std::pow(excess_speed / .1, 2) +
                                    w_.reference_velocity * velocity_error * velocity_error);
         detail.alignment += norm * w_.presteering_alignment * alignment_error;
@@ -163,9 +165,54 @@ public:
 private:
   TrackingWeights w_;
 };
+// Body heading is an optimization preference during ordinary XY tracking.
+// Its complete travel contribution is bounded by path_heading. Final yaw is a
+// separate task objective; physical validity is handled before critic scoring.
+class HeadingCritic final : public Critic
+{
+public:
+  explicit HeadingCritic(TrackingWeights weights) : w_(weights) {}
+  void score(
+    const CriticContext & c, const std::vector<Trajectory> & batch,
+    std::vector<double> & costs) const override
+  {
+    if (!free_heading(c.input) || c.alignment_only || c.input.departure) return;
+    PathView path(c.input.path);
+    std::unique_ptr<ReferenceProfile> local;
+    if (!c.reference) local = std::make_unique<ReferenceProfile>(c.input, c.config);
+    const auto & reference = c.reference ? *c.reference : *local;
+    const double goal = std::clamp(c.input.goal_heading_weight, 0., 1.);
+    for (std::size_t k = 0; k < batch.size(); ++k) {
+      const auto & t = batch[k];
+      if (!t.valid || t.states.size() < 2) continue;
+      double progress = path.start_match(c.input.state.pose).arc, travel = 0, terminal = 0;
+      const double norm = 1. / (t.states.size() - 1);
+      for (std::size_t i = 1; i < t.states.size(); ++i) {
+        const auto & s = t.states[i];
+        const auto m = path.match_ordered(
+          s.pose, progress,
+          std::min(path.length(), progress + c.config.max_speed * c.config.model_dt * 1.5 + .02));
+        progress = m.arc;
+        travel += norm * (1 - goal) * w_.path_heading * reference.heading_preference(progress) *
+                  .5 * (1 - std::cos(s.pose.yaw - m.pose.yaw));
+        terminal +=
+          norm * goal * w_.goal_heading *
+          std::pow(wrap_angle(s.pose.yaw - c.input.goal.yaw) / c.config.goal_heading_scale, 2);
+      }
+      costs[k] += travel + terminal;
+      if (c.breakdown && c.breakdown->size() == batch.size()) {
+        (*c.breakdown)[k].heading += travel;
+        (*c.breakdown)[k].goal += terminal;
+      }
+    }
+  }
+
+private:
+  TrackingWeights w_;
+};
 }  // namespace
 Critics tracking_critics(TrackingWeights weights)
 {
-  return {std::make_shared<TrackingCritic>(weights)};
+  return {std::make_shared<TrackingCritic>(weights), std::make_shared<HeadingCritic>(weights)};
 }
 }  // namespace swerve_mppi

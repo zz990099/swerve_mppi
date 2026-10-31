@@ -30,7 +30,9 @@ Velocity feedback_request(
   return {
     speed * unit.vx + std::cos(state.pose.yaw) * ex + std::sin(state.pose.yaw) * ey,
     speed * unit.vy - std::sin(state.pose.yaw) * ex + std::cos(state.pose.yaw) * ey,
-    speed * unit.wz + 2.5 * heading_feedback(match.pose.yaw, state.pose.yaw)};
+    free_heading(input)
+      ? input.goal_heading_weight * 2.5 * heading_feedback(input.goal.yaw, state.pose.yaw)
+      : speed * unit.wz + 2.5 * heading_feedback(match.pose.yaw, state.pose.yaw)};
 }
 bool stable_nominal(
   const Config & config, const State & state, const PathMatch & match, double speed,
@@ -75,8 +77,8 @@ void Controller::reset()
   tracking_start_ = false;
 }
 std::vector<Velocity> Controller::seed(
-  const Input & input, const ReferenceProfile & reference,
-  const std::optional<Velocity> & intent) const
+  const Input & input, const ReferenceProfile & reference, const std::optional<Velocity> & intent,
+  bool align_heading) const
 {
   State s = input.state;
   PathView path(input.path);
@@ -99,13 +101,20 @@ std::vector<Velocity> Controller::seed(
     const double speed = reference.speed(progress);
     const auto unit = reference.unit(progress, s.pose.yaw);
     Velocity desired = feedback_request(config_, s, m, speed, unit, input);
+    if (align_heading && free_heading(input)) {
+      const double direction = std::clamp(heading_feedback(m.pose.yaw, s.pose.yaw), -1., 1.);
+      desired.wz += (1 - input.goal_heading_weight) * reference.heading_preference(progress) * .35 *
+                    config_.max_yaw_rate * direction;
+    }
     // Filter only corrections smaller than the wheel tracking tolerance.
     // A fixed 2 cm pose gate can hide a large steering correction at low speed.
     bool stopped = true;
     for (double v : s.wheel_speeds) stopped &= std::abs(v) < config_.limits.stopped_speed;
-    const auto nominal_unit = reference.unit(progress, m.pose.yaw);
+    const auto nominal_unit =
+      reference.unit(progress, free_heading(input) ? s.pose.yaw : m.pose.yaw);
     Velocity nominal{speed * nominal_unit.vx, speed * nominal_unit.vy, speed * nominal_unit.wz};
-    if (stopped && stable_nominal(config_, s, m, speed, nominal, desired)) desired = nominal;
+    if (!free_heading(input) && stopped && stable_nominal(config_, s, m, speed, nominal, desired))
+      desired = nominal;
     if (!stopped) initial_intent = false;
     if (intent && stopped && initial_intent) {
       const auto target = swerve_chassis_core::inverse(
@@ -155,14 +164,6 @@ Result Controller::compute(const Input & external)
     std::any_of(source.path.begin(), source.path.end(), [](Pose p) { return !finite(p); }) ||
     !std::isfinite(PathView(source.path).length()))
     return compute_tracking(source);
-  try {
-    source.path = effective_heading_path(source, config_);
-    if (source.reference_kind == ReferenceKind::GeometricPath)
-      source.reference_kind = ReferenceKind::EffectivePath;
-  } catch (const std::invalid_argument &) {
-    source.path.clear();
-    return compute_tracking(source);
-  }
   Input input = source;
   if (std::hypot(source.state.velocity.vx, source.state.velocity.vy) > .04) tracking_start_ = false;
   bool stopped = true;
@@ -170,8 +171,8 @@ Result Controller::compute(const Input & external)
   // Branch events are short, ordered maneuvers in the same continuous twist
   // space. Their location and exit are held until measured completion.
   if (
-    !branch_ && !tracking_start_ && stopped && !source.path.empty() && source.path.size() <= 4096 &&
-    model_.valid(source.state) &&
+    !free_heading(source) && !branch_ && !tracking_start_ && stopped && !source.path.empty() &&
+    source.path.size() <= 4096 && model_.valid(source.state) &&
     std::all_of(source.path.begin(), source.path.end(), [](Pose p) { return finite(p); })) {
     try {
       PathView path(source.path);
@@ -394,7 +395,9 @@ Result Controller::compute_tracking(const Input & input)
         warm_elapsed_ = 0;
       }
     }
-    if (wheels_stopped && !reorientation_ && !input.departure && !terminal_hold) {
+    if (
+      !free_heading(input) && wheels_stopped && !reorientation_ && !input.departure &&
+      !terminal_hold) {
       const auto match = PathView(input.path).start_match(input.state.pose);
       const double speed = reference->speed(match.arc);
       const auto nominal_unit = reference->unit(match.arc, match.pose.yaw);
@@ -445,7 +448,12 @@ Result Controller::compute_tracking(const Input & input)
       }
     }
     auto fresh = seed(input, *reference, reorientation_);
-    if (terminal_hold) fresh.assign(config_.horizon, {});
+    auto guided =
+      free_heading(input) && !reorientation_ ? seed(input, *reference, {}, true) : fresh;
+    if (terminal_hold) {
+      fresh.assign(config_.horizon, {});
+      guided = fresh;
+    }
     if (input.alignment) {
       const auto target = swerve_chassis_core::inverse(
         config_.geometry, {input.alignment->vx, input.alignment->vy, input.alignment->wz},
@@ -459,6 +467,9 @@ Result Controller::compute_tracking(const Input & input)
     }
     const double reference_arc = PathView(input.path).start_match(input.state.pose).arc;
     result.reference_speed = reference->speed(reference_arc);
+    result.heading_preference = free_heading(input) ? (1 - input.goal_heading_weight) *
+                                                        reference->heading_preference(reference_arc)
+                                                    : 0;
     result.reference_limit = reference->limiting_reason(reference_arc);
     result.branch_distance = reference->next_branch(reference_arc);
     const auto initial_intent = swerve_chassis_core::inverse(
@@ -574,8 +585,11 @@ Result Controller::compute_tracking(const Input & input)
                ++i)
             candidate[i] = {};
         }
+        // Keep-body and optional gentle-alignment proposals compete under the
+        // same costs and physical checks. Neither is imposed on every sample.
+        if (free_heading(input) && k >= 5 && k % 2) candidate = guided;
         Velocity noise;
-        if (k >= 5 && !terminal_hold && !reorientation_ && !input.alignment && !input.departure)
+        if (k >= 6 && !terminal_hold && !reorientation_ && !input.alignment && !input.departure)
           for (auto & u : candidate) {
             const double a = config_.noise_correlation, b = std::sqrt(1 - a * a);
             noise = {
@@ -648,6 +662,25 @@ Result Controller::compute_tracking(const Input & input)
     reset();
     result.status = Status::NoSolution;
     return finish();
+  }
+  // Only the optimizer's accepted request may latch an ordinary wheel-alignment
+  // intent. This is execution continuity, not a prescribed body-heading target.
+  if (free_heading(input) && !terminal_hold && !reorientation_) {
+    bool stopped = true;
+    for (double speed : input.state.wheel_speeds)
+      stopped &= std::abs(speed) < config_.limits.stopped_speed;
+    if (stopped) {
+      const auto & u = selected.front();
+      const auto target =
+        swerve_chassis_core::inverse(config_.geometry, {u.vx, u.vy, u.wz}, input.state.steering);
+      bool turning = false, driving = false;
+      for (std::size_t w = 0; w < 4; ++w) {
+        turning |= std::abs(target.steering[w] - input.state.steering[w]) >
+                   config_.limits.tracking_tolerance;
+        driving |= std::abs(target.speed[w]) > 2 * config_.limits.stopped_speed;
+      }
+      if (turning && driving) reorientation_ = u;
+    }
   }
   result.status = Status::Ok;
   result.command.velocity = selected.front();

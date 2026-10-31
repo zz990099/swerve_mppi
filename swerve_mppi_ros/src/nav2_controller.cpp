@@ -90,7 +90,8 @@ struct Nav2Controller::Runtime
     number("goal_heading_start_distance", config.goal_heading_start_distance);
     number("goal_heading_full_distance", config.goal_heading_full_distance);
     number("goal_heading_scale", config.goal_heading_scale);
-    number("travel_heading_scale", config.travel_heading_scale);
+    number("heading_preference_distance", config.heading_preference_distance);
+    number("heading_preference_turn", config.heading_preference_turn);
     number("approach_distance", config.approach_distance);
     number("approach_gain", config.approach_gain);
     auto size = [&](const char * key, std::size_t & value) {
@@ -209,6 +210,7 @@ struct Nav2Controller::Runtime
       item.values.push_back(value);
     };
     add("goal_heading_weight", result.goal_heading_weight);
+    add("heading_preference", result.heading_preference);
     add("noise_scale", result.noise_scale);
     add("reorientation_active", result.reorientation_active);
     add("reference_limit", result.reference_limit);
