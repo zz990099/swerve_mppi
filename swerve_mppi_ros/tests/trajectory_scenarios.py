@@ -22,7 +22,8 @@ PATHS['smooth_s'] = [(1.8*t/40, .22*math.sin(2*math.pi*t/40), 0) for t in range(
 PATHS['smooth_curve'] = []
 for i in range(41):
     t = i/40
-    # Cubic Bezier, desired body yaw follows its tangent.
+    # Cubic Bezier with deliberately varying waypoint yaw. The controller must
+    # ignore it during translation and retain only the final pose yaw.
     x = 3*(1-t)**2*t*.5 + 3*(1-t)*t*t*1.1 + t**3*1.6
     y = 3*(1-t)*t*t*.6 + t**3*.6
     dx = 3*((1-t)**2*.5 + 2*(1-t)*t*.6 + t*t*.5)
@@ -40,8 +41,8 @@ def arc(direction=1, sweep=2*math.pi, fixed_yaw=False):
     return points
 
 
-# Twenty additional stress cases, each starting at the origin. Body heading
-# is independent of travel direction, as appropriate for a swerve chassis.
+# Twenty additional stress cases, each starting at the origin. Waypoint yaw is
+# input noise/metadata during translation; only the final pose yaw is a target.
 PATHS.update({
     'diagonal_left': [(0, 0, 0), (1, 1, 0)],
     'diagonal_right': [(0, 0, 0), (1, -1, 0)],
@@ -85,7 +86,7 @@ PATHS['rounded_rectangle'] = rounded
 
 TITLES = {
     'straight': 'Forward straight', 'smooth_s': 'Smooth S bend / fixed body yaw',
-    'smooth_curve': 'Regular curve / tangent body yaw',
+    'smooth_curve': 'Regular curve / ignored tangent yaw',
     'crab': 'Perpendicular start / left', 'crab_right': 'Perpendicular start / right',
     'reverse': 'Opposite direction / reverse', 'reverse_curve': 'Reverse curve',
     'combined': 'Translation + rotation', 'spin': 'In-place rotation',
@@ -98,19 +99,19 @@ TITLES = {
     'l_turn_right': 'Sharp L turn / right',
     'zigzag': 'Zigzag / fixed body yaw',
     'lateral_zigzag': 'Lateral zigzag',
-    'u_turn': 'U turn / tangent body yaw',
+    'u_turn': 'U turn / final yaw only',
     'hairpin_fixed_yaw': 'Hairpin / fixed body yaw',
-    'circle_cw': 'Full circle / clockwise',
-    'circle_ccw': 'Full circle / counterclockwise',
+    'circle_cw': 'Full circle / final yaw only',
+    'circle_ccw': 'Full circle / final yaw only',
     'figure_eight': 'Figure eight / self crossing',
     'slalom': 'Slalom / three oscillations',
     'lateral_s': 'Lateral S bend',
     'spiral_out': 'Expanding spiral / two turns',
-    'rounded_rectangle': 'Rounded rectangle / tangent yaw',
+    'rounded_rectangle': 'Rounded rectangle / final yaw only',
     'cloverleaf': 'Four-leaf / repeated crossings',
-    'heading_sweep': 'Straight + 180 deg body rotation',
+    'heading_sweep': 'Straight + final 180 deg rotation',
     'reverse_s': 'Reverse S bend',
-    'stop_turn_go': 'Square / stop, rotate, translate',
+    'stop_turn_go': 'Square / intermediate yaw ignored',
 }
 BENCHMARK_CASES = tuple(TITLES)
 

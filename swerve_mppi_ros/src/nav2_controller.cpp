@@ -77,7 +77,7 @@ struct Nav2Controller::Runtime
     number("position_scale", config.position_scale);
     number("heading_scale", config.heading_scale);
     number("path_corridor", config.path_corridor);
-    number("heading_corridor", config.heading_corridor);
+    number("goal_heading_activation_distance", config.goal_heading_activation_distance);
     number("cross_gain", config.cross_gain);
     number("model_dt", config.model_dt);
     number("integration_dt", config.integration_dt);
@@ -108,10 +108,10 @@ struct Nav2Controller::Runtime
       throw std::invalid_argument("invalid timing parameters");
     TrackingWeights weights;
     number("path_distance_weight", weights.path_distance);
-    number("path_heading_weight", weights.path_heading);
     number("progress_weight", weights.progress);
     number("goal_position_weight", weights.goal_position);
     number("goal_heading_weight", weights.goal_heading);
+    number("alignment_heading_weight", weights.alignment_heading);
     number("effort_weight", weights.effort);
     number("smoothness_weight", weights.smoothness);
     number("steering_change_weight", weights.steering_change);

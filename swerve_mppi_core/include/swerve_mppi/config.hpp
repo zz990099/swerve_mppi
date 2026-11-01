@@ -18,7 +18,10 @@ struct Config
   double lookahead = 0.3, approach_distance = 0.5, approach_gain = 2.0;
   double max_residual = 0.08;
   double position_scale = .03, heading_scale = .05, cross_gain = 4.;
-  double path_corridor = .04, heading_corridor = .10;
+  double path_corridor = .04;
+  // Path samples are geometric only. The final pose yaw contributes only after
+  // measured ordered progress enters this terminal region.
+  double goal_heading_activation_distance = .08;
   std::uint32_t seed = 42;
 };
 void validate(const Config & config);

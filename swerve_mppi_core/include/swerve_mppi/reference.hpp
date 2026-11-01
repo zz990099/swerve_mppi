@@ -10,9 +10,10 @@
 
 namespace swerve_mppi
 {
-// Adaptive time parameterization of an ordered geometric path. Body heading
-// comes from the path, independently of its direction of travel. Wheel targets
-// below are per unit arc speed, hence include the yaw/translation coupling.
+// Adaptive time parameterization of an ordered geometric path. Intermediate
+// waypoint yaw is intentionally ignored: body heading is free during travel and
+// the terminal pose yaw is handled by the goal critic. Wheel targets below are
+// per unit arc speed for a fixed body frame.
 class ReferenceProfile
 {
 public:
@@ -39,17 +40,12 @@ public:
     std::array<double, 4> previous{};
     for (std::size_t i = 0; i <= count; ++i) {
       const double s = s_[i];
-      const auto u = unit(s, path_.at(s).yaw);
+      const auto u = unit(s, 0);
       wheels[i] = swerve_chassis_core::inverse(config_.geometry, {u.vx, u.vy, u.wz}, previous);
       previous = wheels[i].steering;
       double cap = path_.speed_limit(
         s, config_.max_speed, config_.limits.linear_acceleration, config_.approach_gain,
         config_.limits.steering_rate);
-      const double yaw_cap = config_.max_yaw_rate / std::max(1e-9, std::abs(u.wz));
-      if (yaw_cap < cap) {
-        cap = yaw_cap;
-        reasons_[i] = 2;
-      }
       for (double v : wheels[i].speed) {
         const double wheel_cap = config_.limits.wheel_speed / std::max(1e-9, std::abs(v));
         if (wheel_cap < cap) {
@@ -134,7 +130,7 @@ public:
     const double t = (arc - s_[i - 1]) / (s_[i] - s_[i - 1]);
     return speed_[i - 1] + t * (speed_[i] - speed_[i - 1]);
   }
-  // Bit mask: geometry/end=1, yaw=2, wheel speed=4, corner=8,
+  // Bit mask: geometry/end=1, wheel speed=4, corner=8,
   // actuator rate=16, acceleration envelope=64. Interpolation combines neighboring active limits.
   std::uint32_t limiting_reason(double arc) const
   {
@@ -165,7 +161,7 @@ public:
     const double x = (pb.x - pa.x) / length, y = (pb.y - pa.y) / length;
     return {
       std::cos(body_yaw) * x + std::sin(body_yaw) * y,
-      -std::sin(body_yaw) * x + std::cos(body_yaw) * y, path_.yaw_derivative(arc)};
+      -std::sin(body_yaw) * x + std::cos(body_yaw) * y, 0};
   }
 
 private:
