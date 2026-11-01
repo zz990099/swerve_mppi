@@ -60,23 +60,13 @@ int main()
     path.set({{0, 0, 0}, {1, 0, 0}, {1, 0, 1.57}, {1, 1, 1.57}});
     auto incoming = path.local({.99, 0, 0}, 3., {.1, 0, 0});
     check(
-      !path.rotating() && incoming.back().yaw == 0,
-      "incoming translation must stop before rotation");
-    auto rotation = path.local({1, 0, 0});
-    check(
-      path.rotating() && rotation.back().yaw == 1.57 && !path.goal_active(),
-      "intermediate rotation blocks later leg and completion");
-    path.local({1, 0, 1.57}, 3., {0, 0, .1});
-    check(path.rotating(), "rotation completion requires measured stopping");
-    auto outgoing = path.local({1, 0, 1.57});
-    check(
-      !path.rotating() && outgoing.back().y == 1,
-      "aligned stopped rotation releases outgoing translation");
+      !path.rotating() && incoming.back().y == 1 && incoming.back().yaw == 1.57,
+      "intermediate zero-distance yaw is ignored while final yaw is retained");
     path.set({{0, 0, 3.12}, {0, 0, -3.12}, {0, 0, -3.12}, {1, 0, -3.12}});
-    path.local({0, 0, 3.12});
-    check(path.rotating(), "rotation crossing pi remains an event");
-    path.local({0, 0, -3.12});
-    check(!path.rotating(), "wrapped yaw and duplicate points advance in order");
+    auto collapsed = path.local({0, 0, 3.12});
+    check(
+      !path.rotating() && collapsed.back().x == 1 && path.goal().yaw == -3.12,
+      "duplicate waypoint yaw is collapsed without losing final orientation");
     path.set({{0, 0, 0}, {.8, 0, 0}, {.8, .8, 0}, {0, .8, 0}, {0, 0, 0}});
     path.local({0, 0, 0});
     path.recover({0, 0, 0});

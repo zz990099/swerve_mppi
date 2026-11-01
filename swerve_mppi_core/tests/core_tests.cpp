@@ -67,11 +67,17 @@ int main()
     Config slower = c;
     slower.steering_time_constant *= 2;
     ReferenceProfile profile(coupled, c), slow_profile(coupled, slower);
+    ReferenceProfile geometric_only({{0, 0, -2.4}, {.5, 0, 1.7}, {1, 0, .8}}, c);
     ReferenceProfile owned(std::vector<Pose>{{0, 0, 0}, {1, 0, 0}}, c);
     check(owned.speed(.3) > 0, "profile owns temporary path storage");
     check(
       slow_profile.speed(.3) <= profile.speed(.3) && profile.speed(1) == 0,
       "reference slows for servo lag and stops at the endpoint");
+    check(
+      std::abs(profile.speed(.3) - geometric_only.speed(.3)) < 1e-12 &&
+        std::abs(profile.unit(.3, .4).vx - geometric_only.unit(.3, .4).vx) < 1e-12 &&
+        profile.unit(.3, .4).wz == 0 && geometric_only.unit(.3, .4).wz == 0,
+      "intermediate waypoint yaw cannot change the geometric reference");
     std::vector<Pose> lateral_path{{0, 0, 0}, {0, .8, 0}};
     ReferenceProfile lateral_profile(lateral_path, c);
     auto direction = lateral_profile.unit(.2, 0);
@@ -227,15 +233,14 @@ int main()
     check(
       Controller(c, {std::make_shared<Reject>()}).compute(settled).status == Status::NoSolution,
       "terminal hold remains subject to hard rejection");
-    auto precise_settle = settled;
-    precise_settle.state.requested = {};
-    precise_settle.path = {{0, 0, .006}};
-    precise_settle.goal = precise_settle.path.back();
-    precise_settle.precise_heading = true;
-    const auto precise_request = Controller(c).compute(precise_settle);
+    auto terminal_rotation = settled;
+    terminal_rotation.state.requested = {};
+    terminal_rotation.path = {{0, 0, .2}};
+    terminal_rotation.goal = terminal_rotation.path.back();
+    const auto precise_request = Controller(c).compute(terminal_rotation);
     check(
-      precise_request.status == Status::Ok && precise_request.command.velocity.wz > 1e-4,
-      "terminal hold must not park inside an unfinished precise heading transition");
+      precise_request.status == Status::Ok && std::abs(precise_request.command.velocity.wz) > 1e-4,
+      "the terminal goal critic must rotate after position is reached");
     std::array<double, 4> lateral_boundary;
     lateral_boundary.fill(-swerve_chassis_core::pi / 2);
     const auto tiny_lateral = model.condition({-1e-9, -.0025, 0}, {}, lateral_boundary, .05);
@@ -296,16 +301,10 @@ int main()
     handoff_result = handoff.compute(handoff_input);
     check(handoff_result.branch_phase == 3, "aligned handoff departs");
     handoff_input.state.pose = handoff_result.motion_reference->goal;
-    handoff_input.state.pose.yaw =
-      PathView(handoff_input.path).start_match(handoff_input.state.pose).pose.yaw + .04;
     handoff_result = handoff.compute(handoff_input);
-    check(handoff_result.branch_phase == 4, "measured heading error requests settling");
-    handoff_input.state.pose.yaw = handoff_result.motion_reference->goal.yaw;
-    wheels = swerve_chassis_core::inverse(c.geometry, {0, 0, 1});
-    handoff_input.state.steering = wheels.steering;
-    handoff_input.state.generator.command.steering = wheels.steering;
-    handoff_result = handoff.compute(handoff_input);
-    check(handoff_result.completed_transition, "measured heading settling completes");
+    check(
+      handoff_result.completed_transition && handoff_result.branch_phase == 0,
+      "geometric branch completion does not request path-yaw settling");
     handoff_result = handoff.compute(handoff_input);
     check(
       handoff_result.status == Status::Ok && handoff_result.branch_phase == 0 &&

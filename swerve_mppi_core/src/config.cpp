@@ -33,7 +33,7 @@ void validate(const Config & c)
   for (double x :
        {c.max_yaw_rate, c.model_dt, c.integration_dt, c.steering_time_constant, c.temperature,
         c.lookahead, c.approach_distance, c.approach_gain, c.max_residual, c.position_scale,
-        c.heading_scale, c.cross_gain, c.path_corridor, c.heading_corridor})
+        c.heading_scale, c.cross_gain, c.path_corridor, c.goal_heading_activation_distance})
     if (!std::isfinite(x) || x <= 0)
       throw std::invalid_argument("positive finite parameter required");
   for (double x : {c.max_speed, c.noise_linear, c.noise_angular})

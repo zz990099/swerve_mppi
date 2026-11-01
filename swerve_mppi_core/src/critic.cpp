@@ -17,8 +17,8 @@ public:
   explicit TrackingCritic(TrackingWeights w) : w_(w)
   {
     for (double x :
-         {w.path_distance, w.path_heading, w.progress, w.goal_position, w.goal_heading, w.effort,
-          w.smoothness, w.steering_change, w.consistency, w.reference_velocity,
+         {w.path_distance, w.progress, w.goal_position, w.goal_heading, w.alignment_heading,
+          w.effort, w.smoothness, w.steering_change, w.consistency, w.reference_velocity,
           w.presteering_alignment})
       if (!std::isfinite(x) || x < 0) throw std::invalid_argument("invalid critic weight");
   }
@@ -36,6 +36,8 @@ public:
     auto start = path.start_match(c.input.state.pose);
     const double checkpoint = path.next_corner(start.arc);
     bool terminal = c.input.goal_active && distance(c.input.path.back(), c.input.goal) < .001;
+    const bool terminal_heading_active =
+      terminal && path.length() - start.arc <= c.config.goal_heading_activation_distance;
     for (std::size_t k = 0; k < batch.size(); ++k) {
       const auto & t = batch[k];
       if (!t.valid || t.states.empty()) continue;
@@ -51,7 +53,7 @@ public:
             norm * w_.path_distance *
             std::pow(distance(state.pose, c.input.state.pose) / c.config.position_scale, 2);
           detail.heading +=
-            norm * w_.path_heading *
+            norm * w_.alignment_heading *
             std::pow(
               wrap_angle(state.pose.yaw - c.input.state.pose.yaw) / c.config.heading_scale, 2);
           for (std::size_t w = 0; w < 4; ++w)
@@ -78,13 +80,11 @@ public:
           s.pose, progress,
           std::min(path.length(), progress + c.config.max_speed * c.config.model_dt * 1.5 + .02));
         progress = m.arc;
-        double heading = wrap_angle(s.pose.yaw - m.pose.yaw);
         // Tracking corridors are soft objectives. Rejecting every temporarily
         // deviating prediction also rejects physically necessary recovery/braking.
         // Collision and actuator feasibility remain independent hard checks.
         const double slack =
-          std::pow(std::max(0., m.error - c.config.path_corridor) / c.config.position_scale, 2) +
-          std::pow(std::max(0., std::abs(heading) - c.config.heading_corridor) / heading_scale, 2);
+          std::pow(std::max(0., m.error - c.config.path_corridor) / c.config.position_scale, 2);
         const auto & u = t.controls[i - 1];
         const auto unit = reference.unit(progress, s.pose.yaw);
         const double along = s.velocity.vx * unit.vx + s.velocity.vy * unit.vy;
@@ -126,7 +126,12 @@ public:
           std::pow((u.wz - previous.wz) / (c.config.limits.angular_acceleration * dt), 2);
         detail.path +=
           norm * (4 * slack + w_.path_distance * std::pow(m.error / c.config.position_scale, 2));
-        detail.heading += norm * w_.path_heading * std::pow(heading / heading_scale, 2);
+        // During final rotation, returning at the horizon endpoint does not
+        // compensate for an excursion earlier in the rollout. Keep endpoint
+        // position a running soft objective throughout the terminal region.
+        if (terminal_heading_active)
+          detail.goal += norm * w_.goal_position *
+                         std::pow(distance(s.pose, c.input.goal) / c.config.position_scale, 2);
         detail.velocity += norm * (std::pow(excess_speed / .1, 2) +
                                    w_.reference_velocity * velocity_error * velocity_error);
         detail.alignment += norm * w_.presteering_alignment * alignment_error;
@@ -149,10 +154,20 @@ public:
         // Remaining ordered distance replaces direct attraction through a curve/corner.
         double remaining = path.length() - progress;
         detail.goal += w_.goal_position * std::pow(remaining / c.config.approach_distance, 2);
-        if (remaining < .02)
+        // Intermediate waypoint yaw never contributes. The final yaw enters
+        // only in the measured terminal region so translation remains orientation-free.
+        const double heading_gate = terminal_heading_active ? 1. : 0.;
+        if (terminal_heading_active)
           detail.goal +=
-            w_.goal_heading *
-            std::pow(wrap_angle(t.states.back().pose.yaw - c.input.goal.yaw) / heading_scale, 2);
+            w_.goal_position *
+            std::pow(distance(t.states.back().pose, c.input.goal) / c.config.position_scale, 2);
+        // A large final turn must not overwhelm position by its squared yaw
+        // error. Huber loss retains quadratic precision near the target and
+        // bounds the marginal incentive to rotate while far from its heading.
+        const double yaw_error =
+          std::abs(wrap_angle(t.states.back().pose.yaw - c.input.goal.yaw)) / heading_scale;
+        detail.goal += heading_gate * w_.goal_heading *
+                       (yaw_error <= 1. ? yaw_error * yaw_error : 2. * yaw_error - 1.);
       }
       costs[k] += detail.path + detail.heading + detail.velocity + detail.alignment +
                   detail.effort + detail.progress + detail.goal;

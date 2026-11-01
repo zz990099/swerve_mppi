@@ -41,23 +41,27 @@ physical +/-90 degree steering range. Warm start advances with elapsed model int
 fresh measured/target state on every compute. Invalid state, new tasks and clock
 resets clear it; ordinary presteering does not.
 
-Path yaw is the desired body orientation, not inferred from the path tangent.
-Lateral tracking can keep yaw constant. Body-yaw feedforward follows the path
-reference, while curvature/corner preview reduces speed before actuator demands
-become infeasible. Ordered progress is geometric arc length, with no waypoint
+Path samples are geometric positions. Intermediate waypoint yaw is ignored by
+reference construction, controller seeds and tracking costs; changing it cannot
+change ordinary path-following behavior. The body is free to retain or optimize
+its orientation during travel. Only the final pose yaw is a task objective. It is
+activated by the goal critic after measured ordered progress enters the terminal
+region, with an endpoint-position anchor and a structured final-pose candidate.
+Curvature/corner preview reduces speed before actuator demands become infeasible.
+Ordered progress is geometric arc length, with no waypoint
 acceptance-radius pruning of a dense curve. Terminal activation uses remaining
 arc length, and the local path retains later turns for preview. Critics cover
 normalized path errors, ordered progress/remaining distance, command effort,
 cross-cycle request smoothness, normalized steering/drive changes and consistency.
-Path/heading corridors add continuous slack penalties instead of rejecting
+The path corridor adds a continuous slack penalty instead of rejecting
 recoverable tracking errors. Collision, actuator and ordered-checkpoint checks
 remain independent. Direct Euclidean terminal attraction cannot buy shortcuts
 through a curve. A fresh slew-limited braking candidate is always rolled out and
 checked against the same critics. If every candidate is rejected, NoSolution returns
 a zero request; it does not guarantee instantaneous stopping of a moving vehicle.
 
-`ReferenceProfile` constructs an arc-speed envelope using each wheel's steering
-and speed changes, body-yaw rate, servo tracking error and acceleration preview.
+`ReferenceProfile` constructs an arc-speed envelope using geometric tangent,
+each wheel's steering and speed changes, servo tracking error and acceleration preview.
 Sharp corners are explicit stop/reorientation knots. Prediction must reach a
 5 mm checkpoint before changing legs; the caller's measured checkpoint remains
 15 mm, leaving model-mismatch margin. Velocity tracking and presteering alignment

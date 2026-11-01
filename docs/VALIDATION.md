@@ -11,10 +11,12 @@ No old/new physical performance improvement is claimed without matched recording
    no-solution critics, zero planner limit and installed CMake consumer.
 2. Portable caller contracts: ordered progress, closed/out-and-back path handling,
    stopped goal checks, grid bounds, footprint edge and between-sample collisions.
-3. Portable closed loops: straight, lateral, reverse, spin, combined movement,
+3. Portable closed loops: straight, lateral, reverse, terminal spin, combined movement,
    S curves, square and return paths, with execution steering rate reduced to 80%
    of nominal, with independent 100 ms and 120 ms servo plants against the
    100 ms prediction. Fourteen scenarios per plant include negative final heading.
+   Intermediate body-heading error is deliberately not gated; final heading remains
+   part of goal completion.
    These are numerical model tests, not independent physical evidence.
 4. ROS plugin tests: plugin loading/cleanup, lifecycle, speed caps, continuous
    output, fault zero/recovery, physical configuration mismatch, TF/map errors,
@@ -88,7 +90,6 @@ alone is not sufficient. `tracking_quality.py` enforces:
 | Metric | Limit |
 | --- | --- |
 | Full-path position RMS / peak | 0.03 m / 0.075 m |
-| Body-heading RMS / peak along translating references | 0.05 rad / 0.12 rad |
 | Endpoint position / heading | 0.06 m / 0.06 rad |
 | Fraction of observations with all wheels below 0.05 rad/s | 0.55 |
 | Accepted-request linear / angular rate | 1.05 m/s² / 1.5 rad/s² |

@@ -30,8 +30,11 @@ public:
 using Critics = std::vector<std::shared_ptr<Critic>>;
 struct TrackingWeights
 {
-  double path_distance = 1.0, path_heading = 0.5, progress = 1.0;
+  double path_distance = 1.0, progress = 1.0;
   double goal_position = 2.0, goal_heading = 1.0;
+  // Keep the chassis pose fixed while the wheels presteer. This is unrelated
+  // to path waypoint yaw, which is deliberately not a tracking objective.
+  double alignment_heading = 0.5;
   double effort = 0.005, smoothness = 0.1, steering_change = 0.05, consistency = 1.0;
   double reference_velocity = 1.0;
   double presteering_alignment = 1.0;

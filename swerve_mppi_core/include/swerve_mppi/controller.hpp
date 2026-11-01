@@ -22,8 +22,7 @@ private:
   {
     Pose origin, exit;
     Velocity alignment;
-    int phase = 1;
-    bool settle_heading = false;
+    int phase = 2;
   };
   std::optional<BranchEvent> branch_;
   bool tracking_start_ = false;

@@ -46,10 +46,10 @@ int main()
       swerve_mppi_ros::GoalChecker goal;
       State s;
       s.generator.valid = true;
-      bool reached = false;
+      bool reached = false, motion_started = false;
       PathView reference(paths[scenario]);
-      double square_error = 0, peak = 0, heading_square = 0, heading_peak = 0, settled_since = -1;
-      int observations = 0, stopped = 0;
+      double square_error = 0, peak = 0, settled_since = -1;
+      int observations = 0, tracking_observations = 0, tracking_stopped = 0;
       for (int step = 0; step < 800; ++step) {
         Input input;
         input.state = s;
@@ -95,15 +95,20 @@ int main()
           throw std::runtime_error("request slew exceeded");
         s.requested = result.command.velocity;
         auto match = reference.match(s.pose);
-        double angle = std::abs(wrap_angle(s.pose.yaw - match.pose.yaw));
         square_error += match.error * match.error;
         peak = std::max(peak, match.error);
-        heading_square += angle * angle;
-        heading_peak = std::max(heading_peak, angle);
         ++observations;
         double wheel_peak = 0;
         for (double v : s.wheel_speeds) wheel_peak = std::max(wheel_peak, std::abs(v));
-        stopped += wheel_peak < .05;
+        motion_started |= wheel_peak >= .05;
+        const PathView local(input.path);
+        const bool terminal_pose_adjustment =
+          input.goal_active &&
+          local.length() - local.start_match(s.pose).arc <= config.goal_heading_activation_distance;
+        if (motion_started && !terminal_pose_adjustment) {
+          ++tracking_observations;
+          tracking_stopped += wheel_peak < .05;
+        }
         if (wheel_peak >= .05)
           settled_since = -1;
         else if (settled_since < 0)
@@ -115,12 +120,11 @@ int main()
           std::cout << "plant=" << plant << " scenario=" << scenario
                     << " simulated_s=" << step * 0.05 << " error=" << distance(s.pose, path.goal())
                     << " rms=" << std::sqrt(square_error / observations) << " peak=" << peak
-                    << " stopped=" << double(stopped) / observations << '\n';
+                    << " stopped=" << double(tracking_stopped) / std::max(1, tracking_observations)
+                    << '\n';
           if (
             std::sqrt(square_error / observations) > .03 || peak > .075 ||
-            double(stopped) / observations > .55 ||
-            (reference.length() > 1e-6 &&
-             (std::sqrt(heading_square / observations) > .05 || heading_peak > .12)))
+            double(tracking_stopped) / std::max(1, tracking_observations) > .55)
             throw std::runtime_error("closed-loop tracking quality gate failed");
           break;
         }

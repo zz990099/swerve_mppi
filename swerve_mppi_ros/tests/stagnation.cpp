@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 
@@ -30,7 +31,7 @@ std::vector<Pose> scaled(std::vector<Pose> points)
   return out;
 }
 
-int main()
+int main(int argc, char ** argv)
 {
   Config config;
   config.max_speed = config.limits.linear_speed = 1.;
@@ -57,6 +58,12 @@ int main()
        {0, 0, 3 * chassis::pi / 2}})};
   cases.push_back(scaled(clover));
   for (std::size_t name = 0; name < cases.size(); ++name) {
+    if (argc > 1 && name != std::stoul(argv[1])) continue;
+    std::ofstream recording;
+    if (argc > 2) {
+      recording.open(argv[2]);
+      recording << "time,x,y,yaw,speed,path_error\n";
+    }
     OrderedPath route;
     route.set(cases[name]);
     Controller controller(config);
@@ -102,7 +109,12 @@ int main()
       }
       state.requested = result.command.velocity;
       peak = std::max(peak, PathView(cases[name]).match(state.pose).error);
-      if (peak > .1) throw std::runtime_error("stagnation regression: corridor exceeded");
+      if (recording)
+        recording << step * .05 << ',' << state.pose.x << ',' << state.pose.y << ','
+                  << state.pose.yaw << ',' << std::hypot(state.velocity.vx, state.velocity.vy)
+                  << ',' << PathView(cases[name]).match(state.pose).error << '\n';
+      if (peak > .1 && !recording)
+        throw std::runtime_error("stagnation regression: corridor exceeded");
       if (route.goal_active() && goal.reached(state, route.goal(), step * .05)) {
         reached = true;
         std::cout << "stagnation case=" << name << " seconds=" << step * .05 << " peak=" << peak

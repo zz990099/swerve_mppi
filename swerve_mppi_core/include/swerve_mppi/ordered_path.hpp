@@ -5,8 +5,9 @@
 
 namespace swerve_mppi
 {
-// Ordered sections retain zero-distance heading changes as executable events.
-// The same progress rules are used by portable callers and the Nav2 adapter.
+// Ordered geometric progress shared by portable callers and the Nav2 adapter.
+// Consecutive poses at the same position are collapsed: their intermediate yaw
+// is not executable, while the last pose still supplies the terminal goal yaw.
 class OrderedPath
 {
 public:
@@ -17,18 +18,14 @@ public:
       if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.yaw))
         throw std::invalid_argument("invalid path");
     sections_.clear();
-    std::vector<Pose> translation{path.front()};
+    std::vector<Pose> geometry{path.front()};
     for (std::size_t i = 1; i < path.size(); ++i) {
-      if (distance(path[i - 1], path[i]) < 1e-8) {
-        if (std::abs(wrap_angle(path[i].yaw - path[i - 1].yaw)) < 1e-8) continue;
-        if (translation.size() > 1) sections_.push_back({translation, false});
-        sections_.push_back({{path[i - 1], path[i]}, true});
-        translation = {path[i]};
-      } else {
-        translation.push_back(path[i]);
-      }
+      if (distance(geometry.back(), path[i]) < 1e-8)
+        geometry.back() = path[i];
+      else
+        geometry.push_back(path[i]);
     }
-    if (translation.size() > 1 || sections_.empty()) sections_.push_back({translation, false});
+    sections_.push_back({std::move(geometry), false});
     section_ = 0;
     progress_arc_ = 0;
     travel_budget_ = .03;
