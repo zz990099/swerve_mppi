@@ -126,6 +126,12 @@ public:
           std::pow((u.wz - previous.wz) / (c.config.limits.angular_acceleration * dt), 2);
         detail.path +=
           norm * (4 * slack + w_.path_distance * std::pow(m.error / c.config.position_scale, 2));
+        // During final rotation, returning at the horizon endpoint does not
+        // compensate for an excursion earlier in the rollout. Keep endpoint
+        // position a running soft objective throughout the terminal region.
+        if (terminal_heading_active)
+          detail.goal += norm * w_.goal_position *
+                         std::pow(distance(s.pose, c.input.goal) / c.config.position_scale, 2);
         detail.velocity += norm * (std::pow(excess_speed / .1, 2) +
                                    w_.reference_velocity * velocity_error * velocity_error);
         detail.alignment += norm * w_.presteering_alignment * alignment_error;
@@ -155,9 +161,13 @@ public:
           detail.goal +=
             w_.goal_position *
             std::pow(distance(t.states.back().pose, c.input.goal) / c.config.position_scale, 2);
-        detail.goal +=
-          heading_gate * w_.goal_heading *
-          std::pow(wrap_angle(t.states.back().pose.yaw - c.input.goal.yaw) / heading_scale, 2);
+        // A large final turn must not overwhelm position by its squared yaw
+        // error. Huber loss retains quadratic precision near the target and
+        // bounds the marginal incentive to rotate while far from its heading.
+        const double yaw_error =
+          std::abs(wrap_angle(t.states.back().pose.yaw - c.input.goal.yaw)) / heading_scale;
+        detail.goal += heading_gate * w_.goal_heading *
+                       (yaw_error <= 1. ? yaw_error * yaw_error : 2. * yaw_error - 1.);
       }
       costs[k] += detail.path + detail.heading + detail.velocity + detail.alignment +
                   detail.effort + detail.progress + detail.goal;
