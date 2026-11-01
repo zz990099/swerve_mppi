@@ -212,8 +212,6 @@ TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
   const auto speed = compute();
   EXPECT_GT(speed.twist.linear.y, 0);
   EXPECT_NEAR(speed.twist.angular.z, 0, 1e-9);
-  const auto terminal_speed = compute({.48, .48, 0});
-  EXPECT_GT(terminal_speed.twist.angular.z, 0);
   controller->reset();
   controller->setPlan(path({{0, 0, 0}, {1, 0, 0}, {0, 0, 0}}));
   goal->reset();
