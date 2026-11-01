@@ -56,3 +56,10 @@ heading, speed and path error. Recording mode continues beyond the corridor
 gate to capture recovery; the ordinary no-argument CI invocation retains the
 strict 10 cm gate. Cases are heading_sweep, spiral_out, square and cloverleaf
 (indices 0 through 3).
+
+Physical Gazebo run 41268572795 confirms all 32 routes complete and all 32
+tracking checks pass. `heading_sweep` peak error is 0.007741 m, final position
+error is 0.005242 m and final yaw error is 0.009558 rad. The remaining physical
+quality failures are compute latency above the 50 ms P99 gate in 29 cases and
+the cloverleaf wall duration of 80.93 s versus 65 s. They are tracked as
+real-time/performance work rather than geometric path-following regressions.

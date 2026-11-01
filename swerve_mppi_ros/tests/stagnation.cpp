@@ -113,7 +113,7 @@ int main(int argc, char ** argv)
         recording << step * .05 << ',' << state.pose.x << ',' << state.pose.y << ','
                   << state.pose.yaw << ',' << std::hypot(state.velocity.vx, state.velocity.vy)
                   << ',' << PathView(cases[name]).match(state.pose).error << '\n';
-      if (peak > .1 && argc <= 2)
+      if (peak > .1 && !recording)
         throw std::runtime_error("stagnation regression: corridor exceeded");
       if (route.goal_active() && goal.reached(state, route.goal(), step * .05)) {
         reached = true;
