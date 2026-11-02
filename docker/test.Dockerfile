@@ -34,6 +34,7 @@ RUN source /opt/ros/jazzy/setup.bash && \
     colcon build --base-paths src --packages-up-to swerve_mppi_ros \
       --parallel-workers 2 --event-handlers console_direct+ \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror \
+                   -DCMAKE_PREFIX_PATH=/opt/mppi_ws/install/swerve_chassis_core \
                    -DBUILD_TESTING=ON
 COPY docker/test-entrypoint.sh /mppi-entrypoint.sh
 RUN chmod +x /mppi-entrypoint.sh
