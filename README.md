@@ -39,3 +39,10 @@ wheel-rim m/s to joint rad/s. Existing external callers must supply a valid
 execution snapshot, measured joints and matching physical configuration.
 
 [Architecture](ARCHITECTURE.md) · [ROS contract](docs/ROS.md) · [Validation](docs/VALIDATION.md)
+
+## Ready-to-run local test image
+
+Pull `ghcr.io/zz990099/swerve_mppi:jazzy-test` for the prebuilt Jazzy/Harmonic
+MPPI and chassis test environment (linux/amd64). See
+[local test image](docs/LOCAL_TEST_IMAGE.md) for login, single-case/32-case
+recordings, output mounts and exact-version pulls.

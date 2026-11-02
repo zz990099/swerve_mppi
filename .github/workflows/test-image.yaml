@@ -1,0 +1,82 @@
+name: Publish local test image
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/test-image.yaml'
+      - '.dockerignore'
+      - 'docker/**'
+      - 'swerve_mppi_core/**'
+      - 'swerve_mppi_ros/**'
+  pull_request:
+    paths:
+      - '.github/workflows/test-image.yaml'
+      - '.dockerignore'
+      - 'docker/**'
+      - 'swerve_mppi_core/**'
+      - 'swerve_mppi_ros/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: test-image-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      # Match the revision actually exercised by ci.yaml and trajectories.yaml.
+      CHASSIS_REVISION: 8f986bda64d5b48af012d37cf924328e0b127468
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: zz990099/swerve_gazebo_sim
+          ref: ${{ env.CHASSIS_REVISION }}
+          path: companion-chassis
+      - name: Name image
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+      - name: Build ready-to-run amd64 image
+        run: |
+          docker build --file docker/test.Dockerfile \
+            --build-arg MPPI_REVISION="$GITHUB_SHA" \
+            --build-arg CHASSIS_REVISION="$CHASSIS_REVISION" \
+            --tag "$IMAGE:jazzy-test-sha-$GITHUB_SHA" .
+      - name: Verify recording scripts and ROS plugin tests inside image
+        run: |
+          docker run --rm "$IMAGE:jazzy-test-sha-$GITHUB_SHA" bash -ec '
+            python3 -m unittest discover -s swerve_mppi_ros/tests -p "test_*.py" -v
+            cd /opt/mppi_ws
+            colcon test --packages-select swerve_mppi_core swerve_mppi_ros --return-code-on-test-failure --event-handlers console_direct+
+            colcon test-result --all --verbose
+          '
+      - name: Log in to GitHub Container Registry
+        if: github.ref == 'refs/heads/main'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Publish versioned and convenience tags
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker push "$IMAGE:jazzy-test-sha-$GITHUB_SHA"
+          docker tag "$IMAGE:jazzy-test-sha-$GITHUB_SHA" "$IMAGE:jazzy-test"
+          docker push "$IMAGE:jazzy-test"
+      - name: Verify registry pull and report digest
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker pull "$IMAGE:jazzy-test-sha-$GITHUB_SHA"
+          DIGEST=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:jazzy-test-sha-$GITHUB_SHA")
+          docker run --rm "$DIGEST" python3 -c 'import rclpy, psutil, yaml, matplotlib; from ament_index_python.packages import get_package_share_directory; print(get_package_share_directory("swerve_mppi_ros")); print(get_package_share_directory("swerve_gazebo_sim"))'
+          {
+            echo '### Local test image (linux/amd64)'
+            echo "Image: \`$IMAGE:jazzy-test\`"
+            echo "Pinned image: \`$DIGEST\`"
+            echo "MPPI: \`$GITHUB_SHA\`"
+            echo "Chassis: \`$CHASSIS_REVISION\`"
+            echo 'ROS 2 Jazzy / Gazebo Harmonic; recording contracts and ROS tests passed before publication.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Log out
+        if: always() && github.ref == 'refs/heads/main'
+        run: docker logout ghcr.io
