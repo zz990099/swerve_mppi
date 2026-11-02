@@ -1,7 +1,7 @@
 name: Publish local test image
 on:
   push:
-    branches: [main]
+    branches: [main, ci/publish-local-test-image]
     paths:
       - '.github/workflows/test-image.yaml'
       - '.dockerignore'
@@ -53,18 +53,18 @@ jobs:
             colcon test-result --all --verbose
           '
       - name: Log in to GitHub Container Registry
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci/publish-local-test-image'
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - name: Publish versioned and convenience tags
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci/publish-local-test-image'
         run: |
           docker push "$IMAGE:jazzy-test-sha-$GITHUB_SHA"
           docker tag "$IMAGE:jazzy-test-sha-$GITHUB_SHA" "$IMAGE:jazzy-test"
           docker push "$IMAGE:jazzy-test"
       - name: Verify registry pull and report digest
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci/publish-local-test-image'
         run: |
           docker pull "$IMAGE:jazzy-test-sha-$GITHUB_SHA"
           DIGEST=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:jazzy-test-sha-$GITHUB_SHA")
@@ -78,5 +78,5 @@ jobs:
             echo 'ROS 2 Jazzy / Gazebo Harmonic; recording contracts and ROS tests passed before publication.'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Log out
-        if: always() && github.ref == 'refs/heads/main'
+        if: always() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci/publish-local-test-image')
         run: docker logout ghcr.io
