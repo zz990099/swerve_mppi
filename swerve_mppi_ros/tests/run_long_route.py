@@ -6,6 +6,7 @@ match the 32-case benchmark (seed 42, 1 m/s, map path / odom control).
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -103,7 +104,8 @@ def main():
     a.output.mkdir(parents=True,exist_ok=False)
     (a.output/'route.json').write_text(json.dumps(route,indent=2)+'\n')
     repo=Path(__file__).resolve().parents[2]
-    revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=repo,text=True).strip()
+    revision=os.environ.get('GITHUB_SHA') or subprocess.check_output(
+        ['git','rev-parse','HEAD'],cwd=repo,text=True).strip()
     (a.output/'experiment.json').write_text(json.dumps(dict(
         controller_base_commit='b317b210858c421ac890a1623d59f67d82796a9b',
         experiment_commit=revision, seed=42, max_speed_m_s=1., path_frame='map',
