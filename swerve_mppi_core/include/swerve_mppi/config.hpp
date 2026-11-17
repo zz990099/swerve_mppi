@@ -22,6 +22,11 @@ struct Config
   // Path samples are geometric only. The final pose yaw contributes only after
   // measured ordered progress enters this terminal region.
   double goal_heading_activation_distance = .08;
+  // Optional soft preference for the ordered geometric direction, independent
+  // of waypoint yaw and terminal-heading precision. Zero weight also disables
+  // the structured geometric-heading proposal.
+  double geometric_heading_weight = .4, geometric_heading_scale = .35;
+  double geometric_heading_window = 1.0, geometric_heading_turn_scale = .6;
   std::uint32_t seed = 42;
 };
 void validate(const Config & config);

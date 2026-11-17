@@ -33,10 +33,11 @@ void validate(const Config & c)
   for (double x :
        {c.max_yaw_rate, c.model_dt, c.integration_dt, c.steering_time_constant, c.temperature,
         c.lookahead, c.approach_distance, c.approach_gain, c.max_residual, c.position_scale,
-        c.heading_scale, c.cross_gain, c.path_corridor, c.goal_heading_activation_distance})
+        c.heading_scale, c.cross_gain, c.path_corridor, c.goal_heading_activation_distance,
+        c.geometric_heading_scale, c.geometric_heading_window, c.geometric_heading_turn_scale})
     if (!std::isfinite(x) || x <= 0)
       throw std::invalid_argument("positive finite parameter required");
-  for (double x : {c.max_speed, c.noise_linear, c.noise_angular})
+  for (double x : {c.max_speed, c.noise_linear, c.noise_angular, c.geometric_heading_weight})
     if (!std::isfinite(x) || x < 0)
       throw std::invalid_argument("nonnegative finite parameter required");
   if (

@@ -79,8 +79,8 @@ void Controller::reset()
   tracking_start_ = false;
 }
 std::vector<Velocity> Controller::seed(
-  const Input & input, const ReferenceProfile & reference,
-  const std::optional<Velocity> & intent) const
+  const Input & input, const ReferenceProfile & reference, const std::optional<Velocity> & intent,
+  bool geometric_heading) const
 {
   State s = input.state;
   PathView path(input.path);
@@ -103,6 +103,12 @@ std::vector<Velocity> Controller::seed(
     const double speed = reference.speed(progress);
     const auto unit = reference.unit(progress, s.pose.yaw);
     Velocity desired = feedback_request(config_, s, m, speed, unit);
+    if (geometric_heading) {
+      const bool terminal = input.goal_active && distance(input.path.back(), input.goal) < .001;
+      const auto heading = reference.heading(progress, terminal);
+      desired.wz =
+        heading.strength * (speed * heading.curvature + 1.5 * wrap_angle(heading.yaw - s.pose.yaw));
+    }
     const double terminal_wz =
       terminal_yaw_request(config_, input, path.length() - progress, s.pose.yaw);
     if (std::abs(terminal_wz) > 1e-9) {
@@ -118,7 +124,8 @@ std::vector<Velocity> Controller::seed(
     for (double v : s.wheel_speeds) stopped &= std::abs(v) < config_.limits.stopped_speed;
     const auto nominal_unit = reference.unit(progress, s.pose.yaw);
     Velocity nominal{speed * nominal_unit.vx, speed * nominal_unit.vy, speed * nominal_unit.wz};
-    if (stopped && stable_nominal(config_, s, m, speed, nominal, desired)) desired = nominal;
+    if (!geometric_heading && stopped && stable_nominal(config_, s, m, speed, nominal, desired))
+      desired = nominal;
     if (!stopped) initial_intent = false;
     if (intent && stopped && initial_intent) {
       const auto target = swerve_chassis_core::inverse(
@@ -421,6 +428,11 @@ Result Controller::compute_tracking(const Input & input)
       }
     }
     auto fresh = seed(input, *reference, reorientation_);
+    const bool heading_proposal_enabled = config_.geometric_heading_weight > 0 &&
+                                          !input.alignment && !input.departure && !reorientation_ &&
+                                          !terminal_hold;
+    const auto heading_proposal =
+      heading_proposal_enabled ? seed(input, *reference, {}, true) : std::vector<Velocity>{};
     if (terminal_hold) fresh.assign(config_.horizon, {});
     if (input.alignment) {
       const auto target = swerve_chassis_core::inverse(
@@ -436,6 +448,9 @@ Result Controller::compute_tracking(const Input & input)
     const double reference_arc = PathView(input.path).start_match(input.state.pose).arc;
     result.reference_speed = reference->speed(reference_arc);
     result.reference_limit = reference->limiting_reason(reference_arc);
+    const auto heading = reference->heading(reference_arc, terminal);
+    result.geometric_heading = heading.yaw;
+    result.geometric_heading_strength = heading.strength;
     result.branch_distance = reference->next_branch(reference_arc);
     const auto initial_intent = swerve_chassis_core::inverse(
       config_.geometry, {fresh.front().vx, fresh.front().vy, fresh.front().wz},
@@ -550,8 +565,14 @@ Result Controller::compute_tracking(const Input & input)
                ++i)
             candidate[i] = {};
         }
+        // One deterministic proposal makes sustained yaw correction reachable
+        // with a small sample budget. The critic still selects the behavior;
+        // this proposal uses the same conditioning, rollout and hard checks.
+        if (k == 5 && heading_proposal_enabled) candidate = heading_proposal;
         Velocity noise;
-        if (k >= 5 && !terminal_hold && !reorientation_ && !input.alignment && !input.departure)
+        if (
+          k >= (heading_proposal_enabled ? 6u : 5u) && !terminal_hold && !reorientation_ &&
+          !input.alignment && !input.departure)
           for (auto & u : candidate) {
             const double a = config_.noise_correlation, b = std::sqrt(1 - a * a);
             noise = {

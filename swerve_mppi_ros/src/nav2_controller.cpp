@@ -78,6 +78,10 @@ struct Nav2Controller::Runtime
     number("heading_scale", config.heading_scale);
     number("path_corridor", config.path_corridor);
     number("goal_heading_activation_distance", config.goal_heading_activation_distance);
+    number("geometric_heading_weight", config.geometric_heading_weight);
+    number("geometric_heading_scale", config.geometric_heading_scale);
+    number("geometric_heading_window", config.geometric_heading_window);
+    number("geometric_heading_turn_scale", config.geometric_heading_turn_scale);
     number("cross_gain", config.cross_gain);
     number("model_dt", config.model_dt);
     number("integration_dt", config.integration_dt);
@@ -178,6 +182,8 @@ struct Nav2Controller::Runtime
     item.message = "continuous tracking";
     for (const auto & p : std::vector<std::pair<std::string, std::string>>{
            {"compute_ms", std::to_string(result.compute_ms)},
+           {"geometric_heading", std::to_string(result.geometric_heading)},
+           {"geometric_heading_strength", std::to_string(result.geometric_heading_strength)},
            {"cost", std::to_string(result.cost)},
            {"evaluated", std::to_string(result.evaluated)},
            {"invalid_state", std::to_string(result.diagnostics.invalid_state)},

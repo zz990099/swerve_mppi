@@ -105,6 +105,7 @@ struct Result
   bool braking_selected = false;
   bool presteering = false;
   double reference_speed = 0;
+  double geometric_heading = 0, geometric_heading_strength = 0;
   double noise_scale = 0, branch_distance = -1;
   std::uint32_t reference_limit = 0;
   bool reorientation_active = false;

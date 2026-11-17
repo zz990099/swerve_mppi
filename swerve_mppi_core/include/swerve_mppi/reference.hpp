@@ -17,6 +17,10 @@ namespace swerve_mppi
 class ReferenceProfile
 {
 public:
+  struct HeadingPreference
+  {
+    double yaw = 0, strength = 0, curvature = 0;
+  };
   ReferenceProfile(const std::vector<Pose> & points, const Config & config)
   : points_(points), path_(points_), config_(config)
   {
@@ -117,6 +121,10 @@ public:
         reasons_[i] = reasons_[i - 1] | 64;
       }
     }
+    // Shared immutable geometry is prepared once per compute, not per sample.
+    // Uniform arc samples make the preference insensitive to waypoint density.
+    headings_.reserve(s_.size());
+    for (double arc : s_) headings_.push_back(make_heading(arc));
   }
   ReferenceProfile(const ReferenceProfile &) = delete;
   ReferenceProfile & operator=(const ReferenceProfile &) = delete;
@@ -163,12 +171,73 @@ public:
       std::cos(body_yaw) * x + std::sin(body_yaw) * y,
       -std::sin(body_yaw) * x + std::cos(body_yaw) * y, 0};
   }
+  HeadingPreference heading(double arc, bool terminal = false) const
+  {
+    if (path_.length() < 1e-8 || config_.geometric_heading_weight == 0) return {};
+    const auto it = std::upper_bound(s_.begin(), s_.end(), arc);
+    const auto i = static_cast<std::size_t>(it - s_.begin());
+    auto out = i == 0 ? headings_.front() : headings_.back();
+    if (i > 0 && i < s_.size()) {
+      const double u = std::clamp((arc - s_[i - 1]) / (s_[i] - s_[i - 1]), 0., 1.);
+      const auto a = headings_[i - 1], b = headings_[i];
+      out = {
+        wrap_angle(a.yaw + u * wrap_angle(b.yaw - a.yaw)),
+        a.strength + u * (b.strength - a.strength), a.curvature + u * (b.curvature - a.curvature)};
+    }
+    if (terminal) {
+      const double u = std::clamp(
+        (path_.length() - arc - config_.goal_heading_activation_distance) /
+          config_.geometric_heading_window,
+        0., 1.);
+      out.strength *= u * u * (3 - 2 * u);
+    }
+    return out;
+  }
 
 private:
+  HeadingPreference make_heading(double arc) const
+  {
+    if (path_.length() < 1e-8 || config_.geometric_heading_weight == 0) return {};
+    const double half = .5 * config_.geometric_heading_window;
+    const double lo = std::max(0., arc - half), hi = std::min(path_.length(), arc + half);
+    Pose previous = path_.at(lo);
+    double x = 0, y = 0, length = 0, turn = 0, signed_turn = 0, previous_angle = 0;
+    bool have_angle = false;
+    for (int j = 1; j <= 16; ++j) {
+      const auto point = path_.at(lo + (hi - lo) * j / 16);
+      const double dx = point.x - previous.x, dy = point.y - previous.y;
+      const double ds = std::hypot(dx, dy);
+      if (ds > 1e-9) {
+        const double angle = std::atan2(dy, dx);
+        if (have_angle) {
+          const double delta = wrap_angle(angle - previous_angle);
+          turn += std::abs(delta);  // Opposite turns in an S must not cancel.
+          signed_turn += delta;
+        }
+        previous_angle = angle;
+        have_angle = true;
+        x += dx;
+        y += dy;
+        length += ds;
+      }
+      previous = point;
+    }
+    const double chord = std::hypot(x, y);
+    if (length < 1e-8 || chord < 1e-8) return {};
+    const double coherence = std::clamp(chord / length, 0., 1.);
+    const double complexity = turn / config_.geometric_heading_turn_scale;
+    const double curvature = signed_turn / std::max(1e-8, hi - lo);
+    const double demand = speed(arc) * std::abs(curvature) / config_.max_yaw_rate;
+    return {
+      std::atan2(y, x),
+      coherence * coherence / ((1 + std::pow(complexity, 4)) * (1 + std::pow(demand, 4))),
+      curvature};
+  }
   std::vector<Pose> points_;
   PathView path_;
   Config config_;
   std::vector<double> s_, speed_, corners_, branches_;
   std::vector<std::uint32_t> reasons_;
+  std::vector<HeadingPreference> headings_;
 };
 }  // namespace swerve_mppi

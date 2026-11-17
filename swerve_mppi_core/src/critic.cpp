@@ -126,6 +126,13 @@ public:
           std::pow((u.wz - previous.wz) / (c.config.limits.angular_acceleration * dt), 2);
         detail.path +=
           norm * (4 * slack + w_.path_distance * std::pow(m.error / c.config.position_scale, 2));
+        // A finite, secondary body-heading preference. It depends on ordered
+        // reference geometry, never candidate speed or intermediate pose yaw.
+        const auto heading = reference.heading(progress, terminal);
+        const double error =
+          std::abs(wrap_angle(s.pose.yaw - heading.yaw)) / c.config.geometric_heading_scale;
+        detail.heading += norm * c.config.geometric_heading_weight * heading.strength *
+                          (error <= 1. ? error * error : 2. * error - 1.);
         // During final rotation, returning at the horizon endpoint does not
         // compensate for an excursion earlier in the rollout. Keep endpoint
         // position a running soft objective throughout the terminal region.

@@ -41,6 +41,12 @@ latency on the deployment CPU before choosing a controller frequency.
 recovery candidates. Intermediate path yaw is ignored. `heading_scale`
 (0.05 rad) normalizes only the final-pose yaw objective, which is enabled inside
 `goal_heading_activation_distance` (0.08 m) of measured ordered progress.
+`geometric_heading_weight` (0.4) adds a finite Huber cost for body yaw relative
+to the geometric direction. Its independent scale is `geometric_heading_scale`
+(0.35 rad), arc window `geometric_heading_window` (1.0 m) and cumulative-turn
+scale `geometric_heading_turn_scale` (0.6 rad). Zero weight disables both this
+cost and its structured proposal. Diagnostics publish `geometric_heading` in
+the control frame and `geometric_heading_strength` in [0, 1].
 `cross_gain` defaults to 4/s. Path arc length drives terminal activation and speed
 preview. Polyline vertices above 15 degrees are approached at zero speed; smooth
 curves use lateral-acceleration and steering-servo tracking limits. Accepted

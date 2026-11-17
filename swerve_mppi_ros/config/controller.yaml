@@ -39,6 +39,10 @@ controller_server:
       iterations: 1
       max_speed: 0.8
       max_yaw_rate: 0.8
+      geometric_heading_weight: 0.4
+      geometric_heading_scale: 0.35
+      geometric_heading_window: 1.0
+      geometric_heading_turn_scale: 0.6
 
 # Obstacle-free FollowPath test costmap. Add sensors/static and inflation layers
 # for navigation; these defaults do not populate real obstacles.

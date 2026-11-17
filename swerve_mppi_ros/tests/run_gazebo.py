@@ -30,7 +30,7 @@ def stop(process):
         process.wait(timeout=5)
 
 
-def run_case(chassis_root, logs, scenario, seed=None, record=False, minimum_length=0., max_speed=None, path_frame='odom'):
+def run_case(chassis_root, logs, scenario, seed=None, record=False, minimum_length=0., max_speed=None, path_frame='odom', timeout_s=200., probe_script=None):
     logs.mkdir(parents=True, exist_ok=True)
     launch_options = []
     if path_frame == 'map':
@@ -69,11 +69,11 @@ def run_case(chassis_root, logs, scenario, seed=None, record=False, minimum_leng
                 stdout=sim_log, stderr=subprocess.STDOUT,
                 env=environment, start_new_session=True)
             probe = subprocess.Popen([
-                sys.executable, '-u', str(Path(__file__).with_name('gazebo_tracking.py')),
+                sys.executable, '-u', str(probe_script or Path(__file__).with_name('gazebo_tracking.py')),
                 '--chassis-root', str(chassis_root), '--scenario', scenario, *probe_options],
                 stdout=tracking_log, stderr=subprocess.STDOUT,
                 env=environment, start_new_session=True)
-            deadline = time.monotonic()+200
+            deadline = time.monotonic()+timeout_s
             while probe.poll() is None:
                 try:
                     for child in psutil.Process(simulation.pid).children(recursive=True):
@@ -83,7 +83,7 @@ def run_case(chassis_root, logs, scenario, seed=None, record=False, minimum_leng
                 if simulation.poll() is not None:
                     raise RuntimeError('Gazebo launch exited before acceptance')
                 if time.monotonic() > deadline:
-                    raise TimeoutError('Physical acceptance exceeded 200 seconds')
+                    raise TimeoutError(f'Physical acceptance exceeded {timeout_s:g} seconds')
                 time.sleep(.2)
             if probe.returncode:
                 raise RuntimeError(f'Physical acceptance failed: {probe.returncode}')

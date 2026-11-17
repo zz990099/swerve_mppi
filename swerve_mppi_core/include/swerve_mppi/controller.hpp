@@ -28,7 +28,7 @@ private:
   bool tracking_start_ = false;
   std::vector<Velocity> seed(
     const Input & input, const ReferenceProfile & reference,
-    const std::optional<Velocity> & intent = {}) const;
+    const std::optional<Velocity> & intent = {}, bool geometric_heading = false) const;
   Config config_;
   Critics critics_;
   Model model_;
