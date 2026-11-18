@@ -1,29 +1,25 @@
-name: Physical trajectory benchmark / 32 cases
+name: PR 9 Gazebo branch and slew checks
 on:
   push:
-    branches: [main]
-    paths:
-      - '.github/workflows/trajectories.yaml'
-      - 'swerve_mppi_core/**'
-      - 'swerve_mppi_ros/src/**'
-      - 'swerve_mppi_ros/include/**'
-      - 'swerve_mppi_ros/config/**'
-      - 'swerve_mppi_ros/launch/**'
-      - 'swerve_mppi_ros/CMakeLists.txt'
-      - 'swerve_mppi_ros/package.xml'
-      - 'swerve_mppi_ros/tests/**'
-  pull_request:
-    paths:
-      - '.github/workflows/trajectories.yaml'
-      - 'swerve_mppi_core/**'
-      - 'swerve_mppi_ros/**'
-  workflow_dispatch:
+    branches: [codex/pr9-slew-branch-check]
 permissions:
   contents: read
 jobs:
   record:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - batch: a
+            cases: cloverleaf stop_turn_go
+          - batch: b
+            cases: stop_turn_go cloverleaf
+          - batch: c
+            cases: circle_cw lateral_s
+          - batch: d
+            cases: circle_ccw figure_eight
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 22
     container: ros:jazzy-ros-base-noble
     defaults:
       run:
@@ -49,15 +45,14 @@ jobs:
         run: |
           source /opt/ros/jazzy/setup.bash
           colcon build --base-paths swerve_mppi_core swerve_mppi_ros companion-chassis --packages-up-to swerve_mppi_ros --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=OFF
-      - name: Record 32 physical cases / one round / seed 42
+      - name: Record targeted physical cases / seed 42
         run: |
           source /opt/ros/jazzy/setup.bash
           source install/local_setup.bash
-          python3 swerve_mppi_ros/tests/run_trajectory_rounds.py --chassis-root companion-chassis --output artifacts --rounds 1 --seed-base 42 --min-path-length 12 --max-speed 1.0 --path-frame map
+          python3 swerve_mppi_ros/tests/run_trajectory_rounds.py --chassis-root companion-chassis --output artifacts --rounds 1 --seed-base 42 --min-path-length 12 --max-speed 1.0 --path-frame map --commit de573491fbac6f7b37e0fff5e7f9ad11f245a3cd --cases ${{ matrix.cases }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mppi-trajectories-32-cases
+          name: mppi-pr9-followon-${{ matrix.batch }}
           path: artifacts/
           if-no-files-found: warn
-
