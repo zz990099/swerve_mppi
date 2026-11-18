@@ -27,6 +27,22 @@ int main()
     check(checker.reached(state, goal, 2.31), "five centimetres and five degrees are accepted");
     state.pose.x = .051;
     check(!checker.reached(state, goal, 2.32), "position outside tolerance resets settling");
+    ChassisFeedback feedback;
+    const Velocity previous_request{0, 0, .5032162754420483};
+    feedback.state.requested = previous_request;
+    feedback.accepted_command_stamp = 44.285;
+    check(
+      std::abs(command_interval(44.3, 44.28, previous_request, feedback) - .015) < 1e-9,
+      "the previous publication, rather than the plugin return, bounds angular braking");
+    feedback.accepted_command_stamp = 44.23;
+    check(
+      std::abs(command_interval(44.3, 44.28, previous_request, feedback) - .015) < 1e-9,
+      "an older echo of the same request cannot lengthen the slew interval");
+    feedback.accepted_command_stamp = 44.28;
+    feedback.state.requested.wz = .6;
+    check(
+      std::abs(command_interval(44.3, 44.28, previous_request, feedback) - .015) < 1e-9,
+      "an unrelated chassis request cannot override the handoff allowance");
     PathHandler path;
     path.set({{0, 0, 0}, {.8, 0, 0}, {.8, .8, 0}, {0, .8, 0}, {0, 0, 0}});
     auto local = path.local({0, 0, 0});

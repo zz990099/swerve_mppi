@@ -28,6 +28,9 @@ A greater-than-90-degree change in the bounded steering representation is a
 stop/reorientation event, not a permanent zero-speed interval in the spatial
 reference. The shared actuator generator still enforces braking, steering rate,
 wheel acceleration and rolling feasibility.
+The reference compares wheel speeds on the same rolling axis across a branch
+boundary, so an equivalent sign change does not appear as a spatial speed
+derivative. Braking and physically changing branches remain executor duties.
 
 At measured standstill, the controller retains a steering intent until measured
 alignment or resumed driving. Near an identified reference branch boundary it
@@ -54,8 +57,10 @@ intervals in the published stamped command stream. Before returning a result,
 the adapter checks the available completion interval. If it is shorter, the
 controller conditions the selected sequence again, rolls it out, and re-runs all
 critics. Only a validated adjusted sequence becomes the outgoing request and
-warm start. A 1 ms handoff allowance is reserved. Exceptions and fault stops
-retain Nav2's existing safety behavior.
+warm start. The latest chassis acknowledgement supplies the previous command
+stamp when it matches the outgoing request. Until it arrives, the adapter uses
+the previous callback return time plus a 5 ms handoff allowance. Exceptions and
+fault stops retain Nav2's existing safety behavior.
 
 ## Diagnostics and regression
 

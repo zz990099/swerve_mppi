@@ -35,7 +35,7 @@ struct Nav2Controller::Runtime
   PathHandler path;
   std::optional<ChassisFeedback> measured;
   std::optional<Velocity> published_request;
-  double last_output_time = 0;
+  double last_return_time = 0;
   double state_stamp = 0, last_time = 0, frequency = 20, timeout = 0.25, transform_tolerance = 0.1;
   Steady::time_point state_wall{};
   bool active = false, map_enabled = true;
@@ -159,7 +159,7 @@ struct Nav2Controller::Runtime
     if (controller) controller->reset();
     published_request.reset();
     last_time = 0;
-    last_output_time = 0;
+    last_return_time = 0;
   }
   void report(const Result & result)
   {
@@ -413,12 +413,9 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     }
     auto result = r.controller->compute(input);
     if (result.completed_transition) r.path.recover(pose(r.transform(current, r.plan_frame).pose));
-    if (r.last_output_time > 0 && result.status == Status::Ok) {
-      // Nav2 stamps its publication after this callback returns. Reserve one
-      // simulation millisecond for that handoff; a later current publication
-      // only increases the available interval.
-      const double available =
-        std::max(1e-6, r.node()->now().seconds() - r.last_output_time - .001);
+    if (r.published_request && result.status == Status::Ok) {
+      const double available = command_interval(
+        r.node()->now().seconds(), r.last_return_time, *r.published_request, *r.measured);
       if (available < input.dt && !r.controller->retime(input, available, result))
         throw nav2_core::NoValidControl("retimed MPPI request failed validation");
     }
@@ -426,14 +423,15 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     if (result.status != Status::Ok)
       throw nav2_core::NoValidControl("MPPI found no usable control");
     out.twist = twist(result.command.velocity);
-    r.published_request = result.command.velocity;
-    r.last_output_time = r.node()->now().seconds();
     if (ordered)
       ordered->setReady(
         input.reaches_goal() && r.path.goal_active(r.config.approach_distance) &&
           std::hypot(result.command.velocity.vx, result.command.velocity.vy) < 1e-4 &&
           std::abs(result.command.velocity.wz) < 1e-4,
         transform_path_pose(r.path.goal()));
+    r.published_request = result.command.velocity;
+    out.header.stamp = r.node()->now();
+    r.last_return_time = seconds(out.header.stamp);
     return out;
   } catch (const nav2_core::ControllerException &) {
     if (ordered) ordered->setReady(false);

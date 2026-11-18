@@ -78,6 +78,8 @@ inline ChassisFeedback feedback(
   f.fault = msg.fault != 0;
   f.feedback_valid = msg.feedback_valid;
   f.feedback_stamp = seconds(msg.feedback_stamp);
+  if (msg.command_fresh && msg.command_stamp.sec >= 0 && msg.command_stamp.nanosec < 1000000000)
+    f.accepted_command_stamp = seconds(msg.command_stamp);
   f.state.steering = msg.steering_angles;
   f.state.wheel_speeds = msg.wheel_speeds;
   f.state.velocity = velocity(msg.velocity);

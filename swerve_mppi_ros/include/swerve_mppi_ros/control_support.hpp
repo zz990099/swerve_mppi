@@ -49,5 +49,20 @@ struct ChassisFeedback
   State state;
   bool fault = false, feedback_valid = false;
   double feedback_stamp = 0;
+  std::optional<double> accepted_command_stamp;
 };
+
+inline double command_interval(
+  double now, double last_return, Velocity last_request, const ChassisFeedback & feedback)
+{
+  // Nav2 stamps cmd_vel after the plugin returns. Use the stamp echoed by the
+  // chassis when it matches that request. Otherwise allow a clock tick for the handoff.
+  const auto & accepted = feedback.state.requested;
+  const bool confirmed = feedback.accepted_command_stamp &&
+                         *feedback.accepted_command_stamp >= last_return - 1e-9 &&
+                         accepted.vx == last_request.vx && accepted.vy == last_request.vy &&
+                         accepted.wz == last_request.wz;
+  const double previous = confirmed ? *feedback.accepted_command_stamp : last_return + .005;
+  return std::max(1e-6, now - previous);
+}
 }  // namespace swerve_mppi_ros
