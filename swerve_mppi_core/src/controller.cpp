@@ -296,6 +296,7 @@ Result Controller::compute(const Input & source)
     input.goal = phase == 3 ? event.exit : event.origin;
     input.goal_active = true;
     input.preview_reaches_goal = false;
+    input.speed_preview = {};
     if (phase == 2) input.alignment = event.alignment;
     if (phase == 3) {
       input.departure = event.alignment;
@@ -364,13 +365,14 @@ Result Controller::compute_tracking(const Input & input)
   std::vector<Velocity> selected;
   Trajectory selected_trace;
   try {
-    reference = std::make_unique<ReferenceProfile>(input.path, config_);
+    const PathView path(input.path);
+    const double reference_arc = path.start_match(input.state.pose).arc;
+    reference = std::make_unique<ReferenceProfile>(
+      input.path, config_, input.speed_preview, reference_arc, input.dt);
     context.reference = reference.get();
     bool wheels_stopped = true;
     for (double v : input.state.wheel_speeds)
       wheels_stopped &= std::abs(v) < config_.limits.stopped_speed;
-    const PathView path(input.path);
-    const double reference_arc = path.start_match(input.state.pose).arc;
     const auto initial_heading = reference->heading(reference_arc, input.reaches_goal());
     const auto initial_match =
       match_geometric_heading(input.state.pose.yaw, initial_heading.yaw, config_);
@@ -712,11 +714,13 @@ bool Controller::retime(const Input & input, double dt, Result & result)
       timed.goal = result.motion_reference->goal;
       timed.goal_active = result.motion_reference->goal_active;
       timed.preview_reaches_goal = false;
+      timed.speed_preview = {};
       timed.alignment = result.motion_reference->alignment;
       timed.precise_heading = result.motion_reference->precise_heading;
       timed.departure = result.motion_reference->departure;
     }
-    ReferenceProfile reference(timed.path, config_);
+    const double reference_arc = PathView(timed.path).start_match(timed.state.pose).arc;
+    ReferenceProfile reference(timed.path, config_, timed.speed_preview, reference_arc, dt);
     CriticContext context{timed, config_, &reference};
     context.initial_intent =
       timed.alignment
@@ -735,6 +739,8 @@ bool Controller::retime(const Input & input, double dt, Result & result)
     result.command.velocity = controls.front();
     result.controls = controls;
     result.cost = costs.front();
+    result.reference_speed = reference.speed(reference_arc);
+    result.reference_limit = reference.limiting_reason(reference_arc);
     result.candidates[5] = {
       result.cost, true, breakdown.size() == 1 ? breakdown[0] : TrackingCost{}};
     result.prediction.clear();

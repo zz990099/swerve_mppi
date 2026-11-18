@@ -51,15 +51,31 @@ public:
   {
     double yaw = 0, strength = 0, curvature = 0;
   };
-  ReferenceProfile(const std::vector<Pose> & points, const Config & config)
-  : points_(points), path_(points_), config_(config)
+  ReferenceProfile(
+    const std::vector<Pose> & points, const Config & config, SpeedPreview preview = {},
+    double entry_arc = 0, double dt = .05)
+  : points_(points),
+    path_(points_),
+    config_(config),
+    preview_(preview),
+    entry_arc_(entry_arc),
+    acceleration_(.7 * config.limits.linear_acceleration),
+    entry_speed_(preview.previous_speed.value_or(0.) + acceleration_ * dt)
   {
     validate(config_);
     if (points.empty() || points.size() > 4096 || !std::isfinite(path_.length()))
       throw std::invalid_argument("invalid reference path");
+    if (
+      !std::isfinite(preview_.start_arc) || preview_.start_arc < 0 ||
+      (preview_.previous_speed &&
+       (!std::isfinite(*preview_.previous_speed) || *preview_.previous_speed < 0)))
+      throw std::invalid_argument("invalid speed preview");
     for (std::size_t i = 1; i + 1 < points.size(); ++i)
       if (path_.turn(i) >= PathView::stop_angle) corners_.push_back(path_.vertex_arc(i));
-    auto count = static_cast<std::size_t>(std::clamp(std::ceil(path_.length() / .025), 1., 512.));
+    // The stop/reorientation controller restarts from a cropped outgoing leg.
+    // A shared stationary knot must not pin its target speed after the stop.
+    if (preview_.plan && preview_.plan->near_corner(preview_.start_arc + entry_arc_)) preview_ = {};
+    auto count = static_cast<std::size_t>(std::clamp(std::ceil(path_.length() / .025), 1., 4096.));
     s_.resize(count + 1);
     for (std::size_t i = 0; i <= count; ++i) s_[i] = path_.length() * i / count;
     s_.insert(s_.end(), corners_.begin(), corners_.end());
@@ -77,9 +93,10 @@ public:
       const auto u = unit(s, 0);
       wheels[i] = swerve_chassis_core::inverse(config_.geometry, {u.vx, u.vy, u.wz}, previous);
       previous = wheels[i].steering;
-      double cap = path_.speed_limit(
-        s, config_.max_speed, config_.limits.linear_acceleration, config_.approach_gain,
-        config_.limits.steering_rate);
+      double cap = preview_.plan ? config_.max_speed
+                                 : path_.speed_limit(
+                                     s, config_.max_speed, config_.limits.linear_acceleration,
+                                     config_.approach_gain, config_.limits.steering_rate);
       for (double v : wheels[i].speed) {
         const double wheel_cap = config_.limits.wheel_speed / std::max(1e-9, std::abs(v));
         if (wheel_cap < cap) {
@@ -135,17 +152,15 @@ public:
       }
     }
     for (std::size_t i = count; i > 0; --i) {
-      const double cap = std::sqrt(
-        speed_[i] * speed_[i] + 2 * .7 * config_.limits.linear_acceleration * (s_[i] - s_[i - 1]));
+      const double cap = std::sqrt(speed_[i] * speed_[i] + 2 * acceleration_ * (s_[i] - s_[i - 1]));
       if (cap < speed_[i - 1]) {
         speed_[i - 1] = cap;
         reasons_[i - 1] = reasons_[i] | 64;
       }
     }
     for (std::size_t i = 1; i <= count; ++i) {
-      const double cap = std::sqrt(
-        speed_[i - 1] * speed_[i - 1] +
-        2 * .7 * config_.limits.linear_acceleration * (s_[i] - s_[i - 1]));
+      const double cap =
+        std::sqrt(speed_[i - 1] * speed_[i - 1] + 2 * acceleration_ * (s_[i] - s_[i - 1]));
       if (cap < speed_[i]) {
         speed_[i] = cap;
         reasons_[i] = reasons_[i - 1] | 64;
@@ -161,6 +176,44 @@ public:
   double speed(double arc) const
   {
     if (path_.length() < 1e-8) return 0;
+    return std::min(unreleased_speed(arc), release_limit(arc));
+  }
+  bool near_corner(double arc) const
+  {
+    const auto it =
+      std::lower_bound(corners_.begin(), corners_.end(), arc - config_.approach_distance);
+    return it != corners_.end() && *it <= arc + config_.approach_distance;
+  }
+  // Bit mask: geometry/end=1, wheel speed=4, corner=8, actuator rate=16,
+  // acceleration envelope=64, rate of release across control cycles=128.
+  std::uint32_t limiting_reason(double arc) const
+  {
+    if (release_limit(arc) < unreleased_speed(arc)) return 128;
+    if (preview_.plan) {
+      if (preview_.plan->speed(preview_.start_arc + arc) > preview_end_limit(arc)) return 1;
+      return preview_.plan->limiting_reason(preview_.start_arc + arc);
+    }
+    return knot_reason(arc);
+  }
+
+private:
+  double preview_end_limit(double arc) const
+  {
+    return config_.approach_gain * std::max(0., path_.length() - arc);
+  }
+  double release_limit(double arc) const
+  {
+    if (!preview_.previous_speed) return config_.max_speed;
+    return std::sqrt(
+      entry_speed_ * entry_speed_ + 2 * acceleration_ * std::max(0., arc - entry_arc_));
+  }
+  double unreleased_speed(double arc) const
+  {
+    if (preview_.plan) {
+      // The overlap uses the same curvature, wheel derivatives and brakes
+      // every cycle. Keep the bounded local preview's endpoint cap as well.
+      return std::min(preview_.plan->speed(preview_.start_arc + arc), preview_end_limit(arc));
+    }
     auto it = std::upper_bound(s_.begin(), s_.end(), arc);
     const auto i = static_cast<std::size_t>(it - s_.begin());
     if (!i) return speed_.front();
@@ -168,9 +221,7 @@ public:
     const double t = (arc - s_[i - 1]) / (s_[i] - s_[i - 1]);
     return speed_[i - 1] + t * (speed_[i] - speed_[i - 1]);
   }
-  // Bit mask: geometry/end=1, wheel speed=4, corner=8,
-  // actuator rate=16, acceleration envelope=64. Interpolation combines neighboring active limits.
-  std::uint32_t limiting_reason(double arc) const
+  std::uint32_t knot_reason(double arc) const
   {
     auto it = std::upper_bound(s_.begin(), s_.end(), arc);
     const auto i = static_cast<std::size_t>(it - s_.begin());
@@ -178,6 +229,8 @@ public:
     if (i >= s_.size()) return reasons_.back();
     return reasons_[i - 1] | reasons_[i];
   }
+
+public:
   double next_branch(double arc) const
   {
     for (double branch : branches_)
@@ -266,6 +319,8 @@ private:
   std::vector<Pose> points_;
   PathView path_;
   Config config_;
+  SpeedPreview preview_;
+  double entry_arc_, acceleration_, entry_speed_;
   std::vector<double> s_, speed_, corners_, branches_;
   std::vector<std::uint32_t> reasons_;
   std::vector<HeadingPreference> headings_;

@@ -56,7 +56,12 @@ m/s, not a permission to accept arbitrary slipping wheel commands.
 `steering_time_constant` defaults to 0.10 s. `reference_velocity_weight` and
 `presteering_alignment_weight` each default to 1.0; `alignment_heading_weight`
 defaults to 0.5 and anchors the body only while wheels presteer. The reference-speed envelope
-accounts for coupled wheel steering and drive demands. Invalid input, actuator,
+accounts for coupled wheel steering and drive demands. On regular tracking segments,
+local previews share an envelope sampled on the ordered plan. A lower cap applies
+immediately and a rising cap is released at 70% of `linear_accel`.
+`longitudinal_jerk_weight` (0.12, zero to disable) penalizes changes in commanded
+acceleration along the geometric path tangent. Stop-and-turn maneuvers and the
+terminal region retain their braking and steering behavior. Invalid input, actuator,
 collision and custom-critic rejection counts are published on diagnostics,
 including computes that return NoSolution.
 

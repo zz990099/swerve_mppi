@@ -120,6 +120,37 @@ int main()
     check(
       corner_profile.unit(.79, 0).vx > .99 && corner_profile.unit(.8, 0).vy > .99,
       "mandatory corner does not smear steering into the incoming segment");
+    ReferenceProfile overlap_a({{.2, 0, 0}, {.8, 0, 0}, {.8, .7, 0}}, c, {&corner_profile, .2, {}});
+    ReferenceProfile overlap_b(
+      {{.24, 0, 0}, {.8, 0, 0}, {.8, .6, 0}}, c, {&corner_profile, .24, {}});
+    check(
+      std::abs(overlap_a.speed(.35) - overlap_b.speed(.31)) < 1e-12 && overlap_a.speed(.6) < 1e-8 &&
+        overlap_b.speed(.56) < 1e-8,
+      "overlapping previews share the speed envelope and stop at the ordered corner");
+    ReferenceProfile released({{0, 0, 0}, {1, 0, 0}}, c, {&profile, 0, .1}, .2, .05);
+    check(
+      std::abs(released.speed(.2) - (.1 + .7 * c.limits.linear_acceleration * .05)) < 1e-12 &&
+        released.limiting_reason(.2) == 128 && released.speed(1) == 0,
+      "reference ramps up from the previous cycle and honors an immediate lower cap");
+    Input jerk_input;
+    jerk_input.path = {{0, 0, 0}, {3, 0, 0}};
+    jerk_input.state.requested = {.4, 0, 0};
+    jerk_input.previous_request_acceleration = RequestAcceleration{.4, 0, .05, 0};
+    auto trajectory = [&](Velocity next) {
+      Trajectory prediction;
+      prediction.controls = {next};
+      prediction.states = {jerk_input.state, jerk_input.state};
+      return prediction;
+    };
+    std::vector<TrackingCost> breakdown;
+    const std::vector<Trajectory> requests{
+      trajectory({.42, 0, 0}), trajectory({.38, 0, 0}), trajectory({.42, .01, 0})};
+    std::vector<double> jerk_costs(requests.size(), 0);
+    tracking_critics().front()->score({jerk_input, c, nullptr, &breakdown}, requests, jerk_costs);
+    check(
+      breakdown[0].longitudinal_jerk < 1e-10 && breakdown[1].longitudinal_jerk > .01 &&
+        breakdown[2].longitudinal_jerk < 1e-10,
+      "longitudinal jerk penalizes reversing acceleration without charging transverse changes");
     auto t = model.rollout(state, std::vector<Velocity>(30, {0, 0.4, 0}));
     check(t.valid && t.states.back().pose.y > 0.3, "lateral presteering rollout");
     auto combo = model.rollout(state, std::vector<Velocity>(c.horizon, {0.3, 0.15, 0.2}));

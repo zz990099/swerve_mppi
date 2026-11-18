@@ -9,6 +9,7 @@
 
 namespace swerve_mppi
 {
+class ReferenceProfile;
 struct Pose
 {
   double x = 0, y = 0, yaw = 0;
@@ -16,6 +17,18 @@ struct Pose
 struct Velocity
 {
   double vx = 0, vy = 0, wz = 0;
+};
+struct SpeedPreview
+{
+  const ReferenceProfile * plan = nullptr;  // Borrowed for compute and retime.
+  double start_arc = 0;  // Ordered arc of the first point of the local path on the plan.
+  std::optional<double> previous_speed;
+};
+struct RequestAcceleration
+{
+  double x = 0, y = 0;  // Acceleration of the previous request in the path frame.
+  double dt = 0;
+  double request_yaw = 0;
 };
 struct State
 {
@@ -67,6 +80,8 @@ struct Input
   // Standalone callers that omit this field retain endpoint matching by position.
   std::optional<bool> preview_reaches_goal;
   GoalPoseTolerance goal_tolerance;
+  SpeedPreview speed_preview;
+  std::optional<RequestAcceleration> previous_request_acceleration;
 
   bool reaches_goal() const;
 };
@@ -100,6 +115,7 @@ struct Diagnostics
 struct TrackingCost
 {
   double path = 0, heading = 0, velocity = 0, alignment = 0, effort = 0, progress = 0, goal = 0;
+  double longitudinal_jerk = 0;
 };
 struct CandidateDiagnostic
 {
@@ -140,4 +156,5 @@ struct Trajectory
 };
 double wrap_angle(double value);
 double distance(const Pose & a, const Pose & b);
+Velocity rotate_velocity(Velocity velocity, double yaw);
 }  // namespace swerve_mppi

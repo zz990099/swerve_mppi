@@ -11,6 +11,11 @@ namespace swerve_mppi
 {
 double wrap_angle(double x) { return std::remainder(x, 2 * std::acos(-1.0)); }
 double distance(const Pose & a, const Pose & b) { return std::hypot(a.x - b.x, a.y - b.y); }
+Velocity rotate_velocity(Velocity velocity, double yaw)
+{
+  const double c = std::cos(yaw), s = std::sin(yaw);
+  return {c * velocity.vx - s * velocity.vy, s * velocity.vx + c * velocity.vy, velocity.wz};
+}
 bool GoalPoseTolerance::contains(const Pose & pose, const Pose & goal) const
 {
   return distance(pose, goal) <= position && std::abs(wrap_angle(pose.yaw - goal.yaw)) <= yaw;

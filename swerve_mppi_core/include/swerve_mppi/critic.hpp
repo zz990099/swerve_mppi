@@ -38,6 +38,7 @@ struct TrackingWeights
   double effort = 0.005, smoothness = 0.1, steering_change = 0.05, consistency = 1.0;
   double reference_velocity = 1.0;
   double presteering_alignment = 1.0;
+  double longitudinal_jerk = 0.12;
 };
 // Pure numerical defaults; ROS costmap critics implement the same interface.
 Critics tracking_critics(TrackingWeights weights = {});

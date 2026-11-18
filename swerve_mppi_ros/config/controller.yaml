@@ -44,6 +44,7 @@ controller_server:
       geometric_heading_window: 1.0
       geometric_heading_turn_scale: 0.6
       geometric_heading_allow_reverse: false
+      longitudinal_jerk_weight: 0.12
 
 # Obstacle-free FollowPath test costmap. Add sensors/static and inflation layers
 # for navigation; these defaults do not populate real obstacles.

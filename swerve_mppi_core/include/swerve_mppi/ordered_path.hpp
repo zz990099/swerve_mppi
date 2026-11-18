@@ -53,6 +53,8 @@ public:
   Pose tracking_goal() const { return sections_[section_].points.back(); }
   bool rotating() const { return !empty() && sections_[section_].rotation; }
   std::size_t section() const { return section_; }
+  const std::vector<Pose> & section_points() const { return sections_[section_].points; }
+  double progress_arc() const { return progress_arc_; }
   // A completed bounded steering maneuver may follow a short chord instead
   // of every sampled tangent. Rejoin only this section's nearby ordered arc;
   // never cross an unreached mandatory corner or a rotation section.
