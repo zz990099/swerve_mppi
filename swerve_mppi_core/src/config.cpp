@@ -11,6 +11,18 @@ namespace swerve_mppi
 {
 double wrap_angle(double x) { return std::remainder(x, 2 * std::acos(-1.0)); }
 double distance(const Pose & a, const Pose & b) { return std::hypot(a.x - b.x, a.y - b.y); }
+bool GoalPoseTolerance::contains(const Pose & pose, const Pose & goal) const
+{
+  return distance(pose, goal) <= position && std::abs(wrap_angle(pose.yaw - goal.yaw)) <= yaw;
+}
+bool GoalPoseTolerance::valid() const
+{
+  return std::isfinite(position) && position > 0 && std::isfinite(yaw) && yaw > 0;
+}
+bool Input::reaches_goal() const
+{
+  return preview_reaches_goal.value_or(!path.empty() && distance(path.back(), goal) < .001);
+}
 bool GridView::valid() const
 {
   return data && width && height && width <= std::numeric_limits<std::size_t>::max() / height &&

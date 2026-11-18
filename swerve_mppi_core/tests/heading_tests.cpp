@@ -58,6 +58,23 @@ int main()
     check(
       std::isfinite(costs[1]) && costs[0] < costs[1] && detail[1].heading > 0,
       "body alignment is preferred but a misaligned or stopped candidate stays finite");
+    input.path = {{0, 0, 0}, {.51, 0, 1}};
+    input.goal = input.path.back();
+    input.preview_reaches_goal = true;
+    costs.assign(2, 0);
+    tracking_critics().front()->score(context, batch, costs);
+    const double before_goal_activation = detail[1].heading;
+    input.goal_active = true;
+    costs.assign(2, 0);
+    tracking_critics().front()->score(context, batch, costs);
+    check(
+      before_goal_activation == detail[1].heading && before_goal_activation > 0,
+      "geometric fade is independent of terminal attraction activation");
+    input.preview_reaches_goal = false;
+    costs.assign(2, 0);
+    tracking_critics().front()->score(context, batch, costs);
+    check(
+      detail[1].heading > before_goal_activation, "a crop does not fade at an apparent endpoint");
     config.geometric_heading_weight = 0;
     costs.assign(2, 0);
     tracking_critics().front()->score(context, batch, costs);

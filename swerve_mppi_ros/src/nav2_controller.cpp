@@ -382,8 +382,10 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     (void)velocity(speed);  // Validate Nav2 velocity; wheel feedback anchors actuator prediction.
     input.dt = dt;
     const auto previous_section = r.path.section();
-    const auto local =
-      r.path.local(pose(r.transform(current, r.plan_frame).pose), 3.0, input.state.velocity);
+    bool preview_reaches_goal = false;
+    const auto local = r.path.local(
+      pose(r.transform(current, r.plan_frame).pose), 3.0, input.state.velocity,
+      &preview_reaches_goal);
     if (r.path.section() != previous_section) r.controller->reset();
     auto transform_path_pose = [&](Pose p) {
       geometry_msgs::msg::PoseStamped source;
@@ -394,6 +396,8 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     for (auto p : local) input.path.push_back(transform_path_pose(p));
     input.goal = transform_path_pose(r.path.tracking_goal());
     input.goal_active = r.path.tracking_goal_active(r.config.approach_distance);
+    input.preview_reaches_goal = preview_reaches_goal;
+    if (ordered) input.goal_tolerance = ordered->poseTolerance();
     std::vector<std::uint8_t> grid;
     if (r.map_enabled) {
       auto map = r.costmap->getCostmap();
@@ -424,7 +428,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     r.last_output_time = r.node()->now().seconds();
     if (ordered)
       ordered->setReady(
-        r.path.goal_active(r.config.approach_distance) &&
+        input.reaches_goal() && r.path.goal_active(r.config.approach_distance) &&
           std::hypot(result.command.velocity.vx, result.command.velocity.vy) < 1e-4 &&
           std::abs(result.command.velocity.wz) < 1e-4,
         transform_path_pose(r.path.goal()));

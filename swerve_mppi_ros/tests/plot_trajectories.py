@@ -124,7 +124,7 @@ def plot_round(directory, output=None, case_names=None):
     bar.set_label('Truth-derived linear speed [m/s], centred 0.2 s window', fontsize=9)
     fig.text(.5, .10/height, 'Fresh simulation per case; axes aligned with initial body; arrows show body yaw. '
              'Failed cases retain partial recordings. Ideal truth localization when map paths are enabled.\n'
-             'TRACK OK: completed + path peak <= 10 cm, endpoint <= 20 cm, final yaw <= 5 deg. Other engineering checks remain in JSON. '
+             'TRACK OK: completed + path peak <= 10 cm, endpoint <= 5 cm, final yaw <= 5 deg. Other engineering checks remain in JSON. '
              'See result.json for every limit and failure.',
              ha='center', fontsize=9, color='#475569')
     output = Path(output) if output else directory/f"round_{manifest['round']:02d}.png"

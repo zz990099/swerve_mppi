@@ -35,11 +35,11 @@ class RecordingTests(unittest.TestCase):
     def test_user_tracking_tolerances(self):
         metadata = dict(scenario='straight', reference=[(0,0,0),(12,0,0)], samples=100,
                         path_rms_m=.08, path_peak_m=.10, heading_rms_rad=.08,
-                        heading_peak_rad=.15, final_position_error_m=.20,
+                        heading_peak_rad=.15, final_position_error_m=.05,
                         final_yaw_error_rad=math.radians(5), stopped_fraction=.2, wall_duration_s=20.,
                         max_request_linear_rate=.9, max_request_angular_rate=1.3, compute_p99_ms=20.)
         self.assertEqual(evaluate(metadata)[1], [])
-        for key, value in [('path_peak_m', .1001), ('final_position_error_m', .2001),
+        for key, value in [('path_peak_m', .1001), ('final_position_error_m', .0501),
                            ('final_yaw_error_rad', math.radians(5.01))]:
             bad = dict(metadata, **{key:value})
             self.assertTrue(any(key in failure for failure in evaluate(bad)[1]))

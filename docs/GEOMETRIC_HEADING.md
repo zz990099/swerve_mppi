@@ -23,6 +23,10 @@ free-heading, braking and recovery proposals remain. It is not injected during
 latched wheel alignment, departure or terminal hold. Setting
 `geometric_heading_weight` to zero also restores the previous proposal allocation.
 
+The default Nav2 goal tolerances are 0.05 m and 5 degrees. The ordered goal checker
+supplies these tolerances to MPPI for terminal braking. The goal checker still
+requires fresh, stopped chassis and wheel feedback and its configured settle time.
+
 The geometric preference does not establish a strict task hierarchy. Position,
 progress, effort and actuator costs can outweigh it. The existing reference-speed
 envelope remains conservative and assumes a fixed body frame; this change does

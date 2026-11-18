@@ -35,7 +35,8 @@ public:
       c.input.precise_heading ? std::min(.005, c.config.heading_scale) : c.config.heading_scale;
     auto start = path.start_match(c.input.state.pose);
     const double checkpoint = path.next_corner(start.arc);
-    bool terminal = c.input.goal_active && distance(c.input.path.back(), c.input.goal) < .001;
+    const bool preview_reaches_goal = c.input.reaches_goal();
+    const bool terminal = c.input.goal_active && preview_reaches_goal;
     const bool terminal_heading_active =
       terminal && path.length() - start.arc <= c.config.goal_heading_activation_distance;
     for (std::size_t k = 0; k < batch.size(); ++k) {
@@ -88,6 +89,7 @@ public:
         const auto & u = t.controls[i - 1];
         const auto unit = reference.unit(progress, s.pose.yaw);
         const double along = s.velocity.vx * unit.vx + s.velocity.vy * unit.vy;
+        const auto heading = reference.heading(progress, preview_reaches_goal);
         double target_speed = reference.speed(progress);
         double alignment_error = 0;
         bool stopped = true;
@@ -128,11 +130,12 @@ public:
           norm * (4 * slack + w_.path_distance * std::pow(m.error / c.config.position_scale, 2));
         // A finite, secondary body-heading preference. It depends on ordered
         // reference geometry, never candidate speed or intermediate pose yaw.
-        const auto heading = reference.heading(progress, terminal);
-        const double error =
-          std::abs(wrap_angle(s.pose.yaw - heading.yaw)) / c.config.geometric_heading_scale;
-        detail.heading += norm * c.config.geometric_heading_weight * heading.strength *
-                          (error <= 1. ? error * error : 2. * error - 1.);
+        if (!c.input.departure && heading.strength > 0) {
+          const double x =
+            std::abs(wrap_angle(s.pose.yaw - heading.yaw)) / c.config.geometric_heading_scale;
+          detail.heading += norm * c.config.geometric_heading_weight * heading.strength *
+                            (x <= 1 ? x * x : 2 * x - 1);
+        }
         // During final rotation, returning at the horizon endpoint does not
         // compensate for an excursion earlier in the rollout. Keep endpoint
         // position a running soft objective throughout the terminal region.

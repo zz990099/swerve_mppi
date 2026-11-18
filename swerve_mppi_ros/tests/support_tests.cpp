@@ -22,11 +22,26 @@ int main()
     state.velocity = {};
     state.pose.yaw = 0.2;
     check(!checker.reached(state, goal, 1.5), "heading required");
+    state.pose = {.05, 0, GoalPoseTolerance{}.yaw};
+    check(!checker.reached(state, goal, 2), "tolerance boundary still requires settle time");
+    check(checker.reached(state, goal, 2.31), "five centimetres and five degrees are accepted");
+    state.pose.x = .051;
+    check(!checker.reached(state, goal, 2.32), "position outside tolerance resets settling");
     PathHandler path;
     path.set({{0, 0, 0}, {.8, 0, 0}, {.8, .8, 0}, {0, .8, 0}, {0, 0, 0}});
     auto local = path.local({0, 0, 0});
     check(local.size() > 2, "sharp corners remain in the preview");
     check(!path.goal_active(), "closed path cannot finish at the start");
+    path.set({{0, 0, 0}, {1, 0, 0}, {0, 0, 0}, {0, 1, 0}, {0, 0, 0}});
+    bool reaches_goal = true;
+    auto coincident = path.local({0, 0, 0}, 2, {}, &reaches_goal);
+    check(
+      distance(coincident.back(), path.goal()) == 0 && !reaches_goal,
+      "a crop ending at coincident coordinates is not the ordered endpoint");
+    path.local({0, 0, 0}, 4, {}, &reaches_goal);
+    check(reaches_goal, "the full preview contains the ordered endpoint");
+    path.set({{0, 0, 0}, {.8, 0, 0}, {.8, .8, 0}, {0, .8, 0}, {0, 0, 0}});
+    path.local({0, 0, 0});
     path.local({.8, 0, 0});
     path.local({.8, .8, 0});
     check(!path.goal_active(), "ordered square still has two legs remaining");

@@ -19,8 +19,8 @@ controller_server:
       movement_time_allowance: 30.0
     goal_checker:
       plugin: swerve_mppi_ros::OrderedGoalChecker
-      xy_goal_tolerance: 0.06
-      yaw_goal_tolerance: 0.05
+      xy_goal_tolerance: 0.05
+      yaw_goal_tolerance: 0.08726646259971647
       trans_stopped_velocity: 0.035
       rot_stopped_velocity: 0.035
       settle_time: 0.3

@@ -45,6 +45,12 @@ struct MotionReference
   bool precise_heading = false;
   std::optional<Velocity> departure;
 };
+struct GoalPoseTolerance
+{
+  double position = 0.05, yaw = 0.08726646259971647;  // 5 degrees.
+  bool contains(const Pose & pose, const Pose & goal) const;
+  bool valid() const;
+};
 struct Input
 {
   State state;
@@ -57,6 +63,12 @@ struct Input
     alignment;  // Stopped wheel alignment, still rolled out and collision checked.
   bool precise_heading = false;
   std::optional<Velocity> departure;
+  // Ordered progress can distinguish a cropped loop from the actual endpoint.
+  // Standalone callers that omit this field retain endpoint matching by position.
+  std::optional<bool> preview_reaches_goal;
+  GoalPoseTolerance goal_tolerance;
+
+  bool reaches_goal() const;
 };
 struct Command
 {

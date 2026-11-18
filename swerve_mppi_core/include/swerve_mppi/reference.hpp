@@ -171,7 +171,7 @@ public:
       std::cos(body_yaw) * x + std::sin(body_yaw) * y,
       -std::sin(body_yaw) * x + std::cos(body_yaw) * y, 0};
   }
-  HeadingPreference heading(double arc, bool terminal = false) const
+  HeadingPreference heading(double arc, bool preview_reaches_goal = false) const
   {
     if (path_.length() < 1e-8 || config_.geometric_heading_weight == 0) return {};
     const auto it = std::upper_bound(s_.begin(), s_.end(), arc);
@@ -184,7 +184,7 @@ public:
         wrap_angle(a.yaw + u * wrap_angle(b.yaw - a.yaw)),
         a.strength + u * (b.strength - a.strength), a.curvature + u * (b.curvature - a.curvature)};
     }
-    if (terminal) {
+    if (preview_reaches_goal) {
       const double u = std::clamp(
         (path_.length() - arc - config_.goal_heading_activation_distance) /
           config_.geometric_heading_window,

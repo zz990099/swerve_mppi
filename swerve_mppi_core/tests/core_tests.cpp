@@ -233,6 +233,28 @@ int main()
     check(
       Controller(c, {std::make_shared<Reject>()}).compute(settled).status == Status::NoSolution,
       "terminal hold remains subject to hard rejection");
+    auto near_goal = settled;
+    near_goal.state.pose = {-.04, 0, .06981317007977318};  // 4 cm and 4 degrees.
+    near_goal.state.requested = {.08, 0, .08};
+    auto terminal_brake = Controller(c).compute(near_goal);
+    check(
+      terminal_brake.status == Status::Ok && terminal_brake.command.velocity.vx > 0 &&
+        terminal_brake.command.velocity.vx < near_goal.state.requested.vx &&
+        std::abs(terminal_brake.command.velocity.wz) < near_goal.state.requested.wz,
+      "accepted terminal pose brakes from the last request instead of jumping to zero");
+    near_goal.state.requested = {};
+    Controller settling(c);
+    terminal_brake = settling.compute(near_goal);
+    check(
+      terminal_brake.status == Status::Ok &&
+        std::hypot(terminal_brake.command.velocity.vx, terminal_brake.command.velocity.vy) < 1e-9 &&
+        std::abs(terminal_brake.command.velocity.wz) < 1e-9,
+      "accepted terminal pose holds without correcting to the exact goal");
+    near_goal.goal_tolerance.yaw = .03;
+    auto outside = settling.compute(near_goal);
+    check(
+      outside.status == Status::Ok && std::abs(outside.command.velocity.wz) > 1e-4,
+      "terminal correction resumes outside the active goal checker's tolerance");
     auto terminal_rotation = settled;
     terminal_rotation.state.requested = {};
     terminal_rotation.path = {{0, 0, .2}};
