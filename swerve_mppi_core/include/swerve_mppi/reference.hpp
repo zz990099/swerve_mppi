@@ -110,21 +110,17 @@ public:
       double cap = config_.max_speed;
       for (std::size_t w = 0; w < 4; ++w) {
         const double delta = std::abs(wheels[i].steering[w] - wheels[i - 1].steering[w]);
-        const bool branch_change = delta > swerve_chassis_core::pi / 2;
         // A representation change requires braking and measured reorientation,
         // handled by condition()/Generator and the controller's latched intent.
         // A permanent zero-speed interval here has no restart condition.
-        if (branch_change) {
-          if (branches_.empty() || std::abs(branches_.back() - s_[i - 1]) > 1e-8)
-            branches_.push_back(s_[i - 1]);
-        } else {
-          cap = std::min(cap, steering_rate * ds / std::max(1e-9, delta));
-        }
-        // Compare signed speeds in the same rolling-axis representation.
-        // The generator handles the actual reversal at the branch boundary.
-        const double previous_speed = wheels[i - 1].speed[w];
-        const double dq =
-          std::abs(wheels[i].speed[w] - (branch_change ? -previous_speed : previous_speed)) / ds;
+        cap = std::min(
+          cap, delta > swerve_chassis_core::pi / 2 ? config_.max_speed
+                                                   : steering_rate * ds / std::max(1e-9, delta));
+        if (
+          delta > swerve_chassis_core::pi / 2 &&
+          (branches_.empty() || std::abs(branches_.back() - s_[i - 1]) > 1e-8))
+          branches_.push_back(s_[i - 1]);
+        const double dq = std::abs(wheels[i].speed[w] - wheels[i - 1].speed[w]) / ds;
         // q(s)*s_dot is wheel angular speed. This bounds its geometric
         // acceleration term q'(s)*s_dot^2; request slew also bounds s_ddot.
         cap = std::min(cap, std::sqrt(.5 * config_.limits.wheel_acceleration / std::max(1e-9, dq)));

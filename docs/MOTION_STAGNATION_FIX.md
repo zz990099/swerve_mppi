@@ -28,9 +28,6 @@ A greater-than-90-degree change in the bounded steering representation is a
 stop/reorientation event, not a permanent zero-speed interval in the spatial
 reference. The shared actuator generator still enforces braking, steering rate,
 wheel acceleration and rolling feasibility.
-The reference compares wheel speeds on the same rolling axis across a branch
-boundary, so an equivalent sign change does not appear as a spatial speed
-derivative. Braking and physically changing branches remain executor duties.
 
 At measured standstill, the controller retains a steering intent until measured
 alignment or resumed driving. Near an identified reference branch boundary it

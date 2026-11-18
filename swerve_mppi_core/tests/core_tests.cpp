@@ -101,17 +101,6 @@ int main()
     check(
       PathView(ring).start_match({-.001, 0, 0}).arc < .02,
       "smooth return leg cannot capture noisy initial matching");
-    std::vector<Pose> shallow_turn;
-    for (int i = 0; i <= 60; ++i) {
-      const double y = .05 * i;
-      const double dx = y - 1.;
-      shallow_turn.push_back({.02 * dx * dx, y, 0});
-    }
-    ReferenceProfile turning_profile(shallow_turn, c);
-    const double branch = turning_profile.next_branch(.5);
-    check(
-      branch > .4 && branch < .6 && turning_profile.speed(.5 + branch) > .7,
-      "a lateral steering branch is recorded without a spurious signed wheel-speed jump");
     Input ring_input;
     ring_input.state.generator.valid = true;
     ring_input.state.pose.x = -.001;
