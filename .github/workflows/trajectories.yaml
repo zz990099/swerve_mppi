@@ -1,29 +1,25 @@
-name: Physical trajectory benchmark / 32 cases
+name: PR 9 Gazebo retry
 on:
   push:
-    branches: [main]
-    paths:
-      - '.github/workflows/trajectories.yaml'
-      - 'swerve_mppi_core/**'
-      - 'swerve_mppi_ros/src/**'
-      - 'swerve_mppi_ros/include/**'
-      - 'swerve_mppi_ros/config/**'
-      - 'swerve_mppi_ros/launch/**'
-      - 'swerve_mppi_ros/CMakeLists.txt'
-      - 'swerve_mppi_ros/package.xml'
-      - 'swerve_mppi_ros/tests/**'
-  pull_request:
-    paths:
-      - '.github/workflows/trajectories.yaml'
-      - 'swerve_mppi_core/**'
-      - 'swerve_mppi_ros/**'
-  workflow_dispatch:
+    branches: [codex/pr9-gazebo-retry]
 permissions:
   contents: read
 jobs:
   record:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - batch: a
+            cases: lateral_s l_turn_left l_turn_right
+          - batch: b
+            cases: zigzag lateral_zigzag u_turn
+          - batch: c
+            cases: hairpin_fixed_yaw circle_cw circle_ccw
+          - batch: d
+            cases: figure_eight slalom spiral_out rounded_rectangle
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 25
     container: ros:jazzy-ros-base-noble
     defaults:
       run:
@@ -49,15 +45,14 @@ jobs:
         run: |
           source /opt/ros/jazzy/setup.bash
           colcon build --base-paths swerve_mppi_core swerve_mppi_ros companion-chassis --packages-up-to swerve_mppi_ros --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=OFF
-      - name: Record 32 physical cases / one round / seed 42
+      - name: Record missing physical cases / seed 42
         run: |
           source /opt/ros/jazzy/setup.bash
           source install/local_setup.bash
-          python3 swerve_mppi_ros/tests/run_trajectory_rounds.py --chassis-root companion-chassis --output artifacts --rounds 1 --seed-base 42 --min-path-length 12 --max-speed 1.0 --path-frame map
+          python3 swerve_mppi_ros/tests/run_trajectory_rounds.py --chassis-root companion-chassis --output artifacts --rounds 1 --seed-base 42 --min-path-length 12 --max-speed 1.0 --path-frame map --commit 37bfbe1897d54067322bae3f66c9e324759546d6 --cases ${{ matrix.cases }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mppi-trajectories-32-cases
+          name: mppi-pr9-retry-${{ matrix.batch }}
           path: artifacts/
           if-no-files-found: warn
-
