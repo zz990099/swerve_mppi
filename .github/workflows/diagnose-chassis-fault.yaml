@@ -1,17 +1,13 @@
-name: Diagnose Gazebo chassis fault
+name: Replay chassis clock skew
 on:
   push:
     branches: [diagnostics/chassis-command-fault]
 permissions:
   contents: read
 jobs:
-  trace:
+  replay:
     runs-on: ubuntu-24.04
-    timeout-minutes: 18
-    strategy:
-      fail-fast: false
-      matrix:
-        scenario: [closed_loop, rounded_rectangle, slalom, crab_right]
+    timeout-minutes: 12
     container: ros:jazzy-ros-base-noble
     defaults:
       run:
@@ -19,7 +15,6 @@ jobs:
     env:
       ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
       ROS_DOMAIN_ID: '83'
-      MPLBACKEND: Agg
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -27,42 +22,16 @@ jobs:
           repository: zz990099/swerve_gazebo_sim
           ref: 8f986bda64d5b48af012d37cf924328e0b127468
           path: companion-chassis
-      - name: Install Jazzy and Harmonic dependencies
-        run: |
+      - run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential cmake python3-colcon-common-extensions python3-psutil python3-yaml python3-matplotlib ros-jazzy-ament-cmake-gtest ros-jazzy-ament-cmake-pytest ros-jazzy-ament-cmake-python ros-jazzy-rosidl-default-generators python3-pytest ros-jazzy-tf2-geometry-msgs ros-jazzy-nav2-controller ros-jazzy-nav2-lifecycle-manager ros-jazzy-ros-gz ros-jazzy-gz-ros2-control ros-jazzy-joint-state-broadcaster ros-jazzy-forward-command-controller ros-jazzy-robot-state-publisher ros-jazzy-xacro
-      - name: Instrument and build
+          apt-get install -y --no-install-recommends build-essential cmake python3-colcon-common-extensions ros-jazzy-rosidl-default-generators
+      - name: Build the benchmark chassis
         run: |
           python3 tools/diagnostics/trace_chassis_fault.py
           source /opt/ros/jazzy/setup.bash
-          colcon build --base-paths swerve_mppi_core swerve_mppi_ros companion-chassis --packages-up-to swerve_mppi_ros --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=OFF
-      - name: Repeat the affected case
-        env:
-          DIAGNOSTIC_SCENARIO: ${{ matrix.scenario }}
+          colcon build --base-paths companion-chassis --packages-up-to swerve_chassis_controller --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=OFF
+      - name: Replay future and repeated timestamps
         run: |
           source /opt/ros/jazzy/setup.bash
           source install/local_setup.bash
-          PYTHONPATH="$PWD/swerve_mppi_ros/tests:$PYTHONPATH" python3 - <<'PY'
-          from pathlib import Path
-          import os
-          from run_gazebo import run_case
-
-          case = os.environ['DIAGNOSTIC_SCENARIO']
-          for attempt in range(1, 4):
-              directory = Path('artifacts') / str(attempt)
-              try:
-                  run_case(Path('companion-chassis').resolve(), directory, case, seed=42,
-                           record=True, minimum_length=12., max_speed=1., path_frame='map')
-              except (RuntimeError, TimeoutError) as error:
-                  print(f'{case} attempt {attempt}: {error}', flush=True)
-              log = directory / 'gazebo.log'
-              if log.exists():
-                  for line in log.read_text().splitlines():
-                      if 'FAULT_TRACE' in line:
-                          print(f'{case} attempt {attempt}: {line}', flush=True)
-          PY
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: chassis-fault-${{ matrix.scenario }}
-          path: artifacts/
+          python3 -u tools/diagnostics/clock_race_probe.py
