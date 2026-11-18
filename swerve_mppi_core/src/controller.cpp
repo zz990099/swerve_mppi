@@ -31,8 +31,9 @@ Velocity feedback_request(
 bool terminal_hold_requested(const Config & config, const Input & input)
 {
   if (
-    !input.goal_active || !input.reaches_goal() || input.precise_heading || input.alignment ||
-    input.departure || !input.goal_tolerance.contains(input.state.pose, input.goal))
+    !input.allow_terminal_hold || !input.goal_active || !input.reaches_goal() ||
+    input.precise_heading || input.alignment || input.departure ||
+    !input.goal_tolerance.contains(input.state.pose, input.goal))
     return false;
   const PathView path(input.path);
   return path.length() - path.start_match(input.state.pose).arc <=

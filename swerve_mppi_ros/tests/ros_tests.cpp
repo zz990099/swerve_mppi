@@ -13,6 +13,26 @@
 using namespace std::chrono_literals;
 using namespace swerve_mppi_ros;
 using Observation = swerve_chassis_msgs::msg::ChassisState;
+class GoalCheckerWithoutTolerances : public nav2_core::GoalChecker
+{
+public:
+  void initialize(
+    const rclcpp_lifecycle::LifecycleNode::WeakPtr &, const std::string &,
+    const std::shared_ptr<nav2_costmap_2d::Costmap2DROS>) override
+  {
+  }
+  void reset() override {}
+  bool isGoalReached(
+    const geometry_msgs::msg::Pose &, const geometry_msgs::msg::Pose &,
+    const geometry_msgs::msg::Twist &) override
+  {
+    return false;
+  }
+  bool getTolerances(geometry_msgs::msg::Pose &, geometry_msgs::msg::Twist &) override
+  {
+    return false;
+  }
+};
 class Nav2PluginTest : public ::testing::Test
 {
 protected:
@@ -258,6 +278,31 @@ TEST_F(Nav2PluginTest, GoalCheckerUsesLiveTransformedEndpoint)
   std::this_thread::sleep_for(550ms);
   publish_state();
   EXPECT_FALSE(goal->isGoalReached(query, historical_target, geometry_msgs::msg::Twist{}));
+}
+TEST_F(Nav2PluginTest, TerminalHoldUsesActiveGoalCheckerTolerances)
+{
+  constexpr Pose target{1, 0, 0};
+  constexpr Pose outside_strict{.965, 0, swerve_chassis_core::pi / 60};
+  constexpr Pose inside_strict{.99, 0, .01};
+  auto request_at = [&](Pose current) {
+    observed.requested_velocity = {};
+    controller->setPlan(path({current, target}));
+    const auto cmd = compute(current).twist;
+    return std::hypot(cmd.linear.x, cmd.linear.y) + std::abs(cmd.angular.z);
+  };
+
+  EXPECT_LT(request_at(outside_strict), 1e-8);  // Default OrderedGoalChecker.
+  node->declare_parameter("strict_goal_checker.xy_goal_tolerance", .02);
+  node->declare_parameter("strict_goal_checker.yaw_goal_tolerance", .02);
+  goal = goal_loader->createSharedInstance("nav2_controller::SimpleGoalChecker");
+  goal->initialize(node, "strict_goal_checker", costmap);
+  EXPECT_FALSE(goal->isGoalReached(
+    pose_message(outside_strict), pose_message(target), geometry_msgs::msg::Twist{}));
+  EXPECT_GT(request_at(outside_strict), 1e-4);
+  EXPECT_LT(request_at(inside_strict), 1e-8);
+
+  goal = std::make_shared<GoalCheckerWithoutTolerances>();
+  EXPECT_GT(request_at(outside_strict), 1e-4);
 }
 TEST_F(Nav2PluginTest, CostmapTfAndInvalidInputs)
 {

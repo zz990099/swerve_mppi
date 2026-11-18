@@ -330,6 +330,12 @@ int main()
     check(
       outside.status == Status::Ok && std::abs(outside.command.velocity.wz) > 1e-4,
       "terminal correction resumes outside the active goal checker's tolerance");
+    near_goal.goal_tolerance = {};
+    near_goal.allow_terminal_hold = false;
+    outside = Controller(c).compute(near_goal);
+    check(
+      outside.status == Status::Ok && std::abs(outside.command.velocity.wz) > 1e-4,
+      "terminal correction continues when the caller has no usable goal tolerances");
     auto terminal_rotation = settled;
     terminal_rotation.state.requested = {};
     terminal_rotation.path = {{0, 0, .2}};

@@ -82,6 +82,7 @@ struct Input
   GoalPoseTolerance goal_tolerance;
   SpeedPreview speed_preview;
   std::optional<RequestAcceleration> previous_request_acceleration;
+  bool allow_terminal_hold = true;  // A caller without usable goal tolerances can defer holding.
 
   bool reaches_goal() const;
 };

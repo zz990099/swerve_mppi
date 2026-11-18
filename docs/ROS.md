@@ -55,9 +55,9 @@ requested velocity is part of State, not substituted with measured body velocity
 m/s, not a permission to accept arbitrary slipping wheel commands.
 `steering_time_constant` defaults to 0.10 s. `reference_velocity_weight` and
 `presteering_alignment_weight` each default to 1.0; `alignment_heading_weight`
-defaults to 0.5 and anchors the body only while wheels presteer. The reference-speed envelope
-accounts for coupled wheel steering and drive demands. On regular tracking segments,
-local previews share an envelope sampled on the ordered plan. A lower cap applies
+defaults to 0.5 and anchors the body only while wheels presteer. Local previews share a
+geometric speed envelope sampled on the ordered plan. Steering branch changes can lower
+the cap within a local preview using measured body yaw and steering. A lower cap applies
 immediately and a rising cap is released at 70% of `linear_accel`.
 `longitudinal_jerk_weight` (0.12, zero to disable) penalizes changes in commanded
 acceleration along the geometric path tangent. Stop-and-turn maneuvers and the
@@ -68,6 +68,9 @@ including computes that return NoSolution.
 Goal checker state_topic/state_timeout can be set independently of the controller
 but must identify the same robot. Feedback must be fresh and fault-free with all
 wheel speeds <=0.05 rad/s, in addition to Nav2 pose and body-speed tolerances.
+Terminal hold reads pose tolerances from the active Nav2 goal checker. For other
+checkers, the hold thresholds are bounded by 5 cm and 5 degrees. When a checker
+does not supply a valid planar pose tolerance, terminal correction continues.
 
 The default costmap is obstacle-free for physical tracking acceptance. Supply
 real sensor/static layers for navigation. The collision critic uses the costmap's

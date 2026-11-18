@@ -16,6 +16,24 @@
 
 namespace swerve_mppi_ros
 {
+namespace
+{
+std::optional<GoalPoseTolerance> goal_pose_tolerance(nav2_core::GoalChecker * checker)
+{
+  if (!checker) return std::nullopt;
+  geometry_msgs::msg::Pose pose_tolerance;
+  geometry_msgs::msg::Twist velocity_tolerance;
+  if (!checker->getTolerances(pose_tolerance, velocity_tolerance)) return std::nullopt;
+  try {
+    const auto planar = pose(pose_tolerance);
+    const GoalPoseTolerance tolerance{std::min(planar.x, planar.y), planar.yaw};
+    if (tolerance.valid()) return tolerance;
+  } catch (const std::invalid_argument &) {
+    // A checker may omit planar pose tolerances. Resume terminal tracking.
+  }
+  return std::nullopt;
+}
+}  // namespace
 using Steady = std::chrono::steady_clock;
 struct Nav2Controller::Runtime
 {
@@ -422,7 +440,19 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     input.goal = transform_path_pose(r.path.tracking_goal());
     input.goal_active = r.path.tracking_goal_active(r.config.approach_distance);
     input.preview_reaches_goal = preview_reaches_goal;
-    if (ordered) input.goal_tolerance = ordered->poseTolerance();
+    if (input.goal_active && input.reaches_goal()) {
+      const auto tolerance = goal_pose_tolerance(goal_checker);
+      input.allow_terminal_hold = tolerance.has_value();
+      if (tolerance) {
+        if (ordered)
+          input.goal_tolerance = *tolerance;
+        else {
+          input.goal_tolerance.position =
+            std::min(input.goal_tolerance.position, tolerance->position);
+          input.goal_tolerance.yaw = std::min(input.goal_tolerance.yaw, tolerance->yaw);
+        }
+      }
+    }
     std::vector<std::uint8_t> grid;
     if (r.map_enabled) {
       auto map = r.costmap->getCostmap();
