@@ -32,7 +32,7 @@ public:
     std::unique_ptr<ReferenceProfile> local_reference;
     if (!c.reference)
       local_reference = std::make_unique<ReferenceProfile>(
-        c.input.path, c.config, c.input.speed_preview, start.arc, c.input.dt);
+        c.input.path, c.config, c.input.speed_preview, start.arc, c.input.dt, &c.input.state);
     const auto & reference = c.reference ? *c.reference : *local_reference;
     const double heading_scale =
       c.input.precise_heading ? std::min(.005, c.config.heading_scale) : c.config.heading_scale;

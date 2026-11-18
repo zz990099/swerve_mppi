@@ -42,8 +42,8 @@ inline bool prefers_heading_alignment(
 
 // Adaptive time parameterization of an ordered geometric path. Intermediate
 // waypoint yaw is intentionally ignored: body heading is free during travel and
-// the terminal pose yaw is handled by the goal critic. Wheel targets below are
-// per unit arc speed for a fixed body frame.
+// the terminal pose yaw is handled by the goal critic. The shared envelope is
+// geometric; only local previews have a measured body frame for wheel branches.
 class ReferenceProfile
 {
 public:
@@ -53,7 +53,7 @@ public:
   };
   ReferenceProfile(
     const std::vector<Pose> & points, const Config & config, SpeedPreview preview = {},
-    double entry_arc = 0, double dt = .05)
+    double entry_arc = 0, double dt = .05, const State * chassis_state = nullptr)
   : points_(points),
     path_(points_),
     config_(config),
@@ -75,7 +75,9 @@ public:
     // The stop/reorientation controller restarts from a cropped outgoing leg.
     // A shared stationary knot must not pin its target speed after the stop.
     if (preview_.plan && preview_.plan->near_corner(preview_.start_arc + entry_arc_)) preview_ = {};
-    auto count = static_cast<std::size_t>(std::clamp(std::ceil(path_.length() / .025), 1., 4096.));
+    // Keep the same knot grid across roundoff in rigidly transformed paths.
+    auto count =
+      static_cast<std::size_t>(std::clamp(std::ceil(path_.length() / .025 - 1e-9), 1., 4096.));
     s_.resize(count + 1);
     for (std::size_t i = 0; i <= count; ++i) s_[i] = path_.length() * i / count;
     s_.insert(s_.end(), corners_.begin(), corners_.end());
@@ -86,23 +88,25 @@ public:
     count = s_.size() - 1;
     speed_.resize(count + 1);
     reasons_.assign(count + 1, 1);
-    std::vector<swerve_chassis_core::Joints> wheels(count + 1);
-    std::array<double, 4> previous{};
+    std::vector<Velocity> tangents(count + 1);
+    std::vector<swerve_chassis_core::Joints> wheels(chassis_state ? count + 1 : 0);
+    auto previous = chassis_state ? chassis_state->steering : std::array<double, 4>{};
+    const double wheel_cap = config_.limits.wheel_speed * config_.geometry.radius;
     for (std::size_t i = 0; i <= count; ++i) {
       const double s = s_[i];
-      const auto u = unit(s, 0);
-      wheels[i] = swerve_chassis_core::inverse(config_.geometry, {u.vx, u.vy, u.wz}, previous);
-      previous = wheels[i].steering;
+      tangents[i] = unit(s, 0);
+      if (chassis_state) {
+        const auto u = rotate_velocity(tangents[i], -chassis_state->pose.yaw);
+        wheels[i] = swerve_chassis_core::inverse(config_.geometry, {u.vx, u.vy, u.wz}, previous);
+        previous = wheels[i].steering;
+      }
       double cap = preview_.plan ? config_.max_speed
                                  : path_.speed_limit(
                                      s, config_.max_speed, config_.limits.linear_acceleration,
                                      config_.approach_gain, config_.limits.steering_rate);
-      for (double v : wheels[i].speed) {
-        const double wheel_cap = config_.limits.wheel_speed / std::max(1e-9, std::abs(v));
-        if (wheel_cap < cap) {
-          cap = wheel_cap;
-          reasons_[i] = 4;
-        }
+      if (wheel_cap < cap) {
+        cap = wheel_cap;
+        reasons_[i] = 4;
       }
       for (double corner : corners_)
         if (std::abs(s - corner) < 1e-8) {
@@ -125,22 +129,24 @@ public:
           }))
         continue;
       double cap = config_.max_speed;
-      for (std::size_t w = 0; w < 4; ++w) {
-        const double delta = std::abs(wheels[i].steering[w] - wheels[i - 1].steering[w]);
-        // A representation change requires braking and measured reorientation,
-        // handled by condition()/Generator and the controller's latched intent.
-        // A permanent zero-speed interval here has no restart condition.
-        cap = std::min(
-          cap, delta > swerve_chassis_core::pi / 2 ? config_.max_speed
-                                                   : steering_rate * ds / std::max(1e-9, delta));
-        if (
-          delta > swerve_chassis_core::pi / 2 &&
-          (branches_.empty() || std::abs(branches_.back() - s_[i - 1]) > 1e-8))
-          branches_.push_back(s_[i - 1]);
-        const double dq = std::abs(wheels[i].speed[w] - wheels[i - 1].speed[w]) / ds;
-        // q(s)*s_dot is wheel angular speed. This bounds its geometric
-        // acceleration term q'(s)*s_dot^2; request slew also bounds s_ddot.
-        cap = std::min(cap, std::sqrt(.5 * config_.limits.wheel_acceleration / std::max(1e-9, dq)));
+      if (!preview_.plan) {
+        const auto & a = tangents[i - 1];
+        const auto & b = tangents[i];
+        const double turn =
+          std::abs(std::atan2(a.vx * b.vy - a.vy * b.vx, a.vx * b.vx + a.vy * b.vy));
+        cap = std::min(cap, steering_rate * ds / std::max(1e-9, turn));
+      }
+      if (chassis_state) {
+        for (std::size_t w = 0; w < 4; ++w) {
+          const double delta = std::abs(wheels[i].steering[w] - wheels[i - 1].steering[w]);
+          if (delta <= swerve_chassis_core::pi / 2) continue;
+          if (branches_.empty() || branches_.back() != s_[i - 1]) branches_.push_back(s_[i - 1]);
+          // A true branch change needs braking before reorientation. Bound
+          // the signed wheel-speed change only in this measured local frame.
+          const double dq = std::abs(wheels[i].speed[w] - wheels[i - 1].speed[w]) / ds;
+          cap =
+            std::min(cap, std::sqrt(.5 * config_.limits.wheel_acceleration / std::max(1e-9, dq)));
+        }
       }
       if (cap < speed_[i]) {
         speed_[i] = cap;
@@ -190,8 +196,10 @@ public:
   {
     if (release_limit(arc) < unreleased_speed(arc)) return 128;
     if (preview_.plan) {
-      if (preview_.plan->speed(preview_.start_arc + arc) > preview_end_limit(arc)) return 1;
-      return preview_.plan->limiting_reason(preview_.start_arc + arc);
+      const double plan_speed = preview_.plan->speed(preview_.start_arc + arc);
+      if (preview_end_limit(arc) < std::min(plan_speed, knot_speed(arc))) return 1;
+      if (plan_speed <= knot_speed(arc))
+        return preview_.plan->limiting_reason(preview_.start_arc + arc);
     }
     return knot_reason(arc);
   }
@@ -210,10 +218,14 @@ private:
   double unreleased_speed(double arc) const
   {
     if (preview_.plan) {
-      // The overlap uses the same curvature, wheel derivatives and brakes
-      // every cycle. Keep the bounded local preview's endpoint cap as well.
-      return std::min(preview_.plan->speed(preview_.start_arc + arc), preview_end_limit(arc));
+      // A measured local branch can tighten the reusable geometric envelope.
+      return std::min(
+        {preview_.plan->speed(preview_.start_arc + arc), preview_end_limit(arc), knot_speed(arc)});
     }
+    return knot_speed(arc);
+  }
+  double knot_speed(double arc) const
+  {
     auto it = std::upper_bound(s_.begin(), s_.end(), arc);
     const auto i = static_cast<std::size_t>(it - s_.begin());
     if (!i) return speed_.front();

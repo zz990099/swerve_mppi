@@ -194,8 +194,9 @@ Result Controller::compute(const Input & source)
     std::all_of(source.path.begin(), source.path.end(), [](Pose p) { return finite(p); })) {
     try {
       PathView path(source.path);
-      ReferenceProfile reference(source.path, config_);
       const auto match = path.start_match(source.state.pose);
+      ReferenceProfile reference(
+        source.path, config_, source.speed_preview, match.arc, source.dt, &source.state);
       const auto desired_unit = reference.unit(match.arc, source.state.pose.yaw);
       const auto actual_unit = desired_unit;
       const double speed = reference.speed(match.arc);
@@ -368,7 +369,7 @@ Result Controller::compute_tracking(const Input & input)
     const PathView path(input.path);
     const double reference_arc = path.start_match(input.state.pose).arc;
     reference = std::make_unique<ReferenceProfile>(
-      input.path, config_, input.speed_preview, reference_arc, input.dt);
+      input.path, config_, input.speed_preview, reference_arc, input.dt, &input.state);
     context.reference = reference.get();
     bool wheels_stopped = true;
     for (double v : input.state.wheel_speeds)
@@ -720,7 +721,8 @@ bool Controller::retime(const Input & input, double dt, Result & result)
       timed.departure = result.motion_reference->departure;
     }
     const double reference_arc = PathView(timed.path).start_match(timed.state.pose).arc;
-    ReferenceProfile reference(timed.path, config_, timed.speed_preview, reference_arc, dt);
+    ReferenceProfile reference(
+      timed.path, config_, timed.speed_preview, reference_arc, dt, &timed.state);
     CriticContext context{timed, config_, &reference};
     context.initial_intent =
       timed.alignment

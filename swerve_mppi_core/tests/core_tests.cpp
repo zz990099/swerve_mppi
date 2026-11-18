@@ -132,6 +132,50 @@ int main()
       std::abs(released.speed(.2) - (.1 + .7 * c.limits.linear_acceleration * .05)) < 1e-12 &&
         released.limiting_reason(.2) == 128 && released.speed(1) == 0,
       "reference ramps up from the previous cycle and honors an immediate lower cap");
+    std::vector<Pose> arc;
+    for (int i = 0; i <= 220; ++i) {
+      const double theta = i * .01;
+      arc.push_back({1.5 * std::sin(theta), 1.5 * (1 - std::cos(theta)), 0});
+    }
+    ReferenceProfile arc_plan(arc, c);
+    ReferenceProfile arc_preview(arc, c, {&arc_plan, 0, {}}, 0, .05, &state);
+    const double probe = 2.35;
+    const double branch = arc_preview.next_branch(probe);
+    check(
+      arc_plan.next_branch(probe) < 0 && branch >= 0 && branch < .05 &&
+        arc_preview.speed(probe) < arc_plan.speed(probe) &&
+        (arc_preview.limiting_reason(probe) & 16),
+      "a measured steering branch tightens the geometric envelope locally");
+    for (double angle :
+         {swerve_chassis_core::pi / 4, swerve_chassis_core::pi / 2, swerve_chassis_core::pi}) {
+      auto rotated = arc;
+      for (auto & p : rotated) {
+        const auto xy = rotate_velocity({p.x, p.y, 0}, angle);
+        p = {xy.vx + 4, xy.vy - 2, angle};
+      }
+      auto rotated_state = state;
+      rotated_state.pose = rotated.front();
+      ReferenceProfile rotated_plan(rotated, c);
+      ReferenceProfile rotated_preview(rotated, c, {&rotated_plan, 0, {}}, 0, .05, &rotated_state);
+      for (double s = 0; s <= 3.3; s += .01) {
+        check(
+          std::abs(rotated_plan.speed(s) - arc_plan.speed(s)) < 1e-8,
+          "the shared envelope is invariant under rigid transforms");
+        check(
+          std::abs(rotated_preview.speed(s) - arc_preview.speed(s)) < 1e-8,
+          "the measured local speed cap is invariant under rigid transforms");
+      }
+      check(
+        std::abs(rotated_preview.next_branch(probe) - branch) < 1e-8,
+        "the measured branch is invariant under rigid transforms");
+    }
+    auto aligned_state = state;
+    aligned_state.pose.yaw = swerve_chassis_core::pi / 4;
+    ReferenceProfile aligned_preview(arc, c, {&arc_plan, 0, {}}, 0, .05, &aligned_state);
+    check(
+      aligned_preview.next_branch(probe) < 0 &&
+        aligned_preview.speed(probe) > arc_preview.speed(probe),
+      "the local cap follows the chassis heading, not the path frame axes");
     Input jerk_input;
     jerk_input.path = {{0, 0, 0}, {3, 0, 0}};
     jerk_input.state.requested = {.4, 0, 0};
