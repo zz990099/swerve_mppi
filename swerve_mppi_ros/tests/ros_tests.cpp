@@ -285,7 +285,7 @@ TEST_F(Nav2PluginTest, TerminalHoldUsesActiveGoalCheckerTolerances)
   constexpr Pose outside_strict{.965, 0, swerve_chassis_core::pi / 60};
   constexpr Pose inside_strict{.99, 0, .01};
   auto request_at = [&](Pose current) {
-    observed.requested_velocity = {};
+    observed.requested_velocity = geometry_msgs::msg::Twist{};
     controller->setPlan(path({current, target}));
     const auto cmd = compute(current).twist;
     return std::hypot(cmd.linear.x, cmd.linear.y) + std::abs(cmd.angular.z);
