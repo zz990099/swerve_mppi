@@ -56,8 +56,7 @@ struct Nav2Controller::Runtime
   std::optional<double> previous_reference_speed;
   std::optional<ChassisFeedback> measured;
   std::optional<Velocity> published_request;
-  std::optional<RequestAcceleration> previous_request_acceleration;
-  double last_request_yaw = 0;
+  std::optional<LongitudinalRequestSample> previous_longitudinal_request;
   double last_return_time = 0;
   double state_stamp = 0, last_time = 0, frequency = 20, timeout = 0.25, transform_tolerance = 0.1;
   Steady::time_point state_wall{};
@@ -183,7 +182,7 @@ struct Nav2Controller::Runtime
     if (controller) controller->reset();
     published_request.reset();
     previous_reference_speed.reset();
-    previous_request_acceleration.reset();
+    previous_longitudinal_request.reset();
     last_time = 0;
     last_return_time = 0;
   }
@@ -404,7 +403,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
       r.controller->reset();
       r.published_request.reset();
       r.previous_reference_speed.reset();
-      r.previous_request_acceleration.reset();
+      r.previous_longitudinal_request.reset();
       return out;
     }
     Input input;
@@ -413,7 +412,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     // published request from our actual previous output, while retaining the
     // measured generator snapshot as the actuator prediction initial state.
     if (r.published_request) input.state.requested = *r.published_request;
-    input.previous_request_acceleration = r.previous_request_acceleration;
+    input.previous_longitudinal_request = r.previous_longitudinal_request;
     input.state.pose = pose(r.transform(current, r.global_frame).pose);
     (void)velocity(speed);  // Validate Nav2 velocity; wheel feedback anchors actuator prediction.
     input.dt = dt;
@@ -426,7 +425,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
       r.controller->reset();
       r.speed_reference = std::make_unique<ReferenceProfile>(r.path.section_points(), r.config);
       r.previous_reference_speed.reset();
-      input.previous_request_acceleration.reset();
+      input.previous_longitudinal_request.reset();
     }
     input.speed_preview = {
       r.speed_reference.get(), r.path.progress_arc(), r.previous_reference_speed};
@@ -484,15 +483,12 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
         transform_path_pose(r.path.goal()));
     out.header.stamp = r.node()->now();
     const double publication = seconds(out.header.stamp);
-    r.previous_request_acceleration =
-      r.published_request ? request_acceleration(
-                              *r.published_request, r.last_request_yaw, result.command.velocity,
-                              input.state.pose.yaw, publication - r.last_return_time)
-                          : std::nullopt;
+    r.previous_longitudinal_request = longitudinal_request_sample(
+      input.previous_longitudinal_request, result.longitudinal_request_speed,
+      publication - r.last_return_time);
     r.published_request = result.command.velocity;
     r.previous_reference_speed =
       result.motion_reference ? std::nullopt : std::optional{result.reference_speed};
-    r.last_request_yaw = input.state.pose.yaw;
     r.last_return_time = publication;
     return out;
   } catch (const nav2_core::ControllerException &) {

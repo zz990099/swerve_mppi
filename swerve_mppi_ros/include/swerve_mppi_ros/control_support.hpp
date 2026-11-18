@@ -52,13 +52,13 @@ struct ChassisFeedback
   std::optional<double> accepted_command_stamp;
 };
 
-inline std::optional<RequestAcceleration> request_acceleration(
-  Velocity previous, double previous_yaw, Velocity current, double current_yaw, double dt)
+inline std::optional<LongitudinalRequestSample> longitudinal_request_sample(
+  const std::optional<LongitudinalRequestSample> & previous, std::optional<double> speed, double dt)
 {
-  if (!std::isfinite(dt) || dt < 1e-6 || dt > 1) return std::nullopt;
-  const auto a = rotate_velocity(previous, previous_yaw);
-  const auto b = rotate_velocity(current, current_yaw);
-  return RequestAcceleration{(b.vx - a.vx) / dt, (b.vy - a.vy) / dt, dt, current_yaw};
+  if (!speed) return std::nullopt;
+  if (previous && std::isfinite(dt) && dt >= 1e-6 && dt <= 1)
+    return LongitudinalRequestSample{*speed, (*speed - previous->speed) / dt, dt};
+  return LongitudinalRequestSample{*speed, std::nullopt, 0};
 }
 
 inline double command_interval(

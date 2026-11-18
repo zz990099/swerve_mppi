@@ -59,10 +59,12 @@ defaults to 0.5 and anchors the body only while wheels presteer. Local previews 
 geometric speed envelope sampled on the ordered plan. Steering branch changes can lower
 the cap within a local preview using measured body yaw and steering. A lower cap applies
 immediately and a rising cap is released at 70% of `linear_accel`.
-`longitudinal_jerk_weight` (0.12, zero to disable) penalizes changes in commanded
-acceleration along the geometric path tangent. Stop-and-turn maneuvers and the
-terminal region retain their braking and steering behavior. Invalid input, actuator,
-collision and custom-critic rejection counts are published on diagnostics,
+`longitudinal_jerk_weight` (0.12, zero to disable) penalizes the time variation
+of commanded longitudinal acceleration. The controller projects each command onto
+its own ordered geometric path tangent before differentiating the scalar speed.
+Stop-and-turn maneuvers and the terminal region retain their braking and steering
+behavior. Invalid input, actuator, collision and custom-critic rejection counts
+are published on diagnostics,
 including computes that return NoSolution.
 
 Goal checker state_topic/state_timeout can be set independently of the controller

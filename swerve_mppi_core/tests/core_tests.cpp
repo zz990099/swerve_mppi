@@ -179,7 +179,7 @@ int main()
     Input jerk_input;
     jerk_input.path = {{0, 0, 0}, {3, 0, 0}};
     jerk_input.state.requested = {.4, 0, 0};
-    jerk_input.previous_request_acceleration = RequestAcceleration{.4, 0, .05, 0};
+    jerk_input.previous_longitudinal_request = LongitudinalRequestSample{.4, .4, .05};
     auto trajectory = [&](Velocity next) {
       Trajectory prediction;
       prediction.controls = {next};
@@ -195,6 +195,34 @@ int main()
       breakdown[0].longitudinal_jerk < 1e-10 && breakdown[1].longitudinal_jerk > .01 &&
         breakdown[2].longitudinal_jerk < 1e-10,
       "longitudinal jerk penalizes reversing acceleration without charging transverse changes");
+    jerk_input.path = arc;
+    jerk_input.goal_active = false;
+    jerk_input.previous_longitudinal_request = LongitudinalRequestSample{.5, 0., .05};
+    const PathView arc_path(arc);
+    const double start_arc = .15;
+    jerk_input.state.pose = arc_path.at(start_arc);
+    const auto previous_unit = arc_plan.unit(start_arc - .025, -.12);
+    jerk_input.state.requested = {.5 * previous_unit.vx, .5 * previous_unit.vy, 0};
+    Trajectory turning;
+    for (int i = 0; i <= 3; ++i) {
+      const double progress = start_arc + .5 * (i > 0 ? jerk_input.dt + (i - 1) * c.model_dt : 0.);
+      auto sample = jerk_input.state;
+      sample.pose = arc_path.at(progress);
+      sample.pose.yaw = i * .12;  // Body yaw changes independently of the path tangent.
+      turning.states.push_back(sample);
+      if (i == 3) break;
+      const auto unit = arc_plan.unit(progress, sample.pose.yaw);
+      turning.controls.push_back({.5 * unit.vx, .5 * unit.vy, 0});
+    }
+    auto speed_pulse = turning;
+    speed_pulse.controls.back().vx *= 1.1;
+    speed_pulse.controls.back().vy *= 1.1;
+    std::vector<double> turning_costs(2, 0);
+    tracking_critics().front()->score(
+      {jerk_input, c, &arc_plan, &breakdown}, {turning, speed_pulse}, turning_costs);
+    check(
+      breakdown[0].longitudinal_jerk < 1e-12 && breakdown[1].longitudinal_jerk > .01,
+      "a constant-speed bend has no longitudinal jerk but a speed pulse still does");
     auto t = model.rollout(state, std::vector<Velocity>(30, {0, 0.4, 0}));
     check(t.valid && t.states.back().pose.y > 0.3, "lateral presteering rollout");
     auto combo = model.rollout(state, std::vector<Velocity>(c.horizon, {0.3, 0.15, 0.2}));
@@ -271,6 +299,10 @@ int main()
       std::hypot(scheduled.command.velocity.vx, scheduled.command.velocity.vy) <=
         c.limits.linear_acceleration * .025 + 1e-9,
       "publication interval bounds actual outgoing request");
+    check(
+      scheduled.longitudinal_request_speed &&
+        std::abs(*scheduled.longitudinal_request_speed - scheduled.command.velocity.vx) < 1e-12,
+      "published longitudinal speed reflects the retimed command on a straight path");
     check(!controller.retime(publication, 0, scheduled), "zero publication interval rejected");
     Controller retiming_guard(c, {std::make_shared<RejectRetiming>()});
     auto guarded = retiming_guard.compute(publication);

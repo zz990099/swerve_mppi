@@ -43,6 +43,17 @@ int main()
     check(
       std::abs(command_interval(44.3, 44.28, previous_request, feedback) - .015) < 1e-9,
       "an unrelated chassis request cannot override the handoff allowance");
+    const auto first = longitudinal_request_sample({}, .4, 0);
+    const auto second = longitudinal_request_sample(first, .43, .06);
+    check(
+      first && !first->acceleration && second && second->acceleration &&
+        std::abs(*second->acceleration - .5) < 1e-12 && second->dt == .06,
+      "longitudinal acceleration uses the actual publication interval");
+    const auto restarted = longitudinal_request_sample(second, .45, 0);
+    check(
+      restarted && restarted->speed == .45 && !restarted->acceleration &&
+        !longitudinal_request_sample(second, std::nullopt, .05),
+      "clock discontinuities and maneuvers do not carry longitudinal acceleration");
     PathHandler path;
     path.set({{0, 0, 0}, {.8, 0, 0}, {.8, .8, 0}, {0, .8, 0}, {0, 0, 0}});
     auto local = path.local({0, 0, 0});

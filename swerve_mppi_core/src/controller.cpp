@@ -667,6 +667,11 @@ Result Controller::compute_tracking(const Input & input)
       }
       mean = cost <= costs[winner] + .02 ? weighted : batch[winner].controls;
     }
+    if (!selected.empty() && !input.alignment && !input.departure && path.length() > 1e-6) {
+      const auto unit = reference->unit(reference_arc, input.state.pose.yaw);
+      result.longitudinal_request_speed =
+        selected.front().vx * unit.vx + selected.front().vy * unit.vy;
+    }
   } catch (...) {
     if (!result.diagnostics.critic_errors) ++result.diagnostics.controller_errors;
     reset();
@@ -741,6 +746,11 @@ bool Controller::retime(const Input & input, double dt, Result & result)
     }
     result.command.velocity = controls.front();
     result.controls = controls;
+    if (result.longitudinal_request_speed) {
+      const auto unit = reference.unit(reference_arc, timed.state.pose.yaw);
+      result.longitudinal_request_speed =
+        controls.front().vx * unit.vx + controls.front().vy * unit.vy;
+    }
     result.cost = costs.front();
     result.reference_speed = reference.speed(reference_arc);
     result.reference_limit = reference.limiting_reason(reference_arc);

@@ -54,6 +54,8 @@ public:
                                                           initial_heading.strength, initial_match,
                                                           checkpoint - start.arc, c.config);
     const double velocity_weight = allow_turn_first ? .05 : 1.;
+    const auto initial_unit =
+      use_jerk ? reference.unit(start.arc, c.input.state.pose.yaw) : Velocity{};
     for (std::size_t k = 0; k < batch.size(); ++k) {
       const auto & t = batch[k];
       if (!t.valid || t.states.empty()) continue;
@@ -86,10 +88,10 @@ public:
       detail.effort += (w_.steering_change * t.actuator_cost + w_.consistency * t.residual_cost) /
                        std::max(.1, duration);
       auto previous = c.input.state.requested;
-      auto previous_acceleration = c.input.previous_request_acceleration;
-      auto previous_world = rotate_velocity(
-        previous,
-        previous_acceleration ? previous_acceleration->request_yaw : c.input.state.pose.yaw);
+      auto previous_longitudinal = c.input.previous_longitudinal_request.value_or(
+        LongitudinalRequestSample{
+          previous.vx * initial_unit.vx + previous.vy * initial_unit.vy, std::nullopt, 0});
+      auto command_unit = initial_unit;
       PathMatch m = start;
       bool initial_alignment_done = false;
       for (double v : c.input.state.wheel_speeds)
@@ -141,24 +143,20 @@ public:
         const double velocity_error = (along - target_speed) / .2;
         double dt = i == 1 ? c.input.dt : c.config.model_dt;
         if (use_jerk) {
-          // Compare both accelerations in one tangent frame. Changing body yaw
-          // or following a curve at constant speed should not look like a speed pulse.
-          const double yaw = t.states[i - 1].pose.yaw;
-          const auto world = rotate_velocity(u, yaw);
-          const RequestAcceleration acceleration{
-            (world.vx - previous_world.vx) / dt, (world.vy - previous_world.vy) / dt, dt, yaw};
-          if (previous_acceleration) {
-            const auto tangent = reference.unit(progress, 0);
-            const double delta = tangent.vx * (acceleration.x - previous_acceleration->x) +
-                                 tangent.vy * (acceleration.y - previous_acceleration->y);
-            const double normalized = delta / (.5 * (dt + previous_acceleration->dt) * jerk_scale);
+          // Commands are expressed in the body frame at the start of each step.
+          // Differentiate the scalar projection at each sample's own tangent.
+          const double speed = u.vx * command_unit.vx + u.vy * command_unit.vy;
+          const double acceleration = (speed - previous_longitudinal.speed) / dt;
+          if (previous_longitudinal.acceleration) {
+            const double normalized = (acceleration - *previous_longitudinal.acceleration) /
+                                      (.5 * (dt + previous_longitudinal.dt) * jerk_scale);
             // Give the command that will be published more weight than distant
             // rollout steps, which will be re-optimized next cycle.
             const double weight = i == 1 ? .25 + norm : norm;
             detail.longitudinal_jerk += w_.longitudinal_jerk * weight * normalized * normalized;
           }
-          previous_acceleration = acceleration;
-          previous_world = world;
+          previous_longitudinal = {speed, acceleration, dt};
+          command_unit = unit;
         }
         double smooth =
           std::pow(

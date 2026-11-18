@@ -24,11 +24,11 @@ struct SpeedPreview
   double start_arc = 0;  // Ordered arc of the first point of the local path on the plan.
   std::optional<double> previous_speed;
 };
-struct RequestAcceleration
+struct LongitudinalRequestSample
 {
-  double x = 0, y = 0;  // Acceleration of the previous request in the path frame.
-  double dt = 0;
-  double request_yaw = 0;
+  double speed = 0;  // Command projected onto the ordered path tangent at publication.
+  std::optional<double> acceleration;
+  double dt = 0;  // Interval used for the backward difference in speed.
 };
 struct State
 {
@@ -81,7 +81,7 @@ struct Input
   std::optional<bool> preview_reaches_goal;
   GoalPoseTolerance goal_tolerance;
   SpeedPreview speed_preview;
-  std::optional<RequestAcceleration> previous_request_acceleration;
+  std::optional<LongitudinalRequestSample> previous_longitudinal_request;
   bool allow_terminal_hold = true;  // A caller without usable goal tolerances can defer holding.
 
   bool reaches_goal() const;
@@ -134,6 +134,7 @@ struct Result
   bool braking_selected = false;
   bool presteering = false;
   double reference_speed = 0;
+  std::optional<double> longitudinal_request_speed;
   double geometric_heading = 0, geometric_heading_strength = 0;
   double noise_scale = 0, branch_distance = -1;
   std::uint32_t reference_limit = 0;
