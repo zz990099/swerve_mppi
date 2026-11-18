@@ -92,6 +92,11 @@ std::vector<Velocity> Controller::seed(
   State s = input.state;
   PathView path(input.path);
   double progress = path.start_match(s.pose).arc;
+  const auto initial_heading = geometric_heading ? reference.heading(progress, input.reaches_goal())
+                                                 : ReferenceProfile::HeadingPreference{};
+  const bool turn_first = prefers_heading_alignment(
+    initial_heading.strength, match_geometric_heading(s.pose.yaw, initial_heading.yaw, config_),
+    path.next_corner(progress) - progress, config_);
   std::vector<Velocity> out;
   out.reserve(config_.horizon);
   bool initial_intent = true;
@@ -112,8 +117,15 @@ std::vector<Velocity> Controller::seed(
     Velocity desired = feedback_request(config_, s, m, speed, unit);
     if (geometric_heading) {
       const auto heading = reference.heading(progress, input.reaches_goal());
-      desired.wz =
-        heading.strength * (speed * heading.curvature + 1.5 * wrap_angle(heading.yaw - s.pose.yaw));
+      const auto match = match_geometric_heading(s.pose.yaw, heading.yaw, config_);
+      const double yaw_rate =
+        heading.strength *
+        (speed * heading.curvature +
+         std::clamp(1.5 * match.error, -config_.max_yaw_rate, config_.max_yaw_rate));
+      if (turn_first)
+        desired = {0, 0, yaw_rate};
+      else
+        desired.wz = yaw_rate;
     }
     const double terminal_wz = terminal_yaw_request(config_, input, s.pose.yaw);
     if (std::abs(terminal_wz) > 1e-9) {
@@ -359,7 +371,15 @@ Result Controller::compute_tracking(const Input & input)
       wheels_stopped &= std::abs(v) < config_.limits.stopped_speed;
     const PathView path(input.path);
     const double reference_arc = path.start_match(input.state.pose).arc;
-    if (input.departure || terminal_hold) reorientation_.reset();
+    const auto initial_heading = reference->heading(reference_arc, input.reaches_goal());
+    const auto initial_match =
+      match_geometric_heading(input.state.pose.yaw, initial_heading.yaw, config_);
+    const bool offer_heading_alignment =
+      !input.alignment && !input.departure && !terminal_hold &&
+      prefers_heading_alignment(
+        initial_heading.strength, initial_match, path.next_corner(reference_arc) - reference_arc,
+        config_);
+    if (input.departure || terminal_hold || offer_heading_alignment) reorientation_.reset();
     if (reorientation_) {
       const auto target = swerve_chassis_core::inverse(
         config_.geometry, {reorientation_->vx, reorientation_->vy, reorientation_->wz},
@@ -374,7 +394,9 @@ Result Controller::compute_tracking(const Input & input)
         warm_elapsed_ = 0;
       }
     }
-    if (wheels_stopped && !reorientation_ && !input.departure && !terminal_hold) {
+    if (
+      wheels_stopped && !reorientation_ && !input.departure && !terminal_hold &&
+      !offer_heading_alignment) {
       const auto match = PathView(input.path).start_match(input.state.pose);
       const double speed = reference->speed(match.arc);
       const auto nominal_unit = reference->unit(match.arc, input.state.pose.yaw);

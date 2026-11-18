@@ -27,6 +27,7 @@ struct Config
   // the structured geometric-heading proposal.
   double geometric_heading_weight = .4, geometric_heading_scale = .35;
   double geometric_heading_window = 1.0, geometric_heading_turn_scale = .6;
+  bool geometric_heading_allow_reverse = false;
   std::uint32_t seed = 42;
 };
 void validate(const Config & config);

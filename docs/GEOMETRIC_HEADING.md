@@ -16,12 +16,21 @@ candidate yaw error do not turn off the preference. In the final ordered segment
 the preference fades smoothly across one metre before the existing 0.08 m terminal
 heading activation region. It never reads intermediate waypoint quaternion yaw.
 
+`geometric_heading_allow_reverse` defaults to `false`, which prefers aligning the
+body's forward axis with the ordered path. When enabled, the critic also accepts
+alignment with the opposite tangent and gives forward a small tie-breaking
+advantage around ±90°. Both choices advance along the ordered path. This is a
+soft cost, so lateral motion and short reverse corrections remain feasible.
+
 One additional structured candidate combines geometric yaw feedback and curvature
 feedforward with the existing path-position feedback. It retains normal command
 conditioning, actuator dynamics, collision checks and critic selection. Existing
 free-heading, braking and recovery proposals remain. It is not injected during
 latched wheel alignment, departure or terminal hold. Setting
 `geometric_heading_weight` to zero also restores the previous proposal allocation.
+On a simple path with a large yaw error, the candidate can turn before driving.
+The critic temporarily relaxes the incentive to match cruise speed so that this
+candidate can compete with immediate translation.
 
 The default Nav2 goal tolerances are 0.05 m and 5 degrees. The ordered goal checker
 supplies these tolerances to MPPI for terminal braking. The goal checker still

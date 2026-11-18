@@ -82,6 +82,8 @@ struct Nav2Controller::Runtime
     number("geometric_heading_scale", config.geometric_heading_scale);
     number("geometric_heading_window", config.geometric_heading_window);
     number("geometric_heading_turn_scale", config.geometric_heading_turn_scale);
+    config.geometric_heading_allow_reverse =
+      parameter<bool>("geometric_heading_allow_reverse", config.geometric_heading_allow_reverse);
     number("cross_gain", config.cross_gain);
     number("model_dt", config.model_dt);
     number("integration_dt", config.integration_dt);

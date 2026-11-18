@@ -10,6 +10,36 @@
 
 namespace swerve_mppi
 {
+struct HeadingMatch
+{
+  double error;
+  double loss;
+};
+
+inline HeadingMatch match_geometric_heading(double yaw, double tangent, const Config & config)
+{
+  auto loss = [&](double error) {
+    const double x = std::abs(error) / config.geometric_heading_scale;
+    return x <= 1 ? x * x : 2 * x - 1;
+  };
+  const double forward = wrap_angle(tangent - yaw);
+  const double forward_loss = loss(forward);
+  if (config.geometric_heading_allow_reverse) {
+    const double reverse = wrap_angle(tangent + swerve_chassis_core::pi - yaw);
+    // Prefer forward within a small band around equal turning effort.
+    const double reverse_loss = loss(reverse) + 0.35;
+    if (reverse_loss < forward_loss) return {reverse, reverse_loss};
+  }
+  return {forward, forward_loss};
+}
+
+inline bool prefers_heading_alignment(
+  double strength, HeadingMatch match, double clear_arc, const Config & config)
+{
+  return config.samples >= 6 && clear_arc >= 1.5 * config.geometric_heading_window &&
+         strength > .8 && std::abs(match.error) > .45;
+}
+
 // Adaptive time parameterization of an ordered geometric path. Intermediate
 // waypoint yaw is intentionally ignored: body heading is free during travel and
 // the terminal pose yaw is handled by the goal critic. Wheel targets below are

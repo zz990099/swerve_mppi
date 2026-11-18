@@ -75,6 +75,16 @@ int main()
     tracking_critics().front()->score(context, batch, costs);
     check(
       detail[1].heading > before_goal_activation, "a crop does not fade at an apparent endpoint");
+    const double pi = swerve_chassis_core::pi;
+    check(
+      std::abs(match_geometric_heading(pi, 0., config).error) > 3,
+      "default heading policy prefers turning forward from reverse");
+    config.geometric_heading_allow_reverse = true;
+    check(
+      std::abs(match_geometric_heading(pi, 0., config).error) < 1e-9 &&
+        match_geometric_heading(pi / 2, 0., config).error < 0 &&
+        match_geometric_heading(-pi / 2, 0., config).error > 0,
+      "reverse alignment is accepted and both perpendicular ties prefer forward");
     config.geometric_heading_weight = 0;
     costs.assign(2, 0);
     tracking_critics().front()->score(context, batch, costs);

@@ -39,6 +39,13 @@ public:
     const bool terminal = c.input.goal_active && preview_reaches_goal;
     const bool terminal_heading_active =
       terminal && path.length() - start.arc <= c.config.goal_heading_activation_distance;
+    const auto initial_heading = reference.heading(start.arc, preview_reaches_goal);
+    const auto initial_match =
+      match_geometric_heading(c.input.state.pose.yaw, initial_heading.yaw, c.config);
+    const bool allow_turn_first = !c.input.departure && prefers_heading_alignment(
+                                                          initial_heading.strength, initial_match,
+                                                          checkpoint - start.arc, c.config);
+    const double velocity_weight = allow_turn_first ? .05 : 1.;
     for (std::size_t k = 0; k < batch.size(); ++k) {
       const auto & t = batch[k];
       if (!t.valid || t.states.empty()) continue;
@@ -90,6 +97,7 @@ public:
         const auto unit = reference.unit(progress, s.pose.yaw);
         const double along = s.velocity.vx * unit.vx + s.velocity.vy * unit.vy;
         const auto heading = reference.heading(progress, preview_reaches_goal);
+        const auto match = match_geometric_heading(s.pose.yaw, heading.yaw, c.config);
         double target_speed = reference.speed(progress);
         double alignment_error = 0;
         bool stopped = true;
@@ -128,13 +136,16 @@ public:
           std::pow((u.wz - previous.wz) / (c.config.limits.angular_acceleration * dt), 2);
         detail.path +=
           norm * (4 * slack + w_.path_distance * std::pow(m.error / c.config.position_scale, 2));
-        // A finite, secondary body-heading preference. It depends on ordered
-        // reference geometry, never candidate speed or intermediate pose yaw.
+        // A finite body-heading preference using the ordered path tangent.
         if (!c.input.departure && heading.strength > 0) {
-          const double x =
-            std::abs(wrap_angle(s.pose.yaw - heading.yaw)) / c.config.geometric_heading_scale;
+          // When forward is preferred, backing along the path remains feasible
+          // but should not win a straight segment solely on immediate progress.
+          const double reverse_progress =
+            allow_turn_first && !c.config.geometric_heading_allow_reverse && along > 0
+              ? 6 * std::max(0., -s.velocity.vx) / std::max(.2, c.config.max_speed)
+              : 0.;
           detail.heading += norm * c.config.geometric_heading_weight * heading.strength *
-                            (x <= 1 ? x * x : 2 * x - 1);
+                            (match.loss + reverse_progress);
         }
         // During final rotation, returning at the horizon endpoint does not
         // compensate for an excursion earlier in the rollout. Keep endpoint
@@ -142,8 +153,9 @@ public:
         if (terminal_heading_active)
           detail.goal += norm * w_.goal_position *
                          std::pow(distance(s.pose, c.input.goal) / c.config.position_scale, 2);
-        detail.velocity += norm * (std::pow(excess_speed / .1, 2) +
-                                   w_.reference_velocity * velocity_error * velocity_error);
+        detail.velocity +=
+          norm * (std::pow(excess_speed / .1, 2) +
+                  w_.reference_velocity * velocity_weight * velocity_error * velocity_error);
         detail.alignment += norm * w_.presteering_alignment * alignment_error;
         detail.effort +=
           norm * (w_.effort * (u.vx * u.vx + u.vy * u.vy + u.wz * u.wz) + w_.smoothness * smooth);
