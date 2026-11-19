@@ -30,6 +30,19 @@ int main()
       stamps.accept(tick + 5'000'000, tick + 5'000'000, false) == tick + 5'000'000,
       "the next clock tick keeps the original source stamp");
     check(stamps.accept(5'000'000, 5'000'000, false) == 5'000'000, "reset after clock rewind");
+    CommandStampGuard boundary;
+    const auto edge = tick + 30'000'000;
+    check(
+      boundary.accept(edge, tick, false) == edge - 1'000,
+      "reserve space for a stop at the 30 ms future limit");
+    check(boundary.accept(edge, tick, true) == edge, "same-tick stop fits at the future limit");
+    check(!boundary.accept(edge, tick, true), "stop at the limit remains idempotent");
+    check(!boundary.accept(edge, tick, false), "motion cannot supersede the stop at the limit");
+    check(
+      !boundary.accept(edge + 1, tick + 1, false), "keep stamps distinct as double seconds");
+    check(
+      boundary.accept(edge + 5'000'000, tick + 5'000'000, false) == edge + 4'999'000,
+      "motion resumes after the clock advances");
     GoalChecker checker;
     State state;
     Pose goal;

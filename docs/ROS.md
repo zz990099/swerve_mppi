@@ -17,13 +17,15 @@ Configure one final chassis command type. Do not run the old bridge. Keep
 `enable_stamped_cmd_vel: true` for the bundled Jazzy setup; namespace and body
 frame must match the chassis. The bundled launch remaps the controller server's
 output to `cmd_vel_nav2` and runs `cmd_vel_stamp_guard` as the sole publisher to
-the chassis topic. Use the same remap and guard with custom Nav2 bringup, and
-configure both nodes for the same clock. The guard keeps normal source stamps
-and rejects a stamp more than 30 ms ahead of its clock. It discards older and
-repeated motion commands and forwards a same-tick zero
-after motion once at the original stamp plus one microsecond. This lets Nav2
-stop the robot before the next clock tick. The chassis independently checks
-simulation and steady timeouts.
+the chassis topic. It reads the controller server's `use_sim_time` setting from
+the same parameter file and defaults to system time when the setting is absent.
+With custom Nav2 bringup, use the same remap and configure both nodes for the
+same clock. The guard rejects source stamps more than 30 ms ahead of its clock.
+It preserves motion stamps except within one microsecond of that limit, where
+it reserves space for a newer stop. It discards older and repeated motion
+commands and forwards a same-tick zero after motion once, even when the clock
+is frozen at the limit. The chassis independently checks simulation and steady
+timeouts.
 
 ## Physical contract and tuning
 
