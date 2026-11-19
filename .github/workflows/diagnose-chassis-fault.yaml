@@ -1,13 +1,17 @@
-name: Replay chassis clock skew
+name: Verify 30 ms chassis command tolerance
 on:
   push:
     branches: [diagnostics/chassis-command-fault]
 permissions:
   contents: read
 jobs:
-  replay:
+  verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 16
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [closed_loop, rounded_rectangle, slalom]
     container: ros:jazzy-ros-base-noble
     defaults:
       run:
@@ -20,18 +24,88 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zz990099/swerve_gazebo_sim
-          ref: 8f986bda64d5b48af012d37cf924328e0b127468
+          ref: d5a33a83f4a9e65026d9858094aa291882dbc1f0
           path: companion-chassis
-      - run: |
-          apt-get update
-          apt-get install -y --no-install-recommends build-essential cmake python3-colcon-common-extensions ros-jazzy-rosidl-default-generators
-      - name: Build the benchmark chassis
+      - name: Install Jazzy and Harmonic dependencies
         run: |
-          python3 tools/diagnostics/trace_chassis_fault.py
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential cmake python3-colcon-common-extensions python3-psutil python3-yaml ros-jazzy-ament-cmake-gtest ros-jazzy-ament-cmake-pytest ros-jazzy-ament-cmake-python ros-jazzy-rosidl-default-generators python3-pytest ros-jazzy-tf2-geometry-msgs ros-jazzy-nav2-controller ros-jazzy-nav2-lifecycle-manager ros-jazzy-ros-gz ros-jazzy-gz-ros2-control ros-jazzy-joint-state-broadcaster ros-jazzy-forward-command-controller ros-jazzy-robot-state-publisher ros-jazzy-xacro
+      - name: Build chassis and MPPI
+        run: |
           source /opt/ros/jazzy/setup.bash
-          colcon build --base-paths companion-chassis --packages-up-to swerve_chassis_controller --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=OFF
-      - name: Replay future and repeated timestamps
+          colcon build --base-paths swerve_mppi_core swerve_mppi_ros companion-chassis --packages-up-to swerve_mppi_ros --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=OFF
+      - name: Test timestamp bounds and watchdogs on the C++ node
+        if: matrix.scenario == 'closed_loop'
         run: |
           source /opt/ros/jazzy/setup.bash
           source install/local_setup.bash
-          python3 -u tools/diagnostics/clock_race_probe.py
+          python3 -m pytest -q -s companion-chassis/swerve_gazebo_sim/test/test_controller.py
+      - name: Repeat the affected physical scenario
+        env:
+          VALIDATION_SCENARIO: ${{ matrix.scenario }}
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/local_setup.bash
+          PYTHONPATH="$PWD/swerve_mppi_ros/tests:$PYTHONPATH" python3 - <<'PY'
+          import csv
+          import json
+          import os
+          from pathlib import Path
+
+          from run_gazebo import run_case
+
+          case = os.environ['VALIDATION_SCENARIO']
+          failures = []
+          for attempt in range(1, 4):
+              directory = Path('artifacts') / str(attempt)
+              try:
+                  run_case(Path('companion-chassis').resolve(), directory, case,
+                           seed=42, record=True, minimum_length=12., max_speed=1., path_frame='map')
+              except (RuntimeError, TimeoutError) as error:
+                  print(f'{case} attempt {attempt}: {error}', flush=True)
+              result_file = directory / 'result.json'
+              if not result_file.exists():
+                  failures.append((attempt, 'missing result'))
+                  continue
+              result = json.loads(result_file.read_text())
+              with (directory / 'commands.csv').open() as stream:
+                  commands = list(csv.DictReader(stream))
+              with (directory / 'execution.csv').open() as stream:
+                  states = list(csv.DictReader(stream))
+              if not commands or not states:
+                  failures.append((attempt, 'missing commands or chassis states'))
+                  continue
+              first = float(commands[0]['command_stamp_s'])
+              last = float(commands[-1]['command_stamp_s'])
+              moving = False
+              faults = []
+              for state in states:
+                  time = float(state['chassis_stamp_s'])
+                  if not first <= time <= last:
+                      continue
+                  fault = int(state['fault'])
+                  wheel_speed = max(abs(float(state[f'wheel_rad_s_{w}'])) for w in ('fl','fr','rl','rr'))
+                  moving |= fault == 0 and wheel_speed > .05
+                  if moving and fault:
+                      faults.append((time, fault))
+              goals = result.get('goal_success') and result.get('nav2_goal_success')
+              ordered = result.get('ordered_checkpoints_visited') == result.get('ordered_checkpoints_total')
+              quality = result.get('quality_failures', [])
+              summary = dict(case=case, attempt=attempt, goal=goals, ordered=ordered, faults=faults,
+                             quality=quality, duration_s=result.get('wall_duration_s'),
+                             peak_m=result.get('path_peak_m'),
+                             final_m=result.get('final_position_error_m'),
+                             final_rad=result.get('final_yaw_error_rad'))
+              (directory / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+              print('VALIDATION ' + json.dumps(summary), flush=True)
+              if not goals or not ordered or not moving or faults or any(
+                      not item.startswith(('compute_p99_ms=', 'wall_duration_s=')) for item in quality):
+                  failures.append((attempt, summary))
+          if failures:
+              raise RuntimeError(f'Chassis or trajectory validation failed: {failures}')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chassis-30ms-${{ matrix.scenario }}
+          path: artifacts/
