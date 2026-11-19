@@ -1,17 +1,17 @@
-name: Verify 30 ms chassis command tolerance
+name: Record 32 paths and 100 m with 30 ms chassis tolerance
 on:
   push:
     branches: [diagnostics/chassis-command-fault]
 permissions:
   contents: read
 jobs:
-  verify:
+  record:
     runs-on: ubuntu-24.04
-    timeout-minutes: 16
+    timeout-minutes: 33
     strategy:
       fail-fast: false
       matrix:
-        scenario: [closed_loop, rounded_rectangle, slalom]
+        shard: [1, 2, 3, 4, long]
     container: ros:jazzy-ros-base-noble
     defaults:
       run:
@@ -19,93 +19,43 @@ jobs:
     env:
       ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
       ROS_DOMAIN_ID: '83'
+      MPLBACKEND: Agg
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: 27cb759dc36e63a22a4d860062662daf37c216d7
       - uses: actions/checkout@v4
         with:
           repository: zz990099/swerve_gazebo_sim
-          ref: d5a33a83f4a9e65026d9858094aa291882dbc1f0
+          ref: ec25fdb029749bea3dff9ad616475dcb2fe58ac2
           path: companion-chassis
-      - name: Install Jazzy and Harmonic dependencies
+      - name: Install Jazzy, Harmonic and plotting dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential cmake python3-colcon-common-extensions python3-psutil python3-yaml ros-jazzy-ament-cmake-gtest ros-jazzy-ament-cmake-pytest ros-jazzy-ament-cmake-python ros-jazzy-rosidl-default-generators python3-pytest ros-jazzy-tf2-geometry-msgs ros-jazzy-nav2-controller ros-jazzy-nav2-lifecycle-manager ros-jazzy-ros-gz ros-jazzy-gz-ros2-control ros-jazzy-joint-state-broadcaster ros-jazzy-forward-command-controller ros-jazzy-robot-state-publisher ros-jazzy-xacro
+          apt-get install -y --no-install-recommends build-essential cmake python3-colcon-common-extensions python3-psutil python3-yaml python3-matplotlib ros-jazzy-ament-cmake-gtest ros-jazzy-ament-cmake-pytest ros-jazzy-ament-cmake-python ros-jazzy-rosidl-default-generators python3-pytest ros-jazzy-tf2-geometry-msgs ros-jazzy-nav2-controller ros-jazzy-nav2-lifecycle-manager ros-jazzy-ros-gz ros-jazzy-gz-ros2-control ros-jazzy-joint-state-broadcaster ros-jazzy-forward-command-controller ros-jazzy-robot-state-publisher ros-jazzy-xacro
+      - name: Check recording contracts
+        run: python3 -m unittest discover -s swerve_mppi_ros/tests -p 'test_*.py' -v
       - name: Build chassis and MPPI
         run: |
           source /opt/ros/jazzy/setup.bash
           colcon build --base-paths swerve_mppi_core swerve_mppi_ros companion-chassis --packages-up-to swerve_mppi_ros --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=OFF
-      - name: Test timestamp bounds and watchdogs on the C++ node
-        if: matrix.scenario == 'closed_loop'
-        run: |
-          source /opt/ros/jazzy/setup.bash
-          source install/local_setup.bash
-          python3 -m pytest -q -s companion-chassis/swerve_gazebo_sim/test/test_controller.py
-      - name: Repeat the affected physical scenario
+      - name: Record the physical paths
         env:
-          VALIDATION_SCENARIO: ${{ matrix.scenario }}
+          SCENARIO_SHARD: ${{ matrix.shard }}
         run: |
           source /opt/ros/jazzy/setup.bash
           source install/local_setup.bash
-          PYTHONPATH="$PWD/swerve_mppi_ros/tests:$PYTHONPATH" python3 - <<'PY'
-          import csv
-          import json
-          import os
-          from pathlib import Path
-
-          from run_gazebo import run_case
-
-          case = os.environ['VALIDATION_SCENARIO']
-          failures = []
-          for attempt in range(1, 4):
-              directory = Path('artifacts') / str(attempt)
-              try:
-                  run_case(Path('companion-chassis').resolve(), directory, case,
-                           seed=42, record=True, minimum_length=12., max_speed=1., path_frame='map')
-              except (RuntimeError, TimeoutError) as error:
-                  print(f'{case} attempt {attempt}: {error}', flush=True)
-              result_file = directory / 'result.json'
-              if not result_file.exists():
-                  failures.append((attempt, 'missing result'))
-                  continue
-              result = json.loads(result_file.read_text())
-              with (directory / 'commands.csv').open() as stream:
-                  commands = list(csv.DictReader(stream))
-              with (directory / 'execution.csv').open() as stream:
-                  states = list(csv.DictReader(stream))
-              if not commands or not states:
-                  failures.append((attempt, 'missing commands or chassis states'))
-                  continue
-              first = float(commands[0]['command_stamp_s'])
-              last = float(commands[-1]['command_stamp_s'])
-              moving = False
-              faults = []
-              for state in states:
-                  time = float(state['chassis_stamp_s'])
-                  if not first <= time <= last:
-                      continue
-                  fault = int(state['fault'])
-                  wheel_speed = max(abs(float(state[f'wheel_rad_s_{w}'])) for w in ('fl','fr','rl','rr'))
-                  moving |= fault == 0 and wheel_speed > .05
-                  if moving and fault:
-                      faults.append((time, fault))
-              goals = result.get('goal_success') and result.get('nav2_goal_success')
-              ordered = result.get('ordered_checkpoints_visited') == result.get('ordered_checkpoints_total')
-              quality = result.get('quality_failures', [])
-              summary = dict(case=case, attempt=attempt, goal=goals, ordered=ordered, faults=faults,
-                             quality=quality, duration_s=result.get('wall_duration_s'),
-                             peak_m=result.get('path_peak_m'),
-                             final_m=result.get('final_position_error_m'),
-                             final_rad=result.get('final_yaw_error_rad'))
-              (directory / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
-              print('VALIDATION ' + json.dumps(summary), flush=True)
-              if not goals or not ordered or not moving or faults or any(
-                      not item.startswith(('compute_p99_ms=', 'wall_duration_s=')) for item in quality):
-                  failures.append((attempt, summary))
-          if failures:
-              raise RuntimeError(f'Chassis or trajectory validation failed: {failures}')
-          PY
+          if [[ "$SCENARIO_SHARD" == long ]]; then
+            GITHUB_SHA=$(git rev-parse HEAD) python3 swerve_mppi_ros/tests/run_long_route.py --chassis-root companion-chassis --output artifacts
+          else
+            start=$(( (SCENARIO_SHARD - 1) * 8 ))
+            mapfile -t cases < <(PYTHONPATH="$PWD/swerve_mppi_ros/tests" python3 -c 'from trajectory_scenarios import BENCHMARK_CASES; print(*BENCHMARK_CASES, sep=chr(10))')
+            test "${#cases[@]}" -eq 32
+            python3 swerve_mppi_ros/tests/run_trajectory_rounds.py --chassis-root companion-chassis --output artifacts --rounds 1 --seed-base 42 --min-path-length 12 --max-speed 1.0 --path-frame map --commit "$(git rev-parse HEAD)" --cases "${cases[@]:start:8}"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: chassis-30ms-${{ matrix.scenario }}
+          name: mppi-30ms-${{ matrix.shard }}
           path: artifacts/
+          if-no-files-found: error
