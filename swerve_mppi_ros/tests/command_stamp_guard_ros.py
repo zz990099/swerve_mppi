@@ -126,8 +126,10 @@ def test_same_stamp_stop_at_the_future_limit(graph, tmp_path):
           '-p', 'wall_timeout:=3.0')
     wait(lambda: commands.get_subscription_count() and feedback.get_subscription_count() and
          {'cmd_vel_stamp_guard', 'swerve_controller'} <= {
-             endpoint.node_name for endpoint in node.get_subscriptions_info_by_topic('/clock')},
-         'chassis and relay clock subscriptions')
+             endpoint.node_name for endpoint in node.get_subscriptions_info_by_topic('/clock')} and
+         any(endpoint.node_name == 'swerve_controller' for endpoint in
+             node.get_subscriptions_info_by_topic(f'{NAMESPACE}/cmd_vel')),
+         'chassis and relay clock and command subscriptions')
 
     now = 10_000_000_000
     clock_msg = Clock(clock=ros_stamp(now))
@@ -140,9 +142,24 @@ def test_same_stamp_stop_at_the_future_limit(graph, tmp_path):
     joints.position = joints.velocity = [0.] * 8
     wait(lambda: state.feedback_valid, 'fresh chassis feedback',
          publish=lambda: feedback.publish(joints))
-    initial_stop = command(now, 0.)
-    wait(lambda: state.fault == 0 and state.command_sequence > 0, 'startup stop',
-         timeout=1., publish=lambda: commands.publish(initial_stop))
+
+    start_stamp = now - 50_000_000
+    retry_at = 0.
+
+    def publish_startup_stop():
+        nonlocal start_stamp, retry_at
+        clock.publish(clock_msg)
+        wall_time = time.monotonic()
+        if wall_time >= retry_at:
+            # A repeated stamp cannot recover a stop lost while DDS endpoints match.
+            start_stamp += 1_000_000
+            retry_at = wall_time + .1
+            commands.publish(command(start_stamp, 0.))
+
+    wait(lambda: state.fault == 0 and abs(nanoseconds(state.command_stamp) - start_stamp) < 1_000
+         and wire and nanoseconds(wire[-1].header.stamp) == start_stamp,
+         'chassis acknowledgement of the latest startup stop',
+         timeout=2., publish=publish_startup_stop)
     sequence = state.command_sequence
 
     edge = now + 30_000_000
