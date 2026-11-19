@@ -73,12 +73,25 @@ def main():
                  '-p', 'use_sim_time:=true'], start_new_session=True))
         wait(lambda: commands.get_subscription_count() == 1 and
              clock.get_subscription_count() == 2 and
-             feedback.get_subscription_count() == 1, 12)
+             feedback.get_subscription_count() == 1 and
+             any(e.node_name == 'swerve_controller' for e in
+                 node.get_subscriptions_info_by_topic('/probe/cmd_vel')), 12)
         # Keep the first clock value available until both ROS clocks initialize.
         set_clock(ns, 3)
         wait(lambda: state[0].feedback_valid, 3, lambda: joints(ns))
-        command(ns, 0.)
-        wait(lambda: state[0].fault == 0)
+        for _ in range(8):
+            ns += 20_000_000
+            set_clock(ns)
+            wait(lambda: timestamp(state[0].feedback_stamp) == ns and state[0].feedback_valid,
+                 repeat=lambda: joints(ns))
+            command(ns, 0.)
+            try:
+                wait(lambda: state[0].fault == 0)
+                break
+            except AssertionError:
+                continue
+        else:
+            raise AssertionError(f'Chassis did not accept a startup stop: {state[0]}')
 
         ns += 50_000_000
         set_clock(ns)
