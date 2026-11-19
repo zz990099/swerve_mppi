@@ -38,8 +38,7 @@ int main()
     check(boundary.accept(edge, tick, true) == edge, "same-tick stop fits at the future limit");
     check(!boundary.accept(edge, tick, true), "stop at the limit remains idempotent");
     check(!boundary.accept(edge, tick, false), "motion cannot supersede the stop at the limit");
-    check(
-      !boundary.accept(edge + 1, tick + 1, false), "keep stamps distinct as double seconds");
+    check(!boundary.accept(edge + 1, tick + 1, false), "keep stamps distinct as double seconds");
     check(
       boundary.accept(edge + 5'000'000, tick + 5'000'000, false) == edge + 4'999'000,
       "motion resumes after the clock advances");
