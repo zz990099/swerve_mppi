@@ -63,6 +63,7 @@ class Recording:
         self.last_request = None
         self.last_publication = None
         self.nonincreasing_command_stamps = 0
+        self.restamped_stops = 0
         self.chassis_faults_after_motion = 0
         self.execution_motion_started = False
         self.previous_fault = 0
@@ -100,7 +101,8 @@ class Recording:
         self.prediction_file = (self.directory/'predictions.csv').open('w', newline='', buffering=1)
         self.command_file = (self.directory/'commands.csv').open('w', newline='', buffering=1)
         self.command_writer = csv.writer(self.command_file)
-        self.command_writer.writerow(['command_stamp_s', 'observer_stamp_s', 'vx_m_s', 'vy_m_s', 'wz_rad_s'])
+        self.command_writer.writerow(['command_stamp_s', 'observer_stamp_s', 'vx_m_s',
+                                      'vy_m_s', 'wz_rad_s', 'restamped_stop'])
         self.execution_file = (self.directory/'execution.csv').open('w', newline='', buffering=1)
         self.execution_writer = csv.writer(self.execution_file)
         self.execution_writer.writerow(['chassis_stamp_s', 'feedback_stamp_s', 'command_stamp_s',
@@ -140,18 +142,25 @@ class Recording:
         source = message.header.stamp
         timestamp_ns = source.sec*1_000_000_000 + source.nanosec
         request = (message.twist.linear.x, message.twist.linear.y, message.twist.angular.z)
-        self.command_writer.writerow([stamp(message), observer_stamp, *request])
+        restamped_stop = False
         if self.last_publication is not None:
-            previous_ns, previous = self.last_publication
-            if timestamp_ns <= previous_ns:
+            previous_ns, previous, previous_restamped = self.last_publication
+            delta_ns = timestamp_ns-previous_ns
+            if delta_ns <= 0:
                 self.nonincreasing_command_stamps += 1
+                self.command_writer.writerow([stamp(message), observer_stamp, *request, 0])
                 return
-            dt = (timestamp_ns-previous_ns)*1e-9
-            self.max_request_linear_rate = max(self.max_request_linear_rate,
-                math.hypot(request[0]-previous[0], request[1]-previous[1])/dt)
-            self.max_request_angular_rate = max(self.max_request_angular_rate,
-                abs(request[2]-previous[2])/dt)
-        self.last_publication = (timestamp_ns, request)
+            # The relay emits a same-tick zero 1 us after the preceding motion stamp.
+            restamped_stop = delta_ns == 1_000 and not any(request) and any(previous)
+            if not (restamped_stop or previous_restamped):
+                dt = delta_ns*1e-9
+                self.max_request_linear_rate = max(self.max_request_linear_rate,
+                    math.hypot(request[0]-previous[0], request[1]-previous[1])/dt)
+                self.max_request_angular_rate = max(self.max_request_angular_rate,
+                    abs(request[2]-previous[2])/dt)
+        self.command_writer.writerow([stamp(message), observer_stamp, *request, int(restamped_stop)])
+        self.restamped_stops += restamped_stop
+        self.last_publication = (timestamp_ns, request, restamped_stop)
 
     def execution(self, message):
         timestamp = stamp(message)
@@ -237,6 +246,7 @@ class Recording:
         self.metadata.update(status='passed' if success else 'failed', reason=reason,
                              samples=count, wall_duration_s=time.monotonic()-self.start,
                              nonincreasing_command_stamps=self.nonincreasing_command_stamps,
+                             restamped_stops=self.restamped_stops,
                              chassis_faults_after_motion=self.chassis_faults_after_motion)
         self.metadata['initial_wait_to_motion_s'] = (self.moving_started-self.first_stamp
             if self.moving_started is not None and self.first_stamp is not None else None)
@@ -268,8 +278,9 @@ class Recording:
             self.metadata['effective_samples_mean'] = sum(self.effective_samples)/len(self.effective_samples)
             self.metadata['effective_samples_min'] = min(self.effective_samples)
         self.metadata['goal_success'] = success
-        limits, failures = evaluate(self.metadata)
-        self.metadata.update(quality_limits=limits, quality_failures=failures)
+        limits, failures, warnings = evaluate(self.metadata)
+        self.metadata.update(quality_limits=limits, quality_failures=failures,
+                             quality_warnings=warnings)
         if failures:
             self.metadata['status'] = 'failed'
         self._write_metadata()

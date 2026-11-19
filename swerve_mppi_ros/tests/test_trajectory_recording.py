@@ -40,6 +40,11 @@ class RecordingTests(unittest.TestCase):
                         max_request_linear_rate=.9, max_request_angular_rate=1.3, compute_p99_ms=20.,
                         nonincreasing_command_stamps=0, chassis_faults_after_motion=0)
         self.assertEqual(evaluate(metadata)[1], [])
+        timing = dict(metadata, wall_duration_s=80., compute_p99_ms=65.,
+                      max_request_linear_rate=1.12)
+        _, failures, warnings = evaluate(timing)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(warnings), 3)
         for key, value in [('path_peak_m', .1001), ('final_position_error_m', .0501),
                            ('nonincreasing_command_stamps', 1), ('chassis_faults_after_motion', 1),
                            ('final_yaw_error_rad', math.radians(5.01))]:
@@ -118,6 +123,22 @@ class RecordingTests(unittest.TestCase):
             self.assertAlmostEqual(record.max_request_angular_rate, 1.2)
             self.assertEqual(record.max_feedback_linear_rate, 0.)
             self.assertEqual(record.metadata['nonincreasing_command_stamps'], 2)
+
+    def test_restamped_stop_breaks_the_request_slew_interval(self):
+        with TemporaryDirectory() as temporary:
+            record = Recording(temporary, 'straight', [(0, 0, 0), (1, 0, 0)], 42,
+                               pose(0, 0, 0), pose(0, 0, 0), 2)
+            for ns, vx in [(0, .5), (1_000, 0.), (15_000_000, .6), (65_000_000, .64)]:
+                command = NS(header=NS(stamp=NS(sec=2, nanosec=ns)),
+                             twist=NS(linear=NS(x=vx, y=0.), angular=NS(z=0.)))
+                record.command(command, 2.)
+            record.close(False, 'command audit', [])
+            self.assertAlmostEqual(record.max_request_linear_rate, .8)
+            self.assertEqual(record.metadata['restamped_stops'], 1)
+            self.assertEqual(record.metadata['nonincreasing_command_stamps'], 0)
+            with (Path(temporary)/'commands.csv').open() as file:
+                self.assertEqual([row['restamped_stop'] for row in csv.DictReader(file)],
+                                 ['0', '1', '0', '0'])
 
     def test_rotated_coordinate_frames(self):
         x, y, angle = local_pose(pose(10, 21, math.pi), pose(10, 20, math.pi/2))
