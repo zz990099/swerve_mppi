@@ -46,12 +46,12 @@ jobs:
           source /opt/ros/jazzy/setup.bash
           source install/local_setup.bash
           if [[ "$SCENARIO_SHARD" == long ]]; then
-            GITHUB_SHA=$(git rev-parse HEAD) python3 swerve_mppi_ros/tests/run_long_route.py --chassis-root companion-chassis --output artifacts
+            GITHUB_SHA=27cb759dc36e63a22a4d860062662daf37c216d7 python3 swerve_mppi_ros/tests/run_long_route.py --chassis-root companion-chassis --output artifacts
           else
             start=$(( (SCENARIO_SHARD - 1) * 8 ))
             mapfile -t cases < <(PYTHONPATH="$PWD/swerve_mppi_ros/tests" python3 -c 'from trajectory_scenarios import BENCHMARK_CASES; print(*BENCHMARK_CASES, sep=chr(10))')
             test "${#cases[@]}" -eq 32
-            python3 swerve_mppi_ros/tests/run_trajectory_rounds.py --chassis-root companion-chassis --output artifacts --rounds 1 --seed-base 42 --min-path-length 12 --max-speed 1.0 --path-frame map --commit "$(git rev-parse HEAD)" --cases "${cases[@]:start:8}"
+            python3 swerve_mppi_ros/tests/run_trajectory_rounds.py --chassis-root companion-chassis --output artifacts --rounds 1 --seed-base 42 --min-path-length 12 --max-speed 1.0 --path-frame map --commit "27cb759dc36e63a22a4d860062662daf37c216d7" --cases "${cases[@]:start:8}"
           fi
       - uses: actions/upload-artifact@v4
         if: always()
