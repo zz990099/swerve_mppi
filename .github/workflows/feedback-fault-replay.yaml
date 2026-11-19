@@ -1,0 +1,39 @@
+name: Replay a joint feedback sample ahead of the chassis clock
+on:
+  push:
+    branches: [diagnostics/pr9-feedback-replay]
+permissions:
+  contents: read
+  packages: read
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    container:
+      image: ghcr.io/zz990099/swerve_mppi:jazzy-test-sha-794e6e0cb5378d8117335024f7369d16a38f6778
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      ROS_DOMAIN_ID: '97'
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: zz990099/swerve_gazebo_sim
+          ref: ec25fdb029749bea3dff9ad616475dcb2fe58ac2
+          path: companion-chassis
+      - name: Build the pinned chassis with first-fault diagnostics
+        run: |
+          python3 tools/diagnostics/trace_feedback_fault.py
+          source /opt/ros/jazzy/setup.bash
+          colcon build --base-paths companion-chassis --packages-up-to swerve_chassis_controller --parallel-workers 2 --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=OFF
+      - name: Replay valid feedback followed by 10 ms and 15 ms clock leads
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/local_setup.bash
+          python3 tools/diagnostics/replay_feedback_clock.py
