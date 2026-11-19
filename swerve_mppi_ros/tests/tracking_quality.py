@@ -5,7 +5,8 @@ import math
 TRACKING_LIMITS = dict(path_peak_m=.10, final_position_error_m=.05,
                        final_yaw_error_rad=math.radians(5))
 LIMITS = dict(**TRACKING_LIMITS, stopped_fraction=.55,
-              max_request_linear_rate=1.05, max_request_angular_rate=1.5, compute_p99_ms=50.)
+              max_request_linear_rate=1.05, max_request_angular_rate=1.5, compute_p99_ms=50.,
+              nonincreasing_command_stamps=0, chassis_faults_after_motion=0)
 
 
 def reference_match(x, y, points):

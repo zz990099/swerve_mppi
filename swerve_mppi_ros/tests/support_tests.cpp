@@ -2,6 +2,7 @@
 #include <stdexcept>
 
 #include "swerve_mppi/controller.hpp"
+#include "swerve_mppi_ros/command_stamp_guard.hpp"
 #include "swerve_mppi_ros/control_support.hpp"
 #include "swerve_mppi_ros/costmap_critic.hpp"
 using namespace swerve_mppi_ros;
@@ -12,6 +13,23 @@ void check(bool c, const char * m)
 int main()
 {
   try {
+    CommandStampGuard stamps;
+    const std::int64_t tick = 1'795'052'806'810'000'000;
+    check(!stamps.accept(tick, 0, false), "an uninitialized clock cannot forward commands");
+    check(!stamps.accept(tick + 31'000'000, tick, false), "reject implausible future motion");
+    check(stamps.accept(tick, tick, false) == tick, "keep the normal publication stamp");
+    check(!stamps.accept(tick, tick, false), "drop duplicate motion without refreshing it");
+    const auto stop = stamps.accept(tick, tick, true);
+    check(
+      stop && static_cast<double>(*stop) * 1e-9 > static_cast<double>(tick) * 1e-9,
+      "same-tick zero remains newer in chassis double-second comparisons");
+    check(!stamps.accept(tick, tick, true), "a frozen clock cannot refresh the stop");
+    check(!stamps.accept(tick, tick, false), "same-tick motion cannot override the stop");
+    check(!stamps.accept(tick - 1, tick, false), "discard older motion");
+    check(
+      stamps.accept(tick + 5'000'000, tick + 5'000'000, false) == tick + 5'000'000,
+      "the next clock tick keeps the original source stamp");
+    check(stamps.accept(5'000'000, 5'000'000, false) == 5'000'000, "reset after clock rewind");
     GoalChecker checker;
     State state;
     Pose goal;

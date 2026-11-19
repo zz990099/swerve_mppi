@@ -8,15 +8,22 @@ protocol have been removed.
 ## Topics
 
 - Input `chassis_controller/state`: `swerve_chassis_msgs/ChassisState`, sensor-data QoS.
-- Output: standard Nav2 `cmd_vel` (`TwistStamped` with body frame and source stamp).
+- Output `cmd_vel` carries stamped body-frame velocity after the command stamp guard.
 - Diagnostics: `FollowPath/diagnostics`, including compute_ms, cost, evaluated count and effective_samples.
 - Prediction: `FollowPath/prediction`, published when subscribed.
 - Localization/odometry and costmap remain ordinary Nav2 inputs.
 
 Configure one final chassis command type. Do not run the old bridge. Keep
 `enable_stamped_cmd_vel: true` for the bundled Jazzy setup; namespace and body
-frame must match the chassis. Cancellation and zero publication remain Nav2's
-responsibility; the chassis independently checks simulation and steady timeouts.
+frame must match the chassis. The bundled launch remaps the controller server's
+output to `cmd_vel_nav2` and runs `cmd_vel_stamp_guard` as the sole publisher to
+the chassis topic. Use the same remap and guard with custom Nav2 bringup, and
+configure both nodes for the same clock. The guard keeps normal source stamps
+and rejects a stamp more than 30 ms ahead of its clock. It discards older and
+repeated motion commands and forwards a same-tick zero
+after motion once at the original stamp plus one microsecond. This lets Nav2
+stop the robot before the next clock tick. The chassis independently checks
+simulation and steady timeouts.
 
 ## Physical contract and tuning
 

@@ -62,6 +62,10 @@ class Recording:
         self.heading_errors = []
         self.last_request = None
         self.last_publication = None
+        self.nonincreasing_command_stamps = 0
+        self.chassis_faults_after_motion = 0
+        self.execution_motion_started = False
+        self.previous_fault = 0
         self.max_feedback_linear_rate = 0.
         self.max_feedback_angular_rate = 0.
         self.effective_samples = []
@@ -133,18 +137,21 @@ class Recording:
                 self.effective_samples.append(float(values['effective_samples']))
 
     def command(self, message, observer_stamp):
-        timestamp = stamp(message)
+        source = message.header.stamp
+        timestamp_ns = source.sec*1_000_000_000 + source.nanosec
         request = (message.twist.linear.x, message.twist.linear.y, message.twist.angular.z)
-        self.command_writer.writerow([timestamp, observer_stamp, *request])
+        self.command_writer.writerow([stamp(message), observer_stamp, *request])
         if self.last_publication is not None:
-            previous_time, previous = self.last_publication
-            dt = timestamp-previous_time
-            if dt > 1e-6:
-                self.max_request_linear_rate = max(self.max_request_linear_rate,
-                    math.hypot(request[0]-previous[0], request[1]-previous[1])/dt)
-                self.max_request_angular_rate = max(self.max_request_angular_rate,
-                    abs(request[2]-previous[2])/dt)
-        self.last_publication = (timestamp, request)
+            previous_ns, previous = self.last_publication
+            if timestamp_ns <= previous_ns:
+                self.nonincreasing_command_stamps += 1
+                return
+            dt = (timestamp_ns-previous_ns)*1e-9
+            self.max_request_linear_rate = max(self.max_request_linear_rate,
+                math.hypot(request[0]-previous[0], request[1]-previous[1])/dt)
+            self.max_request_angular_rate = max(self.max_request_angular_rate,
+                abs(request[2]-previous[2])/dt)
+        self.last_publication = (timestamp_ns, request)
 
     def execution(self, message):
         timestamp = stamp(message)
@@ -154,6 +161,10 @@ class Recording:
             if 0 < dt <= .1 and 0 <= phase < 5:
                 self.execution_seconds[phase] += dt
         self.execution_previous = (timestamp, message.execution)
+        self.execution_motion_started |= max(map(abs, message.wheel_speeds)) >= .05
+        if self.execution_motion_started and message.fault and message.fault != self.previous_fault:
+            self.chassis_faults_after_motion += 1
+        self.previous_fault = message.fault
         self.execution_writer.writerow([stamp(message),
             message.feedback_stamp.sec+message.feedback_stamp.nanosec*1e-9,
             message.command_stamp.sec+message.command_stamp.nanosec*1e-9,
@@ -224,7 +235,9 @@ class Recording:
         self.diagnostic_file.close()
         count = len(self.errors)
         self.metadata.update(status='passed' if success else 'failed', reason=reason,
-                             samples=count, wall_duration_s=time.monotonic()-self.start)
+                             samples=count, wall_duration_s=time.monotonic()-self.start,
+                             nonincreasing_command_stamps=self.nonincreasing_command_stamps,
+                             chassis_faults_after_motion=self.chassis_faults_after_motion)
         self.metadata['initial_wait_to_motion_s'] = (self.moving_started-self.first_stamp
             if self.moving_started is not None and self.first_stamp is not None else None)
         self.metadata['execution_duration_s'] = dict(zip(

@@ -14,7 +14,10 @@ def generate_launch_description():
         DeclareLaunchArgument('parameters', default_value=PathJoinSubstitution([
             FindPackageShare('swerve_mppi_ros'), 'config', 'controller.yaml'])),
         Node(package='nav2_controller', executable='controller_server', name='controller_server',
-             namespace=namespace, output='screen', parameters=[parameters]),
+             namespace=namespace, output='screen', parameters=[parameters],
+             remappings=[('cmd_vel', 'cmd_vel_nav2')]),
+        Node(package='swerve_mppi_ros', executable='cmd_vel_stamp_guard', name='cmd_vel_stamp_guard',
+             namespace=namespace, output='screen', parameters=[{'use_sim_time': True}, parameters]),
         Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
              name='lifecycle_manager_controller', namespace=namespace, output='screen',
              parameters=[{'use_sim_time': True, 'autostart': True,

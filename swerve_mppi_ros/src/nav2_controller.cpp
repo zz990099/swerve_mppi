@@ -389,12 +389,19 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     const double dt = r.last_time > 0 ? now - r.last_time : 1 / r.frequency;
     r.last_time = now;
     if (dt <= 0 || dt > 1) throw nav2_core::NoValidControl("control clock discontinuity");
+    if (!r.measured) throw nav2_core::NoValidControl("chassis state is missing");
+    if (!r.measured->feedback_valid)
+      throw nav2_core::NoValidControl("chassis reports invalid feedback");
+    const double feedback_age = now - r.measured->feedback_stamp;
+    const double state_age = now - r.state_stamp;
+    const double receipt_age = std::chrono::duration<double>(Steady::now() - r.state_wall).count();
     if (
-      !r.measured || !r.measured->feedback_valid || now - r.measured->feedback_stamp < -0.01 ||
-      now - r.measured->feedback_stamp > r.timeout || now - r.state_stamp < -0.05 ||
-      now - r.state_stamp > r.timeout ||
-      std::chrono::duration<double>(Steady::now() - r.state_wall).count() > r.timeout)
-      throw nav2_core::NoValidControl("chassis state is stale or missing");
+      feedback_age < -0.01 || feedback_age > r.timeout || state_age < -0.05 ||
+      state_age > r.timeout || receipt_age > r.timeout)
+      throw nav2_core::NoValidControl(
+        "chassis state age is out of range (feedback/state/receipt s: " +
+        std::to_string(feedback_age) + "/" + std::to_string(state_age) + "/" +
+        std::to_string(receipt_age) + ")");
     geometry_msgs::msg::TwistStamped out;
     out.header.stamp = control_stamp;
     out.header.frame_id = r.body_frame;

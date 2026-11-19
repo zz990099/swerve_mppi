@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zz990099/swerve_gazebo_sim
-          ref: 8f986bda64d5b48af012d37cf924328e0b127468
+          ref: ec25fdb029749bea3dff9ad616475dcb2fe58ac2
           path: companion-chassis
       - name: Install Jazzy, Harmonic and plotting dependencies
         run: |
@@ -60,4 +60,3 @@ jobs:
           name: mppi-trajectories-32-cases
           path: artifacts/
           if-no-files-found: warn
-
