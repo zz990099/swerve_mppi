@@ -1,4 +1,4 @@
-name: Record 32 paths and 100 m with 30 ms chassis tolerance
+name: Replay same-tick velocity stop on ROS
 on:
   push:
     branches: [diagnostics/chassis-command-fault]
@@ -7,11 +7,7 @@ permissions:
 jobs:
   record:
     runs-on: ubuntu-24.04
-    timeout-minutes: 33
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, long]
+    timeout-minutes: 15
     container: ros:jazzy-ros-base-noble
     defaults:
       run:
@@ -22,8 +18,10 @@ jobs:
       MPLBACKEND: Agg
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          ref: 27cb759dc36e63a22a4d860062662daf37c216d7
+          ref: f9096a61ce8bf313e766dc17b7398f363ec0a375
+          path: mppi
       - uses: actions/checkout@v4
         with:
           repository: zz990099/swerve_gazebo_sim
@@ -34,28 +32,13 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends build-essential cmake python3-colcon-common-extensions python3-psutil python3-yaml python3-matplotlib ros-jazzy-ament-cmake-gtest ros-jazzy-ament-cmake-pytest ros-jazzy-ament-cmake-python ros-jazzy-rosidl-default-generators python3-pytest ros-jazzy-tf2-geometry-msgs ros-jazzy-nav2-controller ros-jazzy-nav2-lifecycle-manager ros-jazzy-ros-gz ros-jazzy-gz-ros2-control ros-jazzy-joint-state-broadcaster ros-jazzy-forward-command-controller ros-jazzy-robot-state-publisher ros-jazzy-xacro
       - name: Check recording contracts
-        run: python3 -m unittest discover -s swerve_mppi_ros/tests -p 'test_*.py' -v
+        run: python3 -m unittest discover -s mppi/swerve_mppi_ros/tests -p 'test_*.py' -v
       - name: Build chassis and MPPI
         run: |
           source /opt/ros/jazzy/setup.bash
-          colcon build --base-paths swerve_mppi_core swerve_mppi_ros companion-chassis --packages-up-to swerve_mppi_ros --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=OFF
-      - name: Record the physical paths
-        env:
-          SCENARIO_SHARD: ${{ matrix.shard }}
+          colcon build --base-paths mppi/swerve_mppi_core mppi/swerve_mppi_ros companion-chassis --packages-up-to swerve_mppi_ros --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=OFF
+      - name: Replay normal motion and a same-tick stop
         run: |
           source /opt/ros/jazzy/setup.bash
           source install/local_setup.bash
-          if [[ "$SCENARIO_SHARD" == long ]]; then
-            GITHUB_SHA=27cb759dc36e63a22a4d860062662daf37c216d7 python3 swerve_mppi_ros/tests/run_long_route.py --chassis-root companion-chassis --output artifacts
-          else
-            start=$(( (SCENARIO_SHARD - 1) * 8 ))
-            mapfile -t cases < <(PYTHONPATH="$PWD/swerve_mppi_ros/tests" python3 -c 'from trajectory_scenarios import BENCHMARK_CASES; print(*BENCHMARK_CASES, sep=chr(10))')
-            test "${#cases[@]}" -eq 32
-            python3 swerve_mppi_ros/tests/run_trajectory_rounds.py --chassis-root companion-chassis --output artifacts --rounds 1 --seed-base 42 --min-path-length 12 --max-speed 1.0 --path-frame map --commit "27cb759dc36e63a22a4d860062662daf37c216d7" --cases "${cases[@]:start:8}"
-          fi
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: mppi-30ms-${{ matrix.shard }}
-          path: artifacts/
-          if-no-files-found: error
+          python3 -u tools/diagnostics/replay_cmd_vel_stamp.py
