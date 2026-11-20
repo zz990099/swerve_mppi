@@ -386,8 +386,8 @@ Result Controller::compute_tracking(const Input & input)
     // has been cropped to its outgoing leg. Hold steering intent on departure.
     const auto * section = input.speed_preview.plan;
     const bool near_passed_corner =
-      section ? section->just_passed_corner(input.speed_preview.start_arc + reference_arc) :
-                reference->just_passed_corner(reference_arc);
+      section ? section->just_passed_corner(input.speed_preview.start_arc + reference_arc)
+              : reference->just_passed_corner(reference_arc);
     const bool offer_heading_alignment =
       !(has_translated_ && near_passed_corner) && !input.alignment && !input.departure &&
       !terminal_hold &&
