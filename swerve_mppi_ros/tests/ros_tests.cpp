@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <rcl/time.h>
 
 #include <chrono>
 #include <nav2_core/controller.hpp>
@@ -13,6 +14,26 @@
 using namespace std::chrono_literals;
 using namespace swerve_mppi_ros;
 using Observation = swerve_chassis_msgs::msg::ChassisState;
+class GoalCheckerWithoutTolerances : public nav2_core::GoalChecker
+{
+public:
+  void initialize(
+    const rclcpp_lifecycle::LifecycleNode::WeakPtr &, const std::string &,
+    const std::shared_ptr<nav2_costmap_2d::Costmap2DROS>) override
+  {
+  }
+  void reset() override {}
+  bool isGoalReached(
+    const geometry_msgs::msg::Pose &, const geometry_msgs::msg::Pose &,
+    const geometry_msgs::msg::Twist &) override
+  {
+    return false;
+  }
+  bool getTolerances(geometry_msgs::msg::Pose &, geometry_msgs::msg::Twist &) override
+  {
+    return false;
+  }
+};
 class Nav2PluginTest : public ::testing::Test
 {
 protected:
@@ -23,7 +44,9 @@ protected:
     node = std::make_shared<rclcpp_lifecycle::LifecycleNode>("test_controller_server");
     node->declare_parameter("FollowPath.samples", 16);
     node->declare_parameter("FollowPath.state_timeout", 0.5);
+    node->declare_parameter("FollowPath.state_future_tolerance", 0.03);
     node->declare_parameter("goal_checker.settle_time", 0.05);
+    node->declare_parameter("goal_checker.state_future_tolerance", 0.03);
     costmap = std::make_shared<nav2_costmap_2d::Costmap2DROS>("test_local_costmap");
     costmap->set_parameters(
       {rclcpp::Parameter("global_frame", "odom"),
@@ -206,6 +229,43 @@ TEST_F(Nav2PluginTest, FutureSnapshotDoesNotEraseFreshValidatedFeedback)
     controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get()),
     nav2_core::NoValidControl);
 }
+TEST_F(Nav2PluginTest, GazeboTimestampSkewReachesControllerAndGoalChecker)
+{
+  controller->setPlan(path({{0, 0, 0}, {1, 0, 0}}));
+  compute();  // Prime an earlier clock epoch and its cached feedback.
+  auto clock = node->get_clock();
+  ASSERT_EQ(rcl_enable_ros_time_override(clock->get_clock_handle()), RCL_RET_OK);
+  geometry_msgs::msg::PoseStamped current;
+  current.header.frame_id = "odom";
+  current.pose = pose_message({});
+  auto request = [&] {
+    return controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get());
+  };
+  auto publish_with_lead = [&](std::int64_t now, std::int64_t lead) {
+    ASSERT_EQ(rcl_set_ros_time_override(clock->get_clock_handle(), now), RCL_RET_OK);
+    current.header.stamp = clock->now();
+    observed.header.stamp = rclcpp::Time(now + lead, RCL_ROS_TIME);
+    observed.feedback_stamp = observed.header.stamp;
+    states->publish(observed);
+    spin(20);
+  };
+  publish_with_lead(10'000'000'000, 15'000'000);
+  ASSERT_GT(request().twist.linear.x, 0.);
+  publish_with_lead(10'050'000'000, 30'000'000);
+  ASSERT_GT(request().twist.linear.x, 0.);
+
+  auto ordered = dynamic_cast<OrderedGoalChecker *>(goal.get());
+  ASSERT_NE(ordered, nullptr);
+  const geometry_msgs::msg::Twist stopped;
+  ordered->setReady(true);
+  EXPECT_FALSE(goal->isGoalReached(current.pose, current.pose, stopped));
+  publish_with_lead(10'110'000'000, 30'000'000);
+  EXPECT_TRUE(goal->isGoalReached(current.pose, current.pose, stopped));
+
+  publish_with_lead(10'650'000'000, 30'000'001);
+  EXPECT_THROW(request(), nav2_core::NoValidControl);
+  EXPECT_FALSE(goal->isGoalReached(current.pose, current.pose, stopped));
+}
 TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
 {
   controller->setPlan(path({{0, 0, 0}, {0.5, 0.5, 0.5}}));
@@ -258,6 +318,31 @@ TEST_F(Nav2PluginTest, GoalCheckerUsesLiveTransformedEndpoint)
   std::this_thread::sleep_for(550ms);
   publish_state();
   EXPECT_FALSE(goal->isGoalReached(query, historical_target, geometry_msgs::msg::Twist{}));
+}
+TEST_F(Nav2PluginTest, TerminalHoldUsesActiveGoalCheckerTolerances)
+{
+  constexpr Pose target{1, 0, 0};
+  constexpr Pose outside_strict{.965, 0, swerve_chassis_core::pi / 60};
+  constexpr Pose inside_strict{.99, 0, .01};
+  auto request_at = [&](Pose current) {
+    observed.requested_velocity = geometry_msgs::msg::Twist{};
+    controller->setPlan(path({current, target}));
+    const auto cmd = compute(current).twist;
+    return std::hypot(cmd.linear.x, cmd.linear.y) + std::abs(cmd.angular.z);
+  };
+
+  EXPECT_LT(request_at(outside_strict), 1e-8);  // Default OrderedGoalChecker.
+  node->declare_parameter("strict_goal_checker.xy_goal_tolerance", .02);
+  node->declare_parameter("strict_goal_checker.yaw_goal_tolerance", .02);
+  goal = goal_loader->createSharedInstance("nav2_controller::SimpleGoalChecker");
+  goal->initialize(node, "strict_goal_checker", costmap);
+  EXPECT_FALSE(goal->isGoalReached(
+    pose_message(outside_strict), pose_message(target), geometry_msgs::msg::Twist{}));
+  EXPECT_GT(request_at(outside_strict), 1e-4);
+  EXPECT_LT(request_at(inside_strict), 1e-8);
+
+  goal = std::make_shared<GoalCheckerWithoutTolerances>();
+  EXPECT_GT(request_at(outside_strict), 1e-4);
 }
 TEST_F(Nav2PluginTest, CostmapTfAndInvalidInputs)
 {

@@ -116,7 +116,7 @@ def main():
         # Lifecycle activation alone does not mean DDS actuator feedback has
         # arrived. Establish stopped healthy feedback before measuring a case.
         # These zero commands are sent only before any FollowPath goal.
-        recovery = node.create_publisher(TwistStamped, '/cmd_vel', 10)
+        recovery = node.create_publisher(TwistStamped, '/cmd_vel_nav2', 10)
         healthy_since = [None]
         last_zero = [0.]
         def feedback_ready():

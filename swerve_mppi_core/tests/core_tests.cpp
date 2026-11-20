@@ -120,6 +120,109 @@ int main()
     check(
       corner_profile.unit(.79, 0).vx > .99 && corner_profile.unit(.8, 0).vy > .99,
       "mandatory corner does not smear steering into the incoming segment");
+    ReferenceProfile overlap_a({{.2, 0, 0}, {.8, 0, 0}, {.8, .7, 0}}, c, {&corner_profile, .2, {}});
+    ReferenceProfile overlap_b(
+      {{.24, 0, 0}, {.8, 0, 0}, {.8, .6, 0}}, c, {&corner_profile, .24, {}});
+    check(
+      std::abs(overlap_a.speed(.35) - overlap_b.speed(.31)) < 1e-12 && overlap_a.speed(.6) < 1e-8 &&
+        overlap_b.speed(.56) < 1e-8,
+      "overlapping previews share the speed envelope and stop at the ordered corner");
+    ReferenceProfile released({{0, 0, 0}, {1, 0, 0}}, c, {&profile, 0, .1}, .2, .05);
+    check(
+      std::abs(released.speed(.2) - (.1 + .7 * c.limits.linear_acceleration * .05)) < 1e-12 &&
+        released.limiting_reason(.2) == 128 && released.speed(1) == 0,
+      "reference ramps up from the previous cycle and honors an immediate lower cap");
+    std::vector<Pose> arc;
+    for (int i = 0; i <= 220; ++i) {
+      const double theta = i * .01;
+      arc.push_back({1.5 * std::sin(theta), 1.5 * (1 - std::cos(theta)), 0});
+    }
+    ReferenceProfile arc_plan(arc, c);
+    ReferenceProfile arc_preview(arc, c, {&arc_plan, 0, {}}, 0, .05, &state);
+    const double probe = 2.35;
+    const double branch = arc_preview.next_branch(probe);
+    check(
+      arc_plan.next_branch(probe) < 0 && branch >= 0 && branch < .05 &&
+        arc_preview.speed(probe) < arc_plan.speed(probe) &&
+        (arc_preview.limiting_reason(probe) & 16),
+      "a measured steering branch tightens the geometric envelope locally");
+    for (double angle :
+         {swerve_chassis_core::pi / 4, swerve_chassis_core::pi / 2, swerve_chassis_core::pi}) {
+      auto rotated = arc;
+      for (auto & p : rotated) {
+        const auto xy = rotate_velocity({p.x, p.y, 0}, angle);
+        p = {xy.vx + 4, xy.vy - 2, angle};
+      }
+      auto rotated_state = state;
+      rotated_state.pose = rotated.front();
+      ReferenceProfile rotated_plan(rotated, c);
+      ReferenceProfile rotated_preview(rotated, c, {&rotated_plan, 0, {}}, 0, .05, &rotated_state);
+      for (double s = 0; s <= 3.3; s += .01) {
+        check(
+          std::abs(rotated_plan.speed(s) - arc_plan.speed(s)) < 1e-8,
+          "the shared envelope is invariant under rigid transforms");
+        check(
+          std::abs(rotated_preview.speed(s) - arc_preview.speed(s)) < 1e-8,
+          "the measured local speed cap is invariant under rigid transforms");
+      }
+      check(
+        std::abs(rotated_preview.next_branch(probe) - branch) < 1e-8,
+        "the measured branch is invariant under rigid transforms");
+    }
+    auto aligned_state = state;
+    aligned_state.pose.yaw = swerve_chassis_core::pi / 4;
+    ReferenceProfile aligned_preview(arc, c, {&arc_plan, 0, {}}, 0, .05, &aligned_state);
+    check(
+      aligned_preview.next_branch(probe) < 0 &&
+        aligned_preview.speed(probe) > arc_preview.speed(probe),
+      "the local cap follows the chassis heading, not the path frame axes");
+    Input jerk_input;
+    jerk_input.path = {{0, 0, 0}, {3, 0, 0}};
+    jerk_input.state.requested = {.4, 0, 0};
+    jerk_input.previous_longitudinal_request = LongitudinalRequestSample{.4, .4, .05};
+    auto trajectory = [&](Velocity next) {
+      Trajectory prediction;
+      prediction.controls = {next};
+      prediction.states = {jerk_input.state, jerk_input.state};
+      return prediction;
+    };
+    std::vector<TrackingCost> breakdown;
+    const std::vector<Trajectory> requests{
+      trajectory({.42, 0, 0}), trajectory({.38, 0, 0}), trajectory({.42, .01, 0})};
+    std::vector<double> jerk_costs(requests.size(), 0);
+    tracking_critics().front()->score({jerk_input, c, nullptr, &breakdown}, requests, jerk_costs);
+    check(
+      breakdown[0].longitudinal_jerk < 1e-10 && breakdown[1].longitudinal_jerk > .01 &&
+        breakdown[2].longitudinal_jerk < 1e-10,
+      "longitudinal jerk penalizes reversing acceleration without charging transverse changes");
+    jerk_input.path = arc;
+    jerk_input.goal_active = false;
+    jerk_input.previous_longitudinal_request = LongitudinalRequestSample{.5, 0., .05};
+    const PathView arc_path(arc);
+    const double start_arc = .15;
+    jerk_input.state.pose = arc_path.at(start_arc);
+    const auto previous_unit = arc_plan.unit(start_arc - .025, -.12);
+    jerk_input.state.requested = {.5 * previous_unit.vx, .5 * previous_unit.vy, 0};
+    Trajectory turning;
+    for (int i = 0; i <= 3; ++i) {
+      const double progress = start_arc + .5 * (i > 0 ? jerk_input.dt + (i - 1) * c.model_dt : 0.);
+      auto sample = jerk_input.state;
+      sample.pose = arc_path.at(progress);
+      sample.pose.yaw = i * .12;  // Body yaw changes independently of the path tangent.
+      turning.states.push_back(sample);
+      if (i == 3) break;
+      const auto unit = arc_plan.unit(progress, sample.pose.yaw);
+      turning.controls.push_back({.5 * unit.vx, .5 * unit.vy, 0});
+    }
+    auto speed_pulse = turning;
+    speed_pulse.controls.back().vx *= 1.1;
+    speed_pulse.controls.back().vy *= 1.1;
+    std::vector<double> turning_costs(2, 0);
+    tracking_critics().front()->score(
+      {jerk_input, c, &arc_plan, &breakdown}, {turning, speed_pulse}, turning_costs);
+    check(
+      breakdown[0].longitudinal_jerk < 1e-12 && breakdown[1].longitudinal_jerk > .01,
+      "a constant-speed bend has no longitudinal jerk but a speed pulse still does");
     auto t = model.rollout(state, std::vector<Velocity>(30, {0, 0.4, 0}));
     check(t.valid && t.states.back().pose.y > 0.3, "lateral presteering rollout");
     auto combo = model.rollout(state, std::vector<Velocity>(c.horizon, {0.3, 0.15, 0.2}));
@@ -196,6 +299,10 @@ int main()
       std::hypot(scheduled.command.velocity.vx, scheduled.command.velocity.vy) <=
         c.limits.linear_acceleration * .025 + 1e-9,
       "publication interval bounds actual outgoing request");
+    check(
+      scheduled.longitudinal_request_speed &&
+        std::abs(*scheduled.longitudinal_request_speed - scheduled.command.velocity.vx) < 1e-12,
+      "published longitudinal speed reflects the retimed command on a straight path");
     check(!controller.retime(publication, 0, scheduled), "zero publication interval rejected");
     Controller retiming_guard(c, {std::make_shared<RejectRetiming>()});
     auto guarded = retiming_guard.compute(publication);
@@ -233,6 +340,34 @@ int main()
     check(
       Controller(c, {std::make_shared<Reject>()}).compute(settled).status == Status::NoSolution,
       "terminal hold remains subject to hard rejection");
+    auto near_goal = settled;
+    near_goal.state.pose = {-.04, 0, .06981317007977318};  // 4 cm and 4 degrees.
+    near_goal.state.requested = {.08, 0, .08};
+    auto terminal_brake = Controller(c).compute(near_goal);
+    check(
+      terminal_brake.status == Status::Ok && terminal_brake.command.velocity.vx > 0 &&
+        terminal_brake.command.velocity.vx < near_goal.state.requested.vx &&
+        std::abs(terminal_brake.command.velocity.wz) < near_goal.state.requested.wz,
+      "accepted terminal pose brakes from the last request instead of jumping to zero");
+    near_goal.state.requested = {};
+    Controller settling(c);
+    terminal_brake = settling.compute(near_goal);
+    check(
+      terminal_brake.status == Status::Ok &&
+        std::hypot(terminal_brake.command.velocity.vx, terminal_brake.command.velocity.vy) < 1e-9 &&
+        std::abs(terminal_brake.command.velocity.wz) < 1e-9,
+      "accepted terminal pose holds without correcting to the exact goal");
+    near_goal.goal_tolerance.yaw = .03;
+    auto outside = settling.compute(near_goal);
+    check(
+      outside.status == Status::Ok && std::abs(outside.command.velocity.wz) > 1e-4,
+      "terminal correction resumes outside the active goal checker's tolerance");
+    near_goal.goal_tolerance = {};
+    near_goal.allow_terminal_hold = false;
+    outside = Controller(c).compute(near_goal);
+    check(
+      outside.status == Status::Ok && std::abs(outside.command.velocity.wz) > 1e-4,
+      "terminal correction continues when the caller has no usable goal tolerances");
     auto terminal_rotation = settled;
     terminal_rotation.state.requested = {};
     terminal_rotation.path = {{0, 0, .2}};

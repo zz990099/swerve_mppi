@@ -9,12 +9,31 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include "swerve_mppi/controller.hpp"
+#include "swerve_mppi/reference.hpp"
 #include "swerve_mppi_ros/conversions.hpp"
 #include "swerve_mppi_ros/costmap_critic.hpp"
 #include "swerve_mppi_ros/ordered_goal_checker.hpp"
 
 namespace swerve_mppi_ros
 {
+namespace
+{
+std::optional<GoalPoseTolerance> goal_pose_tolerance(nav2_core::GoalChecker * checker)
+{
+  if (!checker) return std::nullopt;
+  geometry_msgs::msg::Pose pose_tolerance;
+  geometry_msgs::msg::Twist velocity_tolerance;
+  if (!checker->getTolerances(pose_tolerance, velocity_tolerance)) return std::nullopt;
+  try {
+    const auto planar = pose(pose_tolerance);
+    const GoalPoseTolerance tolerance{std::min(planar.x, planar.y), planar.yaw};
+    if (tolerance.valid()) return tolerance;
+  } catch (const std::invalid_argument &) {
+    // A checker may omit planar pose tolerances. Resume terminal tracking.
+  }
+  return std::nullopt;
+}
+}  // namespace
 using Steady = std::chrono::steady_clock;
 struct Nav2Controller::Runtime
 {
@@ -33,10 +52,14 @@ struct Nav2Controller::Runtime
   Critics critics;
   std::unique_ptr<swerve_mppi::Controller> controller;
   PathHandler path;
+  std::unique_ptr<ReferenceProfile> speed_reference;
+  std::optional<double> previous_reference_speed;
   std::optional<ChassisFeedback> measured;
   std::optional<Velocity> published_request;
-  double last_output_time = 0;
-  double state_stamp = 0, last_time = 0, frequency = 20, timeout = 0.25, transform_tolerance = 0.1;
+  std::optional<LongitudinalRequestSample> previous_longitudinal_request;
+  double last_return_time = 0;
+  double last_time = 0, frequency = 20, timeout = 0.25, transform_tolerance = 0.1;
+  std::int64_t state_stamp = 0, feedback_stamp = 0, state_future_tolerance = 0;
   Steady::time_point state_wall{};
   bool active = false, map_enabled = true;
   rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>::SharedPtr prediction;
@@ -78,6 +101,12 @@ struct Nav2Controller::Runtime
     number("heading_scale", config.heading_scale);
     number("path_corridor", config.path_corridor);
     number("goal_heading_activation_distance", config.goal_heading_activation_distance);
+    number("geometric_heading_weight", config.geometric_heading_weight);
+    number("geometric_heading_scale", config.geometric_heading_scale);
+    number("geometric_heading_window", config.geometric_heading_window);
+    number("geometric_heading_turn_scale", config.geometric_heading_turn_scale);
+    config.geometric_heading_allow_reverse =
+      parameter<bool>("geometric_heading_allow_reverse", config.geometric_heading_allow_reverse);
     number("cross_gain", config.cross_gain);
     number("model_dt", config.model_dt);
     number("integration_dt", config.integration_dt);
@@ -101,6 +130,7 @@ struct Nav2Controller::Runtime
     if (node()->has_parameter("controller_frequency"))
       node()->get_parameter("controller_frequency", frequency);
     number("state_timeout", timeout);
+    state_future_tolerance = duration_ns(parameter<double>("state_future_tolerance", .01));
     number("transform_tolerance", transform_tolerance);
     if (
       !std::isfinite(frequency) || frequency < 1 || frequency > 100 || !std::isfinite(timeout) ||
@@ -114,6 +144,7 @@ struct Nav2Controller::Runtime
     number("alignment_heading_weight", weights.alignment_heading);
     number("effort_weight", weights.effort);
     number("smoothness_weight", weights.smoothness);
+    number("longitudinal_jerk_weight", weights.longitudinal_jerk);
     number("steering_change_weight", weights.steering_change);
     number("consistency_weight", weights.consistency);
     number("reference_velocity_weight", weights.reference_velocity);
@@ -152,8 +183,10 @@ struct Nav2Controller::Runtime
   {
     if (controller) controller->reset();
     published_request.reset();
+    previous_reference_speed.reset();
+    previous_longitudinal_request.reset();
     last_time = 0;
-    last_output_time = 0;
+    last_return_time = 0;
   }
   void report(const Result & result)
   {
@@ -178,6 +211,8 @@ struct Nav2Controller::Runtime
     item.message = "continuous tracking";
     for (const auto & p : std::vector<std::pair<std::string, std::string>>{
            {"compute_ms", std::to_string(result.compute_ms)},
+           {"geometric_heading", std::to_string(result.geometric_heading)},
+           {"geometric_heading_strength", std::to_string(result.geometric_heading_strength)},
            {"cost", std::to_string(result.cost)},
            {"evaluated", std::to_string(result.evaluated)},
            {"invalid_state", std::to_string(result.diagnostics.invalid_state)},
@@ -225,6 +260,7 @@ struct Nav2Controller::Runtime
       add(prefix + "velocity", d.tracking.velocity);
       add(prefix + "alignment", d.tracking.alignment);
       add(prefix + "effort", d.tracking.effort);
+      add(prefix + "longitudinal_jerk", d.tracking.longitudinal_jerk);
       add(prefix + "progress", d.tracking.progress);
       add(prefix + "goal", d.tracking.goal);
     }
@@ -258,22 +294,27 @@ void Nav2Controller::configure(
       if (msg.header.frame_id != r.body_frame) return;
       try {
         auto f = feedback(msg, r.config);
-        const double stamp = seconds(msg.header.stamp);
-        const double now = r.node()->now().seconds();
-        if (r.last_time > 0 && now < r.last_time) {
+        const auto stamp = stamp_ns(msg.header.stamp);
+        const auto feedback_time = stamp_ns(msg.feedback_stamp);
+        const auto clock = r.node()->now();
+        const auto now = clock.nanoseconds();
+        if (r.last_time > 0 && clock.seconds() < r.last_time) {
           r.measured.reset();
           r.stop();
         }
         // A clock/state delivery skew must not erase a still-fresh validated
         // snapshot. Reject the future sample; normal control-time age checks
         // still expire the retained state and detect actual clock rewinds.
-        if (stamp > now + .01 || f.feedback_stamp > now + .01) {
+        if (
+          stamp - now > r.state_future_tolerance ||
+          feedback_time - now > r.state_future_tolerance) {
           if (f.fault) r.measured.reset();  // A reported fault must still stop control.
           return;
         }
         if (r.measured && stamp <= r.state_stamp) return;
         r.measured = f;
-        r.state_stamp = seconds(msg.header.stamp);
+        r.state_stamp = stamp;
+        r.feedback_stamp = feedback_time;
         r.state_wall = Steady::now();
       } catch (const std::invalid_argument & e) {
         RCLCPP_WARN(r.node()->get_logger(), "Rejected chassis snapshot: %s", e.what());
@@ -312,6 +353,7 @@ void Nav2Controller::cleanup()
   r.critics.clear();
   r.measured.reset();
   r.path = PathHandler{};
+  r.speed_reference.reset();
   r.tf.reset();
   r.costmap.reset();
   r.parent.reset();
@@ -322,6 +364,7 @@ void Nav2Controller::setPlan(const nav_msgs::msg::Path & message)
   std::lock_guard<std::mutex> lock(r.mutex);
   r.stop();
   r.path = PathHandler{};
+  r.speed_reference.reset();
   try {
     if (message.header.frame_id.empty()) throw std::invalid_argument("path frame is missing");
     std::vector<Pose> candidate;
@@ -331,8 +374,10 @@ void Nav2Controller::setPlan(const nav_msgs::msg::Path & message)
       candidate.push_back(pose(p.pose));
     }
     r.path.set(std::move(candidate));
+    r.speed_reference = std::make_unique<ReferenceProfile>(r.path.section_points(), r.config);
     r.plan_frame = message.header.frame_id;
   } catch (const std::exception & e) {
+    r.path = PathHandler{};
     throw nav2_core::InvalidPath(e.what());
   }
 }
@@ -351,12 +396,21 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     const double dt = r.last_time > 0 ? now - r.last_time : 1 / r.frequency;
     r.last_time = now;
     if (dt <= 0 || dt > 1) throw nav2_core::NoValidControl("control clock discontinuity");
+    if (!r.measured) throw nav2_core::NoValidControl("chassis state is missing");
+    if (!r.measured->feedback_valid)
+      throw nav2_core::NoValidControl("chassis reports invalid feedback");
+    const auto feedback_age_ns = control_stamp.nanoseconds() - r.feedback_stamp;
+    const auto state_age_ns = control_stamp.nanoseconds() - r.state_stamp;
+    const double feedback_age = feedback_age_ns * 1e-9;
+    const double state_age = state_age_ns * 1e-9;
+    const double receipt_age = std::chrono::duration<double>(Steady::now() - r.state_wall).count();
     if (
-      !r.measured || !r.measured->feedback_valid || now - r.measured->feedback_stamp < -0.01 ||
-      now - r.measured->feedback_stamp > r.timeout || now - r.state_stamp < -0.05 ||
-      now - r.state_stamp > r.timeout ||
-      std::chrono::duration<double>(Steady::now() - r.state_wall).count() > r.timeout)
-      throw nav2_core::NoValidControl("chassis state is stale or missing");
+      feedback_age_ns < -r.state_future_tolerance || feedback_age > r.timeout ||
+      state_age_ns < -r.state_future_tolerance || state_age > r.timeout || receipt_age > r.timeout)
+      throw nav2_core::NoValidControl(
+        "chassis state age is out of range (feedback/state/receipt s: " +
+        std::to_string(feedback_age) + "/" + std::to_string(state_age) + "/" +
+        std::to_string(receipt_age) + ")");
     geometry_msgs::msg::TwistStamped out;
     out.header.stamp = control_stamp;
     out.header.frame_id = r.body_frame;
@@ -364,6 +418,8 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
       if (ordered) ordered->setReady(false);
       r.controller->reset();
       r.published_request.reset();
+      r.previous_reference_speed.reset();
+      r.previous_longitudinal_request.reset();
       return out;
     }
     Input input;
@@ -372,13 +428,23 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     // published request from our actual previous output, while retaining the
     // measured generator snapshot as the actuator prediction initial state.
     if (r.published_request) input.state.requested = *r.published_request;
+    input.previous_longitudinal_request = r.previous_longitudinal_request;
     input.state.pose = pose(r.transform(current, r.global_frame).pose);
     (void)velocity(speed);  // Validate Nav2 velocity; wheel feedback anchors actuator prediction.
     input.dt = dt;
     const auto previous_section = r.path.section();
-    const auto local =
-      r.path.local(pose(r.transform(current, r.plan_frame).pose), 3.0, input.state.velocity);
-    if (r.path.section() != previous_section) r.controller->reset();
+    bool preview_reaches_goal = false;
+    const auto local = r.path.local(
+      pose(r.transform(current, r.plan_frame).pose), 3.0, input.state.velocity,
+      &preview_reaches_goal);
+    if (r.path.section() != previous_section) {
+      r.controller->reset();
+      r.speed_reference = std::make_unique<ReferenceProfile>(r.path.section_points(), r.config);
+      r.previous_reference_speed.reset();
+      input.previous_longitudinal_request.reset();
+    }
+    input.speed_preview = {
+      r.speed_reference.get(), r.path.progress_arc(), r.previous_reference_speed};
     auto transform_path_pose = [&](Pose p) {
       geometry_msgs::msg::PoseStamped source;
       source.header.frame_id = r.plan_frame;
@@ -388,6 +454,20 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     for (auto p : local) input.path.push_back(transform_path_pose(p));
     input.goal = transform_path_pose(r.path.tracking_goal());
     input.goal_active = r.path.tracking_goal_active(r.config.approach_distance);
+    input.preview_reaches_goal = preview_reaches_goal;
+    if (input.goal_active && input.reaches_goal()) {
+      const auto tolerance = goal_pose_tolerance(goal_checker);
+      input.allow_terminal_hold = tolerance.has_value();
+      if (tolerance) {
+        if (ordered)
+          input.goal_tolerance = *tolerance;
+        else {
+          input.goal_tolerance.position =
+            std::min(input.goal_tolerance.position, tolerance->position);
+          input.goal_tolerance.yaw = std::min(input.goal_tolerance.yaw, tolerance->yaw);
+        }
+      }
+    }
     std::vector<std::uint8_t> grid;
     if (r.map_enabled) {
       auto map = r.costmap->getCostmap();
@@ -401,12 +481,9 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     }
     auto result = r.controller->compute(input);
     if (result.completed_transition) r.path.recover(pose(r.transform(current, r.plan_frame).pose));
-    if (r.last_output_time > 0 && result.status == Status::Ok) {
-      // Nav2 stamps its publication after this callback returns. Reserve one
-      // simulation millisecond for that handoff; a later current publication
-      // only increases the available interval.
-      const double available =
-        std::max(1e-6, r.node()->now().seconds() - r.last_output_time - .001);
+    if (r.published_request && result.status == Status::Ok) {
+      const double available = command_interval(
+        r.node()->now().seconds(), r.last_return_time, *r.published_request, *r.measured);
       if (available < input.dt && !r.controller->retime(input, available, result))
         throw nav2_core::NoValidControl("retimed MPPI request failed validation");
     }
@@ -414,14 +491,21 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     if (result.status != Status::Ok)
       throw nav2_core::NoValidControl("MPPI found no usable control");
     out.twist = twist(result.command.velocity);
-    r.published_request = result.command.velocity;
-    r.last_output_time = r.node()->now().seconds();
     if (ordered)
       ordered->setReady(
-        r.path.goal_active(r.config.approach_distance) &&
+        input.reaches_goal() && r.path.goal_active(r.config.approach_distance) &&
           std::hypot(result.command.velocity.vx, result.command.velocity.vy) < 1e-4 &&
           std::abs(result.command.velocity.wz) < 1e-4,
         transform_path_pose(r.path.goal()));
+    out.header.stamp = r.node()->now();
+    const double publication = seconds(out.header.stamp);
+    r.previous_longitudinal_request = longitudinal_request_sample(
+      input.previous_longitudinal_request, result.longitudinal_request_speed,
+      publication - r.last_return_time);
+    r.published_request = result.command.velocity;
+    r.previous_reference_speed =
+      result.motion_reference ? std::nullopt : std::optional{result.reference_speed};
+    r.last_return_time = publication;
     return out;
   } catch (const nav2_core::ControllerException &) {
     if (ordered) ordered->setReady(false);
@@ -444,6 +528,8 @@ void Nav2Controller::setSpeedLimit(const double & limit, const bool & percentage
     r.config.max_speed =
       std::min(r.baseline.max_speed, percentage ? r.baseline.max_speed * limit / 100 : limit);
   if (r.controller) r.controller = std::make_unique<swerve_mppi::Controller>(r.config, r.critics);
+  if (!r.path.empty())
+    r.speed_reference = std::make_unique<ReferenceProfile>(r.path.section_points(), r.config);
 }
 bool Nav2Controller::cancel()
 {
@@ -456,6 +542,7 @@ void Nav2Controller::reset()
   std::lock_guard<std::mutex> lock(r.mutex);
   r.stop();
   r.path = PathHandler{};
+  r.speed_reference.reset();
 }
 }  // namespace swerve_mppi_ros
 PLUGINLIB_EXPORT_CLASS(swerve_mppi_ros::Nav2Controller, nav2_core::Controller)

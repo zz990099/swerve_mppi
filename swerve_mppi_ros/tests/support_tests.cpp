@@ -2,6 +2,7 @@
 #include <stdexcept>
 
 #include "swerve_mppi/controller.hpp"
+#include "swerve_mppi_ros/command_stamp_guard.hpp"
 #include "swerve_mppi_ros/control_support.hpp"
 #include "swerve_mppi_ros/costmap_critic.hpp"
 using namespace swerve_mppi_ros;
@@ -12,6 +13,35 @@ void check(bool c, const char * m)
 int main()
 {
   try {
+    CommandStampGuard stamps;
+    const std::int64_t tick = 1'795'052'806'810'000'000;
+    check(!stamps.accept(tick, 0, false), "an uninitialized clock cannot forward commands");
+    check(!stamps.accept(tick + 31'000'000, tick, false), "reject implausible future motion");
+    check(stamps.accept(tick, tick, false) == tick, "keep the normal publication stamp");
+    check(!stamps.accept(tick, tick, false), "drop duplicate motion without refreshing it");
+    const auto stop = stamps.accept(tick, tick, true);
+    check(
+      stop && static_cast<double>(*stop) * 1e-9 > static_cast<double>(tick) * 1e-9,
+      "same-tick zero remains newer in chassis double-second comparisons");
+    check(!stamps.accept(tick, tick, true), "a frozen clock cannot refresh the stop");
+    check(!stamps.accept(tick, tick, false), "same-tick motion cannot override the stop");
+    check(!stamps.accept(tick - 1, tick, false), "discard older motion");
+    check(
+      stamps.accept(tick + 5'000'000, tick + 5'000'000, false) == tick + 5'000'000,
+      "the next clock tick keeps the original source stamp");
+    check(stamps.accept(5'000'000, 5'000'000, false) == 5'000'000, "reset after clock rewind");
+    CommandStampGuard boundary;
+    const auto edge = tick + 30'000'000;
+    check(
+      boundary.accept(edge, tick, false) == edge - 1'000,
+      "reserve space for a stop at the 30 ms future limit");
+    check(boundary.accept(edge, tick, true) == edge, "same-tick stop fits at the future limit");
+    check(!boundary.accept(edge, tick, true), "stop at the limit remains idempotent");
+    check(!boundary.accept(edge, tick, false), "motion cannot supersede the stop at the limit");
+    check(!boundary.accept(edge + 1, tick + 1, false), "keep stamps distinct as double seconds");
+    check(
+      boundary.accept(edge + 5'000'000, tick + 5'000'000, false) == edge + 4'999'000,
+      "motion resumes after the clock advances");
     GoalChecker checker;
     State state;
     Pose goal;
@@ -22,11 +52,53 @@ int main()
     state.velocity = {};
     state.pose.yaw = 0.2;
     check(!checker.reached(state, goal, 1.5), "heading required");
+    state.pose = {.05, 0, GoalPoseTolerance{}.yaw};
+    check(!checker.reached(state, goal, 2), "tolerance boundary still requires settle time");
+    check(checker.reached(state, goal, 2.31), "five centimetres and five degrees are accepted");
+    state.pose.x = .051;
+    check(!checker.reached(state, goal, 2.32), "position outside tolerance resets settling");
+    ChassisFeedback feedback;
+    const Velocity previous_request{0, 0, .5032162754420483};
+    feedback.state.requested = previous_request;
+    feedback.accepted_command_stamp = 44.285;
+    check(
+      std::abs(command_interval(44.3, 44.28, previous_request, feedback) - .015) < 1e-9,
+      "the previous publication, rather than the plugin return, bounds angular braking");
+    feedback.accepted_command_stamp = 44.23;
+    check(
+      std::abs(command_interval(44.3, 44.28, previous_request, feedback) - .015) < 1e-9,
+      "an older echo of the same request cannot lengthen the slew interval");
+    feedback.accepted_command_stamp = 44.28;
+    feedback.state.requested.wz = .6;
+    check(
+      std::abs(command_interval(44.3, 44.28, previous_request, feedback) - .015) < 1e-9,
+      "an unrelated chassis request cannot override the handoff allowance");
+    const auto first = longitudinal_request_sample({}, .4, 0);
+    const auto second = longitudinal_request_sample(first, .43, .06);
+    check(
+      first && !first->acceleration && second && second->acceleration &&
+        std::abs(*second->acceleration - .5) < 1e-12 && second->dt == .06,
+      "longitudinal acceleration uses the actual publication interval");
+    const auto restarted = longitudinal_request_sample(second, .45, 0);
+    check(
+      restarted && restarted->speed == .45 && !restarted->acceleration &&
+        !longitudinal_request_sample(second, std::nullopt, .05),
+      "clock discontinuities and maneuvers do not carry longitudinal acceleration");
     PathHandler path;
     path.set({{0, 0, 0}, {.8, 0, 0}, {.8, .8, 0}, {0, .8, 0}, {0, 0, 0}});
     auto local = path.local({0, 0, 0});
     check(local.size() > 2, "sharp corners remain in the preview");
     check(!path.goal_active(), "closed path cannot finish at the start");
+    path.set({{0, 0, 0}, {1, 0, 0}, {0, 0, 0}, {0, 1, 0}, {0, 0, 0}});
+    bool reaches_goal = true;
+    auto coincident = path.local({0, 0, 0}, 2, {}, &reaches_goal);
+    check(
+      distance(coincident.back(), path.goal()) == 0 && !reaches_goal,
+      "a crop ending at coincident coordinates is not the ordered endpoint");
+    path.local({0, 0, 0}, 4, {}, &reaches_goal);
+    check(reaches_goal, "the full preview contains the ordered endpoint");
+    path.set({{0, 0, 0}, {.8, 0, 0}, {.8, .8, 0}, {0, .8, 0}, {0, 0, 0}});
+    path.local({0, 0, 0});
     path.local({.8, 0, 0});
     path.local({.8, .8, 0});
     check(!path.goal_active(), "ordered square still has two legs remaining");

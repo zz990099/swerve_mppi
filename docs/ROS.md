@@ -8,15 +8,24 @@ protocol have been removed.
 ## Topics
 
 - Input `chassis_controller/state`: `swerve_chassis_msgs/ChassisState`, sensor-data QoS.
-- Output: standard Nav2 `cmd_vel` (`TwistStamped` with body frame and source stamp).
+- Output `cmd_vel` carries stamped body-frame velocity after the command stamp guard.
 - Diagnostics: `FollowPath/diagnostics`, including compute_ms, cost, evaluated count and effective_samples.
 - Prediction: `FollowPath/prediction`, published when subscribed.
 - Localization/odometry and costmap remain ordinary Nav2 inputs.
 
 Configure one final chassis command type. Do not run the old bridge. Keep
 `enable_stamped_cmd_vel: true` for the bundled Jazzy setup; namespace and body
-frame must match the chassis. Cancellation and zero publication remain Nav2's
-responsibility; the chassis independently checks simulation and steady timeouts.
+frame must match the chassis. The bundled launch remaps the controller server's
+output to `cmd_vel_nav2` and runs `cmd_vel_stamp_guard` as the sole publisher to
+the chassis topic. It reads the controller server's `use_sim_time` setting from
+the same parameter file and defaults to system time when the setting is absent.
+With custom Nav2 bringup, use the same remap and configure both nodes for the
+same clock. The guard rejects source stamps more than 30 ms ahead of its clock.
+It preserves motion stamps except within one microsecond of that limit, where
+it reserves space for a newer stop. It discards older and repeated motion
+commands and forwards a same-tick zero after motion once, even when the clock
+is frozen at the limit. The chassis independently checks simulation and steady
+timeouts.
 
 ## Physical contract and tuning
 
@@ -41,6 +50,12 @@ latency on the deployment CPU before choosing a controller frequency.
 recovery candidates. Intermediate path yaw is ignored. `heading_scale`
 (0.05 rad) normalizes only the final-pose yaw objective, which is enabled inside
 `goal_heading_activation_distance` (0.08 m) of measured ordered progress.
+`geometric_heading_weight` (0.4) adds a finite Huber cost for body yaw relative
+to the geometric direction. Its independent scale is `geometric_heading_scale`
+(0.35 rad), arc window `geometric_heading_window` (1.0 m) and cumulative-turn
+scale `geometric_heading_turn_scale` (0.6 rad). Zero weight disables both this
+cost and its structured proposal. Diagnostics publish `geometric_heading` in
+the control frame and `geometric_heading_strength` in [0, 1].
 `cross_gain` defaults to 4/s. Path arc length drives terminal activation and speed
 preview. Polyline vertices above 15 degrees are approached at zero speed; smooth
 curves use lateral-acceleration and steering-servo tracking limits. Accepted
@@ -49,14 +64,26 @@ requested velocity is part of State, not substituted with measured body velocity
 m/s, not a permission to accept arbitrary slipping wheel commands.
 `steering_time_constant` defaults to 0.10 s. `reference_velocity_weight` and
 `presteering_alignment_weight` each default to 1.0; `alignment_heading_weight`
-defaults to 0.5 and anchors the body only while wheels presteer. The reference-speed envelope
-accounts for coupled wheel steering and drive demands. Invalid input, actuator,
-collision and custom-critic rejection counts are published on diagnostics,
+defaults to 0.5 and anchors the body only while wheels presteer. Local previews share a
+geometric speed envelope sampled on the ordered plan. Steering branch changes can lower
+the cap within a local preview using measured body yaw and steering. A lower cap applies
+immediately and a rising cap is released at 70% of `linear_accel`.
+`longitudinal_jerk_weight` (0.12, zero to disable) penalizes the time variation
+of commanded longitudinal acceleration. The controller projects each command onto
+its own ordered geometric path tangent before differentiating the scalar speed.
+Stop-and-turn maneuvers and the terminal region retain their braking and steering
+behavior. Invalid input, actuator, collision and custom-critic rejection counts
+are published on diagnostics,
 including computes that return NoSolution.
 
 Goal checker state_topic/state_timeout can be set independently of the controller
 but must identify the same robot. Feedback must be fresh and fault-free with all
 wheel speeds <=0.05 rad/s, in addition to Nav2 pose and body-speed tolerances.
+The bundled Gazebo YAML sets `state_future_tolerance` to 0.03 s for both
+`FollowPath` and `goal_checker`, matching the chassis feedback tolerance.
+Terminal hold reads pose tolerances from the active Nav2 goal checker. For other
+checkers, the hold thresholds are bounded by 5 cm and 5 degrees. When a checker
+does not supply a valid planar pose tolerance, terminal correction continues.
 
 The default costmap is obstacle-free for physical tracking acceptance. Supply
 real sensor/static layers for navigation. The collision critic uses the costmap's

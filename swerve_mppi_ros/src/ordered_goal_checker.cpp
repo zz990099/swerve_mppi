@@ -26,6 +26,9 @@ void OrderedGoalChecker::initialize(
   parameter("settle_time", tolerance_.settle);
   checker_ = swerve_mppi_ros::GoalChecker(tolerance_);
   parameter("state_timeout", state_timeout_);
+  double future_tolerance = 0;
+  parameter("state_future_tolerance", future_tolerance);
+  state_future_tolerance_ = duration_ns(future_tolerance);
   if (!std::isfinite(state_timeout_) || state_timeout_ <= 0)
     throw std::invalid_argument("invalid state timeout");
   body_frame_ = costmap->getBaseFrameID();
@@ -44,8 +47,10 @@ void OrderedGoalChecker::initialize(
         checker_.reset();
         return;
       }
-      const double stamp = seconds(msg.feedback_stamp);
-      if (stamp <= feedback_stamp_ && clock_->now().seconds() >= feedback_stamp_) return;
+      const auto stamp = stamp_ns(msg.feedback_stamp);
+      const auto now = clock_->now().nanoseconds();
+      if (stamp - now > state_future_tolerance_) return;
+      if (stamp <= feedback_stamp_ && feedback_stamp_ - now <= state_future_tolerance_) return;
       feedback_stamp_ = stamp;
       feedback_wall_ = std::chrono::steady_clock::now();
       healthy_ = false;
@@ -82,11 +87,12 @@ bool OrderedGoalChecker::isGoalReached(
 {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!ready_ || !clock_) return false;
-  const double now = clock_->now().seconds();
-  const double age = now - feedback_stamp_;
+  const auto clock = clock_->now();
+  const double now = clock.seconds();
+  const auto age = clock.nanoseconds() - feedback_stamp_;
   const double goal_age = now - goal_stamp_;
   if (
-    !healthy_ || age < 0 || age > state_timeout_ ||
+    !healthy_ || age < -state_future_tolerance_ || age * 1e-9 > state_timeout_ ||
     (current_goal_ && (goal_age < 0 || goal_age > state_timeout_)) ||
     std::chrono::duration<double>(std::chrono::steady_clock::now() - feedback_wall_).count() >
       state_timeout_) {

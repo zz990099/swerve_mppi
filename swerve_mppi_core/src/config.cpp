@@ -11,6 +11,23 @@ namespace swerve_mppi
 {
 double wrap_angle(double x) { return std::remainder(x, 2 * std::acos(-1.0)); }
 double distance(const Pose & a, const Pose & b) { return std::hypot(a.x - b.x, a.y - b.y); }
+Velocity rotate_velocity(Velocity velocity, double yaw)
+{
+  const double c = std::cos(yaw), s = std::sin(yaw);
+  return {c * velocity.vx - s * velocity.vy, s * velocity.vx + c * velocity.vy, velocity.wz};
+}
+bool GoalPoseTolerance::contains(const Pose & pose, const Pose & goal) const
+{
+  return distance(pose, goal) <= position && std::abs(wrap_angle(pose.yaw - goal.yaw)) <= yaw;
+}
+bool GoalPoseTolerance::valid() const
+{
+  return std::isfinite(position) && position > 0 && std::isfinite(yaw) && yaw > 0;
+}
+bool Input::reaches_goal() const
+{
+  return preview_reaches_goal.value_or(!path.empty() && distance(path.back(), goal) < .001);
+}
 bool GridView::valid() const
 {
   return data && width && height && width <= std::numeric_limits<std::size_t>::max() / height &&
@@ -33,10 +50,11 @@ void validate(const Config & c)
   for (double x :
        {c.max_yaw_rate, c.model_dt, c.integration_dt, c.steering_time_constant, c.temperature,
         c.lookahead, c.approach_distance, c.approach_gain, c.max_residual, c.position_scale,
-        c.heading_scale, c.cross_gain, c.path_corridor, c.goal_heading_activation_distance})
+        c.heading_scale, c.cross_gain, c.path_corridor, c.goal_heading_activation_distance,
+        c.geometric_heading_scale, c.geometric_heading_window, c.geometric_heading_turn_scale})
     if (!std::isfinite(x) || x <= 0)
       throw std::invalid_argument("positive finite parameter required");
-  for (double x : {c.max_speed, c.noise_linear, c.noise_angular})
+  for (double x : {c.max_speed, c.noise_linear, c.noise_angular, c.geometric_heading_weight})
     if (!std::isfinite(x) || x < 0)
       throw std::invalid_argument("nonnegative finite parameter required");
   if (

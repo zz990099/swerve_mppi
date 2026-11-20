@@ -35,11 +35,18 @@ class RecordingTests(unittest.TestCase):
     def test_user_tracking_tolerances(self):
         metadata = dict(scenario='straight', reference=[(0,0,0),(12,0,0)], samples=100,
                         path_rms_m=.08, path_peak_m=.10, heading_rms_rad=.08,
-                        heading_peak_rad=.15, final_position_error_m=.20,
+                        heading_peak_rad=.15, final_position_error_m=.05,
                         final_yaw_error_rad=math.radians(5), stopped_fraction=.2, wall_duration_s=20.,
-                        max_request_linear_rate=.9, max_request_angular_rate=1.3, compute_p99_ms=20.)
+                        max_request_linear_rate=.9, max_request_angular_rate=1.3, compute_p99_ms=20.,
+                        nonincreasing_command_stamps=0, chassis_faults_after_motion=0)
         self.assertEqual(evaluate(metadata)[1], [])
-        for key, value in [('path_peak_m', .1001), ('final_position_error_m', .2001),
+        timing = dict(metadata, wall_duration_s=80., compute_p99_ms=65.,
+                      max_request_linear_rate=1.12)
+        _, failures, warnings = evaluate(timing)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(warnings), 3)
+        for key, value in [('path_peak_m', .1001), ('final_position_error_m', .0501),
+                           ('nonincreasing_command_stamps', 1), ('chassis_faults_after_motion', 1),
                            ('final_yaw_error_rad', math.radians(5.01))]:
             bad = dict(metadata, **{key:value})
             self.assertTrue(any(key in failure for failure in evaluate(bad)[1]))
@@ -71,6 +78,10 @@ class RecordingTests(unittest.TestCase):
                 target_steering=[0.]*4, target_wheel_speeds=[0.]*4)
             record.command(NS(header=state.header, twist=velocity), 2.01)
             record.execution(state)
+            state.fault = 1
+            record.execution(state)
+            self.assertEqual(record.chassis_faults_after_motion, 0)
+            state.fault = 0
             state.header.stamp = NS(sec=2, nanosec=20000000)
             state.execution = 0
             record.execution(state)
@@ -78,11 +89,16 @@ class RecordingTests(unittest.TestCase):
                 state.wheel_speeds = [speed]*4
                 obs = observation(.1*(t-2), 0, 0, t)
                 record.observe([obs], obs, state)
+                record.execution(state)
+                if speed:
+                    state.fault = 1
+                    record.execution(state)
             record.close(False, 'partial diagnostic example', [])
             self.assertEqual(record.metadata['initial_wait_to_motion_s'], 1.)
             self.assertAlmostEqual(record.metadata['execution_duration_s']['presteering'], .02)
             self.assertEqual(record.metadata['tracking_stopped_fraction'], .5)
             self.assertAlmostEqual(record.metadata['stopped_fraction'], 2/3)
+            self.assertEqual(record.metadata['chassis_faults_after_motion'], 1)
             with (Path(temporary)/'execution.csv').open() as file:
                 rows = list(csv.DictReader(file))
             self.assertEqual(rows[0]['command_sequence'], '1')
@@ -100,10 +116,29 @@ class RecordingTests(unittest.TestCase):
                           twist=NS(linear=NS(x=vx, y=0.), angular=NS(z=wz)))
             record.command(command(0, 0., 0.), 2.04)
             record.command(command(50000000, .04, .06), 2.30)
+            record.command(command(50000000, 0., 0.), 2.31)
+            record.command(command(49999999, 0., 0.), 2.32)
             record.close(False, 'publication-only audit', [])
             self.assertAlmostEqual(record.max_request_linear_rate, .8)
             self.assertAlmostEqual(record.max_request_angular_rate, 1.2)
             self.assertEqual(record.max_feedback_linear_rate, 0.)
+            self.assertEqual(record.metadata['nonincreasing_command_stamps'], 2)
+
+    def test_restamped_stop_breaks_the_request_slew_interval(self):
+        with TemporaryDirectory() as temporary:
+            record = Recording(temporary, 'straight', [(0, 0, 0), (1, 0, 0)], 42,
+                               pose(0, 0, 0), pose(0, 0, 0), 2)
+            for ns, vx in [(0, .5), (1_000, 0.), (15_000_000, .6), (65_000_000, .64)]:
+                command = NS(header=NS(stamp=NS(sec=2, nanosec=ns)),
+                             twist=NS(linear=NS(x=vx, y=0.), angular=NS(z=0.)))
+                record.command(command, 2.)
+            record.close(False, 'command audit', [])
+            self.assertAlmostEqual(record.max_request_linear_rate, .8)
+            self.assertEqual(record.metadata['restamped_stops'], 1)
+            self.assertEqual(record.metadata['nonincreasing_command_stamps'], 0)
+            with (Path(temporary)/'commands.csv').open() as file:
+                self.assertEqual([row['restamped_stop'] for row in csv.DictReader(file)],
+                                 ['0', '1', '0', '0'])
 
     def test_rotated_coordinate_frames(self):
         x, y, angle = local_pose(pose(10, 21, math.pi), pose(10, 20, math.pi/2))
@@ -137,7 +172,8 @@ class RecordingTests(unittest.TestCase):
                         path_rms_m=.01, path_peak_m=.02, heading_rms_rad=.01,
                         heading_peak_rad=.02, final_position_error_m=.01,
                         final_yaw_error_rad=.01, stopped_fraction=.2, wall_duration_s=5.,
-                        max_request_linear_rate=.9, max_request_angular_rate=1.3, compute_p99_ms=20.)
+                        max_request_linear_rate=.9, max_request_angular_rate=1.3, compute_p99_ms=20.,
+                        nonincreasing_command_stamps=0, chassis_faults_after_motion=0)
         self.assertEqual(evaluate(metadata)[1], [])
         metadata['path_peak_m'] = .19
         self.assertTrue(any('path_peak_m' in value for value in evaluate(metadata)[1]))

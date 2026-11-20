@@ -36,9 +36,16 @@ int main()
   paths.push_back(bezier);
   paths.push_back(reverse_curve);
   paths.push_back({{0, 0, 0}, {.8, 0, -.9}});
+  const auto direction_start = paths.size();
+  const std::array<double, 4> initial_yaws{
+    chassis::pi / 2, -chassis::pi / 2, chassis::pi, chassis::pi};
+  for (double yaw : initial_yaws) paths.push_back({{0, 0, yaw}, {12, 0, 0}});
   std::vector<double> times;
   for (int plant = 0; plant < 2; ++plant) {
     for (std::size_t scenario = 0; scenario < paths.size(); ++scenario) {
+      const bool check_direction = scenario >= direction_start;
+      const bool expect_reverse = scenario == direction_start + 3;
+      config.geometric_heading_allow_reverse = check_direction && scenario != direction_start + 2;
       Controller controller(config);
       chassis::Generator executor(config.geometry, config.limits);
       swerve_mppi_ros::PathHandler path;
@@ -46,15 +53,20 @@ int main()
       swerve_mppi_ros::GoalChecker goal;
       State s;
       s.generator.valid = true;
+      if (check_direction) s.pose.yaw = paths[scenario].front().yaw;
       bool reached = false, motion_started = false;
       PathView reference(paths[scenario]);
       double square_error = 0, peak = 0, settled_since = -1;
+      double direction_error = 0, longitudinal_speed = 0;
+      int direction_observations = 0;
       int observations = 0, tracking_observations = 0, tracking_stopped = 0;
       for (int step = 0; step < 800; ++step) {
         Input input;
         input.state = s;
         const auto previous_section = path.section();
-        input.path = path.local(s.pose, 3.0, s.velocity);
+        bool preview_reaches_goal = false;
+        input.path = path.local(s.pose, 3.0, s.velocity, &preview_reaches_goal);
+        input.preview_reaches_goal = preview_reaches_goal;
         if (path.section() != previous_section) controller.reset();
         input.goal = path.tracking_goal();
         input.goal_active = path.tracking_goal_active();
@@ -94,6 +106,11 @@ int main()
           dw > config.limits.angular_acceleration * .05 + 1e-7)
           throw std::runtime_error("request slew exceeded");
         s.requested = result.command.velocity;
+        if (check_direction && s.pose.x >= 4 && s.pose.x <= 9) {
+          direction_error += std::abs(wrap_angle(s.pose.yaw - (expect_reverse ? chassis::pi : 0)));
+          longitudinal_speed += s.velocity.vx;
+          ++direction_observations;
+        }
         auto match = reference.match(s.pose);
         square_error += match.error * match.error;
         peak = std::max(peak, match.error);
@@ -133,6 +150,18 @@ int main()
         std::cerr << "failed scenario " << scenario << " pose=" << s.pose.x << ',' << s.pose.y
                   << ',' << s.pose.yaw << '\n';
         return 1;
+      }
+      if (check_direction) {
+        const auto signed_speed = expect_reverse ? -longitudinal_speed : longitudinal_speed;
+        if (
+          direction_observations == 0 || direction_error > .35 * direction_observations ||
+          signed_speed < .3 * direction_observations)
+          throw std::runtime_error(
+            "long straight did not follow the configured direction preference");
+        std::cout << "direction_allow_reverse=" << config.geometric_heading_allow_reverse
+                  << " initial_yaw=" << paths[scenario].front().yaw
+                  << " average_heading_error_rad=" << direction_error / direction_observations
+                  << " average_body_vx=" << longitudinal_speed / direction_observations << '\n';
       }
     }
   }

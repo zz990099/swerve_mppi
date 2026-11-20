@@ -19,7 +19,7 @@ public:
     for (double x :
          {w.path_distance, w.progress, w.goal_position, w.goal_heading, w.alignment_heading,
           w.effort, w.smoothness, w.steering_change, w.consistency, w.reference_velocity,
-          w.presteering_alignment})
+          w.presteering_alignment, w.longitudinal_jerk})
       if (!std::isfinite(x) || x < 0) throw std::invalid_argument("invalid critic weight");
   }
   void score(
@@ -28,16 +28,34 @@ public:
   {
     if (c.breakdown) c.breakdown->assign(batch.size(), {});
     PathView path(c.input.path);
+    const auto start = path.start_match(c.input.state.pose);
     std::unique_ptr<ReferenceProfile> local_reference;
-    if (!c.reference) local_reference = std::make_unique<ReferenceProfile>(c.input.path, c.config);
+    if (!c.reference)
+      local_reference = std::make_unique<ReferenceProfile>(
+        c.input.path, c.config, c.input.speed_preview, start.arc, c.input.dt, &c.input.state);
     const auto & reference = c.reference ? *c.reference : *local_reference;
     const double heading_scale =
       c.input.precise_heading ? std::min(.005, c.config.heading_scale) : c.config.heading_scale;
-    auto start = path.start_match(c.input.state.pose);
     const double checkpoint = path.next_corner(start.arc);
-    bool terminal = c.input.goal_active && distance(c.input.path.back(), c.input.goal) < .001;
+    const bool preview_reaches_goal = c.input.reaches_goal();
+    const bool terminal = c.input.goal_active && preview_reaches_goal;
     const bool terminal_heading_active =
       terminal && path.length() - start.arc <= c.config.goal_heading_activation_distance;
+    const auto initial_heading = reference.heading(start.arc, preview_reaches_goal);
+    const auto initial_match =
+      match_geometric_heading(c.input.state.pose.yaw, initial_heading.yaw, c.config);
+    const bool use_jerk =
+      w_.longitudinal_jerk > 0 && !terminal && !c.input.departure && path.length() > 1e-6 &&
+      (!c.input.speed_preview.plan ||
+       !c.input.speed_preview.plan->near_corner(c.input.speed_preview.start_arc + start.arc)) &&
+      (checkpoint == path.length() || checkpoint - start.arc > c.config.approach_distance);
+    const double jerk_scale = c.config.limits.linear_acceleration / c.config.model_dt;
+    const bool allow_turn_first = !c.input.departure && prefers_heading_alignment(
+                                                          initial_heading.strength, initial_match,
+                                                          checkpoint - start.arc, c.config);
+    const double velocity_weight = allow_turn_first ? .05 : 1.;
+    const auto initial_unit =
+      use_jerk ? reference.unit(start.arc, c.input.state.pose.yaw) : Velocity{};
     for (std::size_t k = 0; k < batch.size(); ++k) {
       const auto & t = batch[k];
       if (!t.valid || t.states.empty()) continue;
@@ -70,6 +88,10 @@ public:
       detail.effort += (w_.steering_change * t.actuator_cost + w_.consistency * t.residual_cost) /
                        std::max(.1, duration);
       auto previous = c.input.state.requested;
+      auto previous_longitudinal = c.input.previous_longitudinal_request.value_or(
+        LongitudinalRequestSample{
+          previous.vx * initial_unit.vx + previous.vy * initial_unit.vy, std::nullopt, 0});
+      auto command_unit = initial_unit;
       PathMatch m = start;
       bool initial_alignment_done = false;
       for (double v : c.input.state.wheel_speeds)
@@ -88,6 +110,8 @@ public:
         const auto & u = t.controls[i - 1];
         const auto unit = reference.unit(progress, s.pose.yaw);
         const double along = s.velocity.vx * unit.vx + s.velocity.vy * unit.vy;
+        const auto heading = reference.heading(progress, preview_reaches_goal);
+        const auto match = match_geometric_heading(s.pose.yaw, heading.yaw, c.config);
         double target_speed = reference.speed(progress);
         double alignment_error = 0;
         bool stopped = true;
@@ -118,6 +142,22 @@ public:
         const double excess_speed = std::max(0., along - target_speed);
         const double velocity_error = (along - target_speed) / .2;
         double dt = i == 1 ? c.input.dt : c.config.model_dt;
+        if (use_jerk) {
+          // Commands are expressed in the body frame at the start of each step.
+          // Differentiate the scalar projection at each sample's own tangent.
+          const double speed = u.vx * command_unit.vx + u.vy * command_unit.vy;
+          const double acceleration = (speed - previous_longitudinal.speed) / dt;
+          if (previous_longitudinal.acceleration) {
+            const double normalized = (acceleration - *previous_longitudinal.acceleration) /
+                                      (.5 * (dt + previous_longitudinal.dt) * jerk_scale);
+            // Give the command that will be published more weight than distant
+            // rollout steps, which will be re-optimized next cycle.
+            const double weight = i == 1 ? .25 + norm : norm;
+            detail.longitudinal_jerk += w_.longitudinal_jerk * weight * normalized * normalized;
+          }
+          previous_longitudinal = {speed, acceleration, dt};
+          command_unit = unit;
+        }
         double smooth =
           std::pow(
             std::hypot(u.vx - previous.vx, u.vy - previous.vy) /
@@ -126,14 +166,26 @@ public:
           std::pow((u.wz - previous.wz) / (c.config.limits.angular_acceleration * dt), 2);
         detail.path +=
           norm * (4 * slack + w_.path_distance * std::pow(m.error / c.config.position_scale, 2));
+        // A finite body-heading preference using the ordered path tangent.
+        if (!c.input.departure && heading.strength > 0) {
+          // When forward is preferred, backing along the path remains feasible
+          // but should not win a straight segment solely on immediate progress.
+          const double reverse_progress =
+            allow_turn_first && !c.config.geometric_heading_allow_reverse && along > 0
+              ? 6 * std::max(0., -s.velocity.vx) / std::max(.2, c.config.max_speed)
+              : 0.;
+          detail.heading += norm * c.config.geometric_heading_weight * heading.strength *
+                            (match.loss + reverse_progress);
+        }
         // During final rotation, returning at the horizon endpoint does not
         // compensate for an excursion earlier in the rollout. Keep endpoint
         // position a running soft objective throughout the terminal region.
         if (terminal_heading_active)
           detail.goal += norm * w_.goal_position *
                          std::pow(distance(s.pose, c.input.goal) / c.config.position_scale, 2);
-        detail.velocity += norm * (std::pow(excess_speed / .1, 2) +
-                                   w_.reference_velocity * velocity_error * velocity_error);
+        detail.velocity +=
+          norm * (std::pow(excess_speed / .1, 2) +
+                  w_.reference_velocity * velocity_weight * velocity_error * velocity_error);
         detail.alignment += norm * w_.presteering_alignment * alignment_error;
         detail.effort +=
           norm * (w_.effort * (u.vx * u.vx + u.vy * u.vy + u.wz * u.wz) + w_.smoothness * smooth);
@@ -170,7 +222,7 @@ public:
                        (yaw_error <= 1. ? yaw_error * yaw_error : 2. * yaw_error - 1.);
       }
       costs[k] += detail.path + detail.heading + detail.velocity + detail.alignment +
-                  detail.effort + detail.progress + detail.goal;
+                  detail.effort + detail.progress + detail.goal + detail.longitudinal_jerk;
       if (c.breakdown) (*c.breakdown)[k] = detail;
     }
   }

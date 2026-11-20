@@ -9,6 +9,7 @@
 
 namespace swerve_mppi
 {
+class ReferenceProfile;
 struct Pose
 {
   double x = 0, y = 0, yaw = 0;
@@ -16,6 +17,18 @@ struct Pose
 struct Velocity
 {
   double vx = 0, vy = 0, wz = 0;
+};
+struct SpeedPreview
+{
+  const ReferenceProfile * plan = nullptr;  // Borrowed for compute and retime.
+  double start_arc = 0;  // Ordered arc of the first point of the local path on the plan.
+  std::optional<double> previous_speed;
+};
+struct LongitudinalRequestSample
+{
+  double speed = 0;  // Command projected onto the ordered path tangent at publication.
+  std::optional<double> acceleration;
+  double dt = 0;  // Interval used for the backward difference in speed.
 };
 struct State
 {
@@ -45,6 +58,12 @@ struct MotionReference
   bool precise_heading = false;
   std::optional<Velocity> departure;
 };
+struct GoalPoseTolerance
+{
+  double position = 0.05, yaw = 0.08726646259971647;  // 5 degrees.
+  bool contains(const Pose & pose, const Pose & goal) const;
+  bool valid() const;
+};
 struct Input
 {
   State state;
@@ -57,6 +76,15 @@ struct Input
     alignment;  // Stopped wheel alignment, still rolled out and collision checked.
   bool precise_heading = false;
   std::optional<Velocity> departure;
+  // Ordered progress can distinguish a cropped loop from the actual endpoint.
+  // Standalone callers that omit this field retain endpoint matching by position.
+  std::optional<bool> preview_reaches_goal;
+  GoalPoseTolerance goal_tolerance;
+  SpeedPreview speed_preview;
+  std::optional<LongitudinalRequestSample> previous_longitudinal_request;
+  bool allow_terminal_hold = true;  // A caller without usable goal tolerances can defer holding.
+
+  bool reaches_goal() const;
 };
 struct Command
 {
@@ -88,6 +116,7 @@ struct Diagnostics
 struct TrackingCost
 {
   double path = 0, heading = 0, velocity = 0, alignment = 0, effort = 0, progress = 0, goal = 0;
+  double longitudinal_jerk = 0;
 };
 struct CandidateDiagnostic
 {
@@ -105,6 +134,8 @@ struct Result
   bool braking_selected = false;
   bool presteering = false;
   double reference_speed = 0;
+  std::optional<double> longitudinal_request_speed;
+  double geometric_heading = 0, geometric_heading_strength = 0;
   double noise_scale = 0, branch_distance = -1;
   std::uint32_t reference_limit = 0;
   bool reorientation_active = false;
@@ -127,4 +158,5 @@ struct Trajectory
 };
 double wrap_angle(double value);
 double distance(const Pose & a, const Pose & b);
+Velocity rotate_velocity(Velocity velocity, double yaw);
 }  // namespace swerve_mppi

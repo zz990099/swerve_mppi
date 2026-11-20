@@ -43,10 +43,14 @@ resets clear it; ordinary presteering does not.
 
 Path samples are geometric positions. Intermediate waypoint yaw is ignored by
 reference construction, controller seeds and tracking costs; changing it cannot
-change ordinary path-following behavior. The body is free to retain or optimize
-its orientation during travel. Only the final pose yaw is a task objective. It is
+change ordinary path-following behavior. A finite geometric-heading critic softly
+prefers the ordered path direction on simple segments and releases orientation as
+local turning demand grows. One structured proposal supports gradual yaw correction;
+it is scored alongside orientation-free, braking and recovery proposals. The final pose yaw is
 activated by the goal critic after measured ordered progress enters the terminal
 region, with an endpoint-position anchor and a structured final-pose candidate.
+The geometric preference fades over the preceding metre. See
+[Geometric heading](docs/GEOMETRIC_HEADING.md) for its parameters and limits.
 Curvature/corner preview reduces speed before actuator demands become infeasible.
 Ordered progress is geometric arc length, with no waypoint
 acceptance-radius pruning of a dense curve. Terminal activation uses remaining

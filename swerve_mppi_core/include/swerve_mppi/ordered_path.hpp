@@ -53,6 +53,8 @@ public:
   Pose tracking_goal() const { return sections_[section_].points.back(); }
   bool rotating() const { return !empty() && sections_[section_].rotation; }
   std::size_t section() const { return section_; }
+  const std::vector<Pose> & section_points() const { return sections_[section_].points; }
+  double progress_arc() const { return progress_arc_; }
   // A completed bounded steering maneuver may follow a short chord instead
   // of every sampled tangent. Rejoin only this section's nearby ordered arc;
   // never cross an unreached mandatory corner or a rotation section.
@@ -71,7 +73,8 @@ public:
       progress_arc_ = std::max(progress_arc_, match.arc);
     }
   }
-  std::vector<Pose> local(const Pose & pose, double length = 3.0, Velocity velocity = {})
+  std::vector<Pose> local(
+    const Pose & pose, double length = 3.0, Velocity velocity = {}, bool * reaches_goal = nullptr)
   {
     if (previous_pose_) {
       const double travel = distance(pose, *previous_pose_);
@@ -92,7 +95,10 @@ public:
       travel_budget_ = .03;
     }
     const auto & points = sections_[section_].points;
-    if (rotating()) return points;
+    if (rotating()) {
+      if (reaches_goal) *reaches_goal = section_ + 1 == sections_.size();
+      return points;
+    }
     PathView view(points);
     // A missed sampled tangent must not freeze progress on a smooth curve.
     // The forward search is paid for by measured displacement and cannot pass
@@ -114,6 +120,7 @@ public:
       progress_arc_ = std::max(progress_arc_, projected.arc);
     }
     double end = std::min(view.length(), progress_arc_ + length);
+    if (reaches_goal) *reaches_goal = section_ + 1 == sections_.size() && end == view.length();
     std::vector<Pose> out{view.at(progress_arc_)};
     for (std::size_t i = 1; i < points.size(); ++i) {
       double arc = view.vertex_arc(i);

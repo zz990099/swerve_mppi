@@ -42,6 +42,6 @@ and optional ideal truth map-to-odom localization compensates raw wheel drift.
 
 All routes require ordered interior checkpoints (0.75 m spacing, 0.20 m capture
 radius). Repeated intersections retain their traversal order. Acceptance also
-requires action completion, peak deviation <= 10 cm, endpoint <= 20 cm and final
+requires action completion, peak deviation <= 10 cm, endpoint <= 5 cm and final
 yaw <= 5 degrees. Failed/partial runs remain in the montage. No controller or
 physical chassis algorithms are changed by this test expansion.

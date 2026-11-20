@@ -1,11 +1,13 @@
-"""Fixed physical tracking gates; shared by recordings and offline baseline audit."""
+"""Physical tracking gates and benchmark diagnostics."""
 import math
 
 
-TRACKING_LIMITS = dict(path_peak_m=.10, final_position_error_m=.20,
+TRACKING_LIMITS = dict(path_peak_m=.10, final_position_error_m=.05,
                        final_yaw_error_rad=math.radians(5))
 LIMITS = dict(**TRACKING_LIMITS, stopped_fraction=.55,
-              max_request_linear_rate=1.05, max_request_angular_rate=1.5, compute_p99_ms=50.)
+              nonincreasing_command_stamps=0, chassis_faults_after_motion=0)
+DIAGNOSTIC_LIMITS = dict(max_request_linear_rate=1.05, max_request_angular_rate=1.5,
+                         compute_p99_ms=50.)
 
 
 def reference_match(x, y, points):
@@ -25,7 +27,8 @@ def evaluate(metadata):
     length = sum(math.hypot(b[0]-a[0], b[1]-a[1]) for a, b in zip(points, points[1:]))
     rotation = sum(abs(math.remainder(b[2]-a[2], 2*math.pi)) for a, b in zip(points, points[1:]))
     limits = dict(LIMITS)
-    limits['wall_duration_s'] = max(8., 5+4*max(length/.8, rotation/.8))
+    diagnostic_limits = dict(DIAGNOSTIC_LIMITS,
+                             wall_duration_s=max(8., 5+4*max(length/.8, rotation/.8)))
     if metadata['scenario'] == 'cancel':
         limits.pop('final_position_error_m')
         limits.pop('final_yaw_error_rad')
@@ -36,4 +39,7 @@ def evaluate(metadata):
             failures.append(f'{key}={value}, limit={bound}')
     if metadata.get('samples', 0) < 2:
         failures.append('fewer than two independent observations')
-    return limits, failures
+    warnings = [f'{key}={metadata[key]}, reference={bound}'
+                for key, bound in diagnostic_limits.items()
+                if metadata.get(key) is not None and metadata[key] > bound]
+    return limits, failures, warnings

@@ -14,5 +14,12 @@
  <depend>tf2_geometry_msgs</depend>
  <exec_depend>nav2_controller</exec_depend><exec_depend>nav2_lifecycle_manager</exec_depend><exec_depend>nav2_msgs</exec_depend><exec_depend>lifecycle_msgs</exec_depend><exec_depend>action_msgs</exec_depend><exec_depend>rclpy</exec_depend><exec_depend>launch_ros</exec_depend>
  <test_depend>ament_cmake_gtest</test_depend>
+ <test_depend>ament_cmake_pytest</test_depend>
+ <test_depend>ament_index_python</test_depend>
+ <test_depend>builtin_interfaces</test_depend>
+ <test_depend>python3-yaml</test_depend>
+ <test_depend>rosgraph_msgs</test_depend>
+ <test_depend>sensor_msgs</test_depend>
+ <test_depend>swerve_chassis_controller</test_depend>
  <export><build_type>ament_cmake</build_type></export>
 </package>

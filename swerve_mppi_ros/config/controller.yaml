@@ -19,15 +19,17 @@ controller_server:
       movement_time_allowance: 30.0
     goal_checker:
       plugin: swerve_mppi_ros::OrderedGoalChecker
-      xy_goal_tolerance: 0.06
-      yaw_goal_tolerance: 0.05
+      xy_goal_tolerance: 0.05
+      yaw_goal_tolerance: 0.08726646259971647
       trans_stopped_velocity: 0.035
       rot_stopped_velocity: 0.035
       settle_time: 0.3
+      state_future_tolerance: 0.03
     FollowPath:
       plugin: swerve_mppi_ros::Nav2Controller
       state_topic: chassis_controller/state
       state_timeout: 0.25
+      state_future_tolerance: 0.03
       transform_tolerance: 0.1
       use_costmap: true
       unknown_is_obstacle: true
@@ -39,6 +41,12 @@ controller_server:
       iterations: 1
       max_speed: 0.8
       max_yaw_rate: 0.8
+      geometric_heading_weight: 0.4
+      geometric_heading_scale: 0.35
+      geometric_heading_window: 1.0
+      geometric_heading_turn_scale: 0.6
+      geometric_heading_allow_reverse: false
+      longitudinal_jerk_weight: 0.12
 
 # Obstacle-free FollowPath test costmap. Add sensors/static and inflation layers
 # for navigation; these defaults do not populate real obstacles.
