@@ -382,15 +382,19 @@ Result Controller::compute_tracking(const Input & input)
     const auto initial_heading = reference->heading(reference_arc, input.reaches_goal());
     const auto initial_match =
       match_geometric_heading(input.state.pose.yaw, initial_heading.yaw, config_);
-    // Once underway, a stop at a corner must retain its steering intent long
-    // enough to complete presteering. A heading candidate may lose the score
-    // without ever issuing the pure rotation that would release this stop.
-    const bool offer_start_heading_alignment =
-      !has_translated_ && !input.alignment && !input.departure && !terminal_hold &&
+    // Use the section profile to see a hard corner even after the local path
+    // has been cropped to its outgoing leg. Hold steering intent on departure.
+    const auto * section = input.speed_preview.plan;
+    const bool near_passed_corner =
+      section ? section->just_passed_corner(input.speed_preview.start_arc + reference_arc) :
+                reference->just_passed_corner(reference_arc);
+    const bool offer_heading_alignment =
+      !(has_translated_ && near_passed_corner) && !input.alignment && !input.departure &&
+      !terminal_hold &&
       prefers_heading_alignment(
         initial_heading.strength, initial_match, path.next_corner(reference_arc) - reference_arc,
         config_);
-    if (input.departure || terminal_hold || offer_start_heading_alignment) reorientation_.reset();
+    if (input.departure || terminal_hold || offer_heading_alignment) reorientation_.reset();
     if (reorientation_) {
       const auto target = swerve_chassis_core::inverse(
         config_.geometry, {reorientation_->vx, reorientation_->vy, reorientation_->wz},
@@ -407,7 +411,7 @@ Result Controller::compute_tracking(const Input & input)
     }
     if (
       wheels_stopped && !reorientation_ && !input.departure && !terminal_hold &&
-      !offer_start_heading_alignment) {
+      !offer_heading_alignment) {
       const auto match = PathView(input.path).start_match(input.state.pose);
       const double speed = reference->speed(match.arc);
       const auto nominal_unit = reference->unit(match.arc, input.state.pose.yaw);

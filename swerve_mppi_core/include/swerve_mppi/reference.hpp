@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <stdexcept>
 #include <swerve_chassis_core/kinematics.hpp>
 #include <vector>
@@ -189,6 +190,11 @@ public:
     const auto it =
       std::lower_bound(corners_.begin(), corners_.end(), arc - config_.approach_distance);
     return it != corners_.end() && *it <= arc + config_.approach_distance;
+  }
+  bool just_passed_corner(double arc) const
+  {
+    const auto next = std::upper_bound(corners_.begin(), corners_.end(), arc + 1e-8);
+    return next != corners_.begin() && arc - *std::prev(next) <= .25;
   }
   // Bit mask: geometry/end=1, wheel speed=4, corner=8, actuator rate=16,
   // acceleration envelope=64, rate of release across control cycles=128.
