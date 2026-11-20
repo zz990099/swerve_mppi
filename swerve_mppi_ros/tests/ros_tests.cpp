@@ -256,14 +256,15 @@ TEST_F(Nav2PluginTest, GazeboTimestampSkewReachesControllerAndGoalChecker)
 
   auto ordered = dynamic_cast<OrderedGoalChecker *>(goal.get());
   ASSERT_NE(ordered, nullptr);
+  const geometry_msgs::msg::Twist stopped;
   ordered->setReady(true);
-  EXPECT_FALSE(goal->isGoalReached(current.pose, current.pose, {}));
+  EXPECT_FALSE(goal->isGoalReached(current.pose, current.pose, stopped));
   publish_with_lead(10'110'000'000, 30'000'000);
-  EXPECT_TRUE(goal->isGoalReached(current.pose, current.pose, {}));
+  EXPECT_TRUE(goal->isGoalReached(current.pose, current.pose, stopped));
 
   publish_with_lead(10'650'000'000, 30'000'001);
   EXPECT_THROW(request(), nav2_core::NoValidControl);
-  EXPECT_FALSE(goal->isGoalReached(current.pose, current.pose, {}));
+  EXPECT_FALSE(goal->isGoalReached(current.pose, current.pose, stopped));
 }
 TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
 {
