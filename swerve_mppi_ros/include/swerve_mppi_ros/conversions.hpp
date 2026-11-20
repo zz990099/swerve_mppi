@@ -1,6 +1,8 @@
 #pragma once
 
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <stdexcept>
@@ -12,6 +14,18 @@
 namespace swerve_mppi_ros
 {
 inline double seconds(const builtin_interfaces::msg::Time & t) { return t.sec + t.nanosec * 1e-9; }
+inline std::int64_t stamp_ns(const builtin_interfaces::msg::Time & t)
+{
+  return std::int64_t{t.sec} * 1'000'000'000 + t.nanosec;
+}
+inline std::int64_t duration_ns(double seconds)
+{
+  using Nanoseconds = std::chrono::nanoseconds;
+  using Seconds = std::chrono::duration<double>;
+  if (!std::isfinite(seconds) || seconds < 0 || seconds >= Seconds(Nanoseconds::max()).count())
+    throw std::invalid_argument("invalid future state tolerance");
+  return std::chrono::round<Nanoseconds>(Seconds(seconds)).count();
+}
 inline bool finite(Velocity v)
 {
   return std::isfinite(v.vx) && std::isfinite(v.vy) && std::isfinite(v.wz);

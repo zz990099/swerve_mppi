@@ -58,7 +58,8 @@ struct Nav2Controller::Runtime
   std::optional<Velocity> published_request;
   std::optional<LongitudinalRequestSample> previous_longitudinal_request;
   double last_return_time = 0;
-  double state_stamp = 0, last_time = 0, frequency = 20, timeout = 0.25, transform_tolerance = 0.1;
+  double last_time = 0, frequency = 20, timeout = 0.25, transform_tolerance = 0.1;
+  std::int64_t state_stamp = 0, feedback_stamp = 0, state_future_tolerance = 0;
   Steady::time_point state_wall{};
   bool active = false, map_enabled = true;
   rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>::SharedPtr prediction;
@@ -129,6 +130,7 @@ struct Nav2Controller::Runtime
     if (node()->has_parameter("controller_frequency"))
       node()->get_parameter("controller_frequency", frequency);
     number("state_timeout", timeout);
+    state_future_tolerance = duration_ns(parameter<double>("state_future_tolerance", .01));
     number("transform_tolerance", transform_tolerance);
     if (
       !std::isfinite(frequency) || frequency < 1 || frequency > 100 || !std::isfinite(timeout) ||
@@ -292,22 +294,26 @@ void Nav2Controller::configure(
       if (msg.header.frame_id != r.body_frame) return;
       try {
         auto f = feedback(msg, r.config);
-        const double stamp = seconds(msg.header.stamp);
-        const double now = r.node()->now().seconds();
-        if (r.last_time > 0 && now < r.last_time) {
+        const auto stamp = stamp_ns(msg.header.stamp);
+        const auto feedback_time = stamp_ns(msg.feedback_stamp);
+        const auto clock = r.node()->now();
+        const auto now = clock.nanoseconds();
+        if (r.last_time > 0 && clock.seconds() < r.last_time) {
           r.measured.reset();
           r.stop();
         }
         // A clock/state delivery skew must not erase a still-fresh validated
         // snapshot. Reject the future sample; normal control-time age checks
         // still expire the retained state and detect actual clock rewinds.
-        if (stamp > now + .01 || f.feedback_stamp > now + .01) {
+        if (stamp - now > r.state_future_tolerance ||
+          feedback_time - now > r.state_future_tolerance) {
           if (f.fault) r.measured.reset();  // A reported fault must still stop control.
           return;
         }
         if (r.measured && stamp <= r.state_stamp) return;
         r.measured = f;
-        r.state_stamp = seconds(msg.header.stamp);
+        r.state_stamp = stamp;
+        r.feedback_stamp = feedback_time;
         r.state_wall = Steady::now();
       } catch (const std::invalid_argument & e) {
         RCLCPP_WARN(r.node()->get_logger(), "Rejected chassis snapshot: %s", e.what());
@@ -392,11 +398,14 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     if (!r.measured) throw nav2_core::NoValidControl("chassis state is missing");
     if (!r.measured->feedback_valid)
       throw nav2_core::NoValidControl("chassis reports invalid feedback");
-    const double feedback_age = now - r.measured->feedback_stamp;
-    const double state_age = now - r.state_stamp;
+    const auto feedback_age_ns = control_stamp.nanoseconds() - r.feedback_stamp;
+    const auto state_age_ns = control_stamp.nanoseconds() - r.state_stamp;
+    const double feedback_age = feedback_age_ns * 1e-9;
+    const double state_age = state_age_ns * 1e-9;
     const double receipt_age = std::chrono::duration<double>(Steady::now() - r.state_wall).count();
     if (
-      feedback_age < -0.01 || feedback_age > r.timeout || state_age < -0.05 ||
+      feedback_age_ns < -r.state_future_tolerance || feedback_age > r.timeout ||
+      state_age_ns < -r.state_future_tolerance ||
       state_age > r.timeout || receipt_age > r.timeout)
       throw nav2_core::NoValidControl(
         "chassis state age is out of range (feedback/state/receipt s: " +

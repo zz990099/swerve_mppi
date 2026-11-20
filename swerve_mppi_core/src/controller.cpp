@@ -85,6 +85,7 @@ void Controller::reset()
   clear_optimization();
   branch_.reset();
   tracking_start_ = false;
+  has_translated_ = false;
 }
 std::vector<Velocity> Controller::seed(
   const Input & input, const ReferenceProfile & reference, const std::optional<Velocity> & intent,
@@ -184,7 +185,10 @@ Result Controller::compute(const Input & source)
     return compute_tracking(source);
   }
   Input input = source;
-  if (std::hypot(source.state.velocity.vx, source.state.velocity.vy) > .04) tracking_start_ = false;
+  if (std::hypot(source.state.velocity.vx, source.state.velocity.vy) > .04) {
+    tracking_start_ = false;
+    has_translated_ = true;
+  }
   bool stopped = true;
   for (double v : source.state.wheel_speeds) stopped &= std::abs(v) < config_.limits.stopped_speed;
   // Branch events are short, ordered maneuvers in the same continuous twist
@@ -378,12 +382,15 @@ Result Controller::compute_tracking(const Input & input)
     const auto initial_heading = reference->heading(reference_arc, input.reaches_goal());
     const auto initial_match =
       match_geometric_heading(input.state.pose.yaw, initial_heading.yaw, config_);
-    const bool offer_heading_alignment =
-      !input.alignment && !input.departure && !terminal_hold &&
+    // Once underway, a stop at a corner must retain its steering intent long
+    // enough to complete presteering. A heading candidate may lose the score
+    // without ever issuing the pure rotation that would release this stop.
+    const bool offer_start_heading_alignment =
+      !has_translated_ && !input.alignment && !input.departure && !terminal_hold &&
       prefers_heading_alignment(
         initial_heading.strength, initial_match, path.next_corner(reference_arc) - reference_arc,
         config_);
-    if (input.departure || terminal_hold || offer_heading_alignment) reorientation_.reset();
+    if (input.departure || terminal_hold || offer_start_heading_alignment) reorientation_.reset();
     if (reorientation_) {
       const auto target = swerve_chassis_core::inverse(
         config_.geometry, {reorientation_->vx, reorientation_->vy, reorientation_->wz},
@@ -400,7 +407,7 @@ Result Controller::compute_tracking(const Input & input)
     }
     if (
       wheels_stopped && !reorientation_ && !input.departure && !terminal_hold &&
-      !offer_heading_alignment) {
+      !offer_start_heading_alignment) {
       const auto match = PathView(input.path).start_match(input.state.pose);
       const double speed = reference->speed(match.arc);
       const auto nominal_unit = reference->unit(match.arc, input.state.pose.yaw);

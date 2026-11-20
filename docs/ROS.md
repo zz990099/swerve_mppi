@@ -79,6 +79,8 @@ including computes that return NoSolution.
 Goal checker state_topic/state_timeout can be set independently of the controller
 but must identify the same robot. Feedback must be fresh and fault-free with all
 wheel speeds <=0.05 rad/s, in addition to Nav2 pose and body-speed tolerances.
+The bundled Gazebo YAML sets `state_future_tolerance` to 0.03 s for both
+`FollowPath` and `goal_checker`, matching the chassis feedback tolerance.
 Terminal hold reads pose tolerances from the active Nav2 goal checker. For other
 checkers, the hold thresholds are bounded by 5 cm and 5 degrees. When a checker
 does not supply a valid planar pose tolerance, terminal correction continues.

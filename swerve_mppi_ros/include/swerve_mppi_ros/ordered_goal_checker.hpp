@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <nav2_core/goal_checker.hpp>
 #include <swerve_chassis_msgs/msg/chassis_state.hpp>
@@ -34,7 +35,8 @@ private:
   bool ready_ = false, healthy_ = false;
   std::optional<Pose> current_goal_;
   double goal_stamp_ = 0;
-  double feedback_stamp_ = 0, state_timeout_ = 0.25;
+  std::int64_t feedback_stamp_ = 0, state_future_tolerance_ = 0;
+  double state_timeout_ = 0.25;
   std::string body_frame_;
   std::chrono::steady_clock::time_point feedback_wall_{};
   rclcpp::Subscription<swerve_chassis_msgs::msg::ChassisState>::SharedPtr state_sub_;

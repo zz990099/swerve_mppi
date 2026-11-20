@@ -26,6 +26,7 @@ private:
   };
   std::optional<BranchEvent> branch_;
   bool tracking_start_ = false;
+  bool has_translated_ = false;
   std::vector<Velocity> seed(
     const Input & input, const ReferenceProfile & reference,
     const std::optional<Velocity> & intent = {}, bool geometric_heading = false) const;

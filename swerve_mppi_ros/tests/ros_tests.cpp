@@ -5,6 +5,7 @@
 #include <nav2_core/controller_exceptions.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <pluginlib/class_loader.hpp>
+#include <rcl/time.h>
 #include <thread>
 
 #include "swerve_mppi_ros/conversions.hpp"
@@ -43,7 +44,9 @@ protected:
     node = std::make_shared<rclcpp_lifecycle::LifecycleNode>("test_controller_server");
     node->declare_parameter("FollowPath.samples", 16);
     node->declare_parameter("FollowPath.state_timeout", 0.5);
+    node->declare_parameter("FollowPath.state_future_tolerance", 0.03);
     node->declare_parameter("goal_checker.settle_time", 0.05);
+    node->declare_parameter("goal_checker.state_future_tolerance", 0.03);
     costmap = std::make_shared<nav2_costmap_2d::Costmap2DROS>("test_local_costmap");
     costmap->set_parameters(
       {rclcpp::Parameter("global_frame", "odom"),
@@ -225,6 +228,42 @@ TEST_F(Nav2PluginTest, FutureSnapshotDoesNotEraseFreshValidatedFeedback)
   EXPECT_THROW(
     controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get()),
     nav2_core::NoValidControl);
+}
+TEST_F(Nav2PluginTest, GazeboTimestampSkewReachesControllerAndGoalChecker)
+{
+  controller->setPlan(path({{0, 0, 0}, {1, 0, 0}}));
+  compute();  // Prime an earlier clock epoch and its cached feedback.
+  auto clock = node->get_clock();
+  ASSERT_EQ(rcl_enable_ros_time_override(clock->get_clock_handle()), RCL_RET_OK);
+  geometry_msgs::msg::PoseStamped current;
+  current.header.frame_id = "odom";
+  current.pose = pose_message({});
+  auto request = [&] {
+    return controller->computeVelocityCommands(current, geometry_msgs::msg::Twist{}, goal.get());
+  };
+  auto publish_with_lead = [&](std::int64_t now, std::int64_t lead) {
+    ASSERT_EQ(rcl_set_ros_time_override(clock->get_clock_handle(), now), RCL_RET_OK);
+    current.header.stamp = clock->now();
+    observed.header.stamp = rclcpp::Time(now + lead, RCL_ROS_TIME);
+    observed.feedback_stamp = observed.header.stamp;
+    states->publish(observed);
+    spin(20);
+  };
+  publish_with_lead(10'000'000'000, 15'000'000);
+  ASSERT_GT(request().twist.linear.x, 0.);
+  publish_with_lead(10'050'000'000, 30'000'000);
+  ASSERT_GT(request().twist.linear.x, 0.);
+
+  auto ordered = dynamic_cast<OrderedGoalChecker *>(goal.get());
+  ASSERT_NE(ordered, nullptr);
+  ordered->setReady(true);
+  EXPECT_FALSE(goal->isGoalReached(current.pose, current.pose, {}));
+  publish_with_lead(10'110'000'000, 30'000'000);
+  EXPECT_TRUE(goal->isGoalReached(current.pose, current.pose, {}));
+
+  publish_with_lead(10'650'000'000, 30'000'001);
+  EXPECT_THROW(request(), nav2_core::NoValidControl);
+  EXPECT_FALSE(goal->isGoalReached(current.pose, current.pose, {}));
 }
 TEST_F(Nav2PluginTest, ContinuousVelocityAndOrderedGoalChecker)
 {
