@@ -1,0 +1,71 @@
+name: Validate PR #9 merge fixes in Gazebo
+on:
+  push:
+    branches: [validation/pr9-merge-fixes]
+permissions:
+  contents: read
+  packages: read
+jobs:
+  record:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ['0', '1', '2', '3', '100', 'ros']
+    container:
+      image: ghcr.io/zz990099/swerve_mppi:jazzy-test-sha-794e6e0cb5378d8117335024f7369d16a38f6778
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      ROS_DOMAIN_ID: '83'
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+      MPLBACKEND: Agg
+      GZ_PARTITION: mppi-fixed-${{ github.run_id }}-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: zz990099/swerve_gazebo_sim
+          ref: c4511d8aec74a706bc7563d7a247e26806177369
+          path: companion-chassis
+      - name: Build the exact MPPI and chassis revisions
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --base-paths swerve_mppi_core swerve_mppi_ros companion-chassis --packages-up-to swerve_mppi_ros --parallel-workers 2 --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror -DBUILD_TESTING=${{ matrix.target == 'ros' && 'ON' || 'OFF' }}
+      - name: Test the timestamp boundary, freshness and recording
+        if: matrix.target == 'ros'
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/local_setup.bash
+          python3 -m unittest discover -s swerve_mppi_ros/tests -p 'test_*.py' -v
+          python3 -m pytest -q companion-chassis/swerve_gazebo_sim/test/test_controller.py
+          colcon test --packages-select swerve_mppi_ros --return-code-on-test-failure --event-handlers console_direct+
+          colcon test-result --all --verbose
+      - name: Record the continuous 100 m route
+        if: matrix.target == '100'
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/local_setup.bash
+          GITHUB_SHA=cba64a7802e76c06c37a6aaec57420bb5ca33b83 python3 swerve_mppi_ros/tests/run_long_route.py --chassis-root companion-chassis --output artifacts
+      - name: Record this group of physical scenarios
+        if: matrix.target != '100' && matrix.target != 'ros'
+        env:
+          ROUTE_GROUP: ${{ matrix.target }}
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          source install/local_setup.bash
+          export PYTHONPATH="$PWD/swerve_mppi_ros/tests:$PYTHONPATH"
+          mapfile -t route_cases < <(python3 -c 'import os; from trajectory_scenarios import BENCHMARK_CASES; print(*BENCHMARK_CASES[int(os.environ["ROUTE_GROUP"])::4], sep="\n")')
+          test "${#route_cases[@]}" -eq 8
+          python3 swerve_mppi_ros/tests/run_trajectory_rounds.py --chassis-root companion-chassis --output artifacts --rounds 1 --seed-base 42 --min-path-length 12 --max-speed 1.0 --path-frame map --commit cba64a7802e76c06c37a6aaec57420bb5ca33b83 --cases "${route_cases[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.target != 'ros'
+        with:
+          name: feedback-fixed-${{ matrix.target }}
+          path: artifacts/
+          if-no-files-found: warn
