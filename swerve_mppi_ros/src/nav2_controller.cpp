@@ -305,7 +305,8 @@ void Nav2Controller::configure(
         // A clock/state delivery skew must not erase a still-fresh validated
         // snapshot. Reject the future sample; normal control-time age checks
         // still expire the retained state and detect actual clock rewinds.
-        if (stamp - now > r.state_future_tolerance ||
+        if (
+          stamp - now > r.state_future_tolerance ||
           feedback_time - now > r.state_future_tolerance) {
           if (f.fault) r.measured.reset();  // A reported fault must still stop control.
           return;
@@ -405,8 +406,7 @@ geometry_msgs::msg::TwistStamped Nav2Controller::computeVelocityCommands(
     const double receipt_age = std::chrono::duration<double>(Steady::now() - r.state_wall).count();
     if (
       feedback_age_ns < -r.state_future_tolerance || feedback_age > r.timeout ||
-      state_age_ns < -r.state_future_tolerance ||
-      state_age > r.timeout || receipt_age > r.timeout)
+      state_age_ns < -r.state_future_tolerance || state_age > r.timeout || receipt_age > r.timeout)
       throw nav2_core::NoValidControl(
         "chassis state age is out of range (feedback/state/receipt s: " +
         std::to_string(feedback_age) + "/" + std::to_string(state_age) + "/" +

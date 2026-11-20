@@ -1,11 +1,11 @@
 #include <gtest/gtest.h>
+#include <rcl/time.h>
 
 #include <chrono>
 #include <nav2_core/controller.hpp>
 #include <nav2_core/controller_exceptions.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <pluginlib/class_loader.hpp>
-#include <rcl/time.h>
 #include <thread>
 
 #include "swerve_mppi_ros/conversions.hpp"
